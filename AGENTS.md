@@ -7,8 +7,6 @@
 ├── apps/
 │   ├── web/
 │   └── api/
-├── packages/
-│   └── contracts/
 └── python/
     ├── ade-engine/
     └── ade-config-template/
