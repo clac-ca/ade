@@ -67,12 +67,6 @@ importers:
         specifier: ^8.0.1
         version: 8.0.1(@types/node@24.12.0)
 
-  packages/contracts:
-    devDependencies:
-      typescript:
-        specifier: ~5.9.3
-        version: 5.9.3
-
 packages:
 
   '@bcoe/v8-coverage@1.0.2':
