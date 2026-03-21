@@ -3,15 +3,15 @@
 ```text
 .
 ├── README.md
-├── PRINCIPLES.md              # durable engineering principles
+├── PRINCIPLES.md
 ├── apps/
 │   ├── web/
 │   └── api/
 ├── packages/
 │   └── contracts/
 └── python/
-    ├── ade-engine/            # stable extraction engine package
-    └── ade-config-template/   # customizable ADE config template package
+    ├── ade-engine/
+    └── ade-config-template/
 ```
 
 ```sh
