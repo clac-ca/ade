@@ -1,28 +1,21 @@
-import * as path from 'node:path'
 import * as test from 'node:test'
-const helper = require('fastify-cli/helper.js')
+import Fastify from 'fastify'
+import app, { options } from '../src/app'
 
 export type TestContext = {
   after: typeof test.after
 }
 
-const appPath = path.join(__dirname, '..', 'src', 'app.ts')
-
-function config () {
-  return {
-    skipOverride: true
-  }
-}
-
 async function build (t: TestContext) {
-  const argv = [appPath]
-  const app = await helper.build(argv, config())
+  const fastify = Fastify()
 
-  t.after(() => void app.close())
-  return app
+  await fastify.register(app, options)
+  await fastify.ready()
+
+  t.after(() => void fastify.close())
+  return fastify
 }
 
 export {
-  config,
   build
 }

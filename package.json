@@ -6,7 +6,10 @@
     "node": ">=22 <23"
   },
   "scripts": {
-    "check:ts": "pnpm --filter @ade/api test && pnpm --filter @ade/web build",
+    "start": "node scripts/start.mjs",
+    "dev:web": "pnpm --filter @ade/web dev",
+    "dev:api": "pnpm --filter @ade/api dev",
+    "check:ts": "pnpm --filter @ade/api build && pnpm --filter @ade/api test && pnpm --filter @ade/web build",
     "check:python": "uv build --directory python/ade-engine && uv build --directory python/ade-config-template",
     "check": "pnpm run check:ts && pnpm run check:python"
   }

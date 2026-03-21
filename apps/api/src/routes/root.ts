@@ -7,6 +7,13 @@ const root: FastifyPluginAsync = async (fastify): Promise<void> => {
       status: 'ok'
     }
   })
+
+  fastify.get('/healthz', async () => {
+    return {
+      service: 'ade-api',
+      status: 'ok'
+    }
+  })
 }
 
 export default root
