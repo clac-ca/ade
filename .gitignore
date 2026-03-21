@@ -2,9 +2,14 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+*.local
 
 __pycache__/
 .pytest_cache/
 .venv/
 
+.idea/
+.vscode/
 .DS_Store
