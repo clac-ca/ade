@@ -4,6 +4,9 @@
 .
 ├── README.md
 ├── PRINCIPLES.md
+├── scripts/
+│   ├── start.mjs
+│   └── shared.mjs
 ├── apps/
 │   ├── web/
 │   └── api/
@@ -14,7 +17,8 @@
 
 ```sh
 pnpm install
-pnpm check # root validation
-pnpm --filter @ade/web dev
-pnpm --filter @ade/api dev
+pnpm start
+pnpm check
+pnpm dev:web
+pnpm dev:api
 ```

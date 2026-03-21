@@ -13,3 +13,16 @@ test('default root route', async (t) => {
     status: 'ok'
   })
 })
+
+test('health route', async (t) => {
+  const app = await build(t)
+
+  const res = await app.inject({
+    url: '/healthz'
+  })
+  assert.equal(res.statusCode, 200)
+  assert.deepStrictEqual(JSON.parse(res.payload), {
+    service: 'ade-api',
+    status: 'ok'
+  })
+})
