@@ -1,0 +1,1 @@
+"""ADE config template package."""
