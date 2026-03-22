@@ -129,7 +129,13 @@ jobs:
           API_REF="$(printf '%s\n' '${{ steps.meta-api.outputs.tags }}' | head -n 1)"
           WEB_REPO="${WEB_REF%:*}"
           API_REPO="${API_REF%:*}"
-          WEB_REPO="${WEB_REPO}" API_REPO="${API_REPO}" WEB_DIGEST="${{ steps.build-web.outputs.digest }}" API_DIGEST="${{ steps.build-api.outputs.digest }}" COMMIT_SHA="${{ github.sha }}" node -e "const fs = require('node:fs'); fs.writeFileSync('release-candidate.json', JSON.stringify({ commitSha: process.env.COMMIT_SHA, webDigest: `${process.env.WEB_REPO}@${process.env.WEB_DIGEST}`, apiDigest: `${process.env.API_REPO}@${process.env.API_DIGEST}` }, null, 2) + '\n')"
+          cat > release-candidate.json <<EOF
+          {
+            "commitSha": "${{ github.sha }}",
+            "webDigest": "${WEB_REPO}@${{ steps.build-web.outputs.digest }}",
+            "apiDigest": "${API_REPO}@${{ steps.build-api.outputs.digest }}"
+          }
+          EOF
 
       - name: Upload release candidate metadata
         if: github.event_name == 'push'
