@@ -2,8 +2,6 @@ import { spawn } from 'node:child_process'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 
-const PNPM = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-
 export function parseArgs(argv, options = {}) {
   const {
     defaultPort,
@@ -68,10 +66,6 @@ export function spawnCommand(command, args, options = {}) {
   return child
 }
 
-export function spawnPnpm(args, options = {}) {
-  return spawnCommand(PNPM, args, options)
-}
-
 export async function waitForReady(urls, options = {}) {
   const timeoutMs = options.timeoutMs ?? 30_000
   const startedAt = Date.now()
@@ -100,56 +94,6 @@ export async function waitForReady(urls, options = {}) {
   }
 
   throw new Error(`Timed out waiting for: ${urls.join(', ')}`)
-}
-
-export function killChild(child) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return
-  }
-
-  try {
-    if (child.adeDetached && process.platform !== 'win32') {
-      process.kill(-child.pid, 'SIGTERM')
-      return
-    }
-
-    child.kill('SIGTERM')
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes('kill ESRCH')) {
-      throw error
-    }
-  }
-}
-
-export function forceKillChild(child) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return
-  }
-
-  try {
-    if (child.adeDetached && process.platform !== 'win32') {
-      process.kill(-child.pid, 'SIGKILL')
-      return
-    }
-
-    child.kill('SIGKILL')
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes('kill ESRCH')) {
-      throw error
-    }
-  }
-}
-
-export async function terminateChildren(children) {
-  for (const child of children) {
-    killChild(child)
-  }
-
-  await delay(250)
-
-  for (const child of children) {
-    forceKillChild(child)
-  }
 }
 
 export function registerShutdown(handler) {

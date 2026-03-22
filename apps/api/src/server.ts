@@ -1,9 +1,12 @@
-import Fastify, { FastifyInstance } from 'fastify'
-import app, { options } from './app'
+import process from 'node:process'
+import Fastify from 'fastify'
+import app from './app'
 
 const host = process.env.ADE_API_HOST ?? '127.0.0.1'
 const port = Number.parseInt(process.env.ADE_API_PORT ?? '8001', 10)
-let server: FastifyInstance | undefined
+const server = Fastify({
+  logger: true
+})
 let shuttingDown = false
 
 async function stop(exitCode: number) {
@@ -14,19 +17,20 @@ async function stop(exitCode: number) {
   shuttingDown = true
 
   try {
-    await server?.close()
+    await server.close()
   } finally {
     process.exit(exitCode)
   }
 }
 
 async function start() {
-  server = Fastify({
-    logger: true
-  })
-
-  await server.register(app, options)
-  await server.listen({ host, port })
+  try {
+    await server.register(app)
+    await server.listen({ host, port })
+  } catch (error) {
+    console.error(error)
+    await stop(1)
+  }
 }
 
 process.on('SIGINT', () => {
@@ -37,7 +41,4 @@ process.on('SIGTERM', () => {
   void stop(0)
 })
 
-void start().catch((error) => {
-  console.error(error)
-  void stop(1)
-})
+void start()

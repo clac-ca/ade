@@ -40,3 +40,9 @@ jobs:
 
       - name: Validate
         run: pnpm check
+
+      - name: Build release candidate
+        run: pnpm build
+
+      - name: Smoke built runtime
+        run: pnpm smoke:start
