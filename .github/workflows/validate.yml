@@ -1,4 +1,8 @@
-name: Validate
+name: Commit Stage
+
+permissions:
+  contents: read
+  packages: write
 
 on:
   push:
@@ -8,10 +12,16 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     name: validate
     runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io
 
     steps:
       - name: Checkout
@@ -21,6 +31,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
+          package-manager-cache: false
 
       - name: Enable Corepack
         run: |
@@ -44,51 +55,81 @@ jobs:
       - name: Check Python packages
         run: pnpm check:python
 
-      - name: Build release candidate
-        run: pnpm build
+      - name: Prepare release-candidate artifacts
+        run: node scripts/build-artifacts.mjs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract web image metadata
+        id: meta-web
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ade-web
+          tags: |
+            type=raw,value=sha-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+
+      - name: Extract API image metadata
+        id: meta-api
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ade-api
+          tags: |
+            type=raw,value=sha-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+
+      - name: Build web release candidate image
+        id: build-web
+        uses: docker/build-push-action@v7
+        with:
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+          context: apps/web
+          file: apps/web/Dockerfile
+          labels: ${{ steps.meta-web.outputs.labels }}
+          load: true
+          push: ${{ github.event_name == 'push' }}
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta-web.outputs.tags }}
+
+      - name: Build API release candidate image
+        id: build-api
+        uses: docker/build-push-action@v7
+        with:
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+          context: apps/api
+          file: apps/api/Dockerfile
+          labels: ${{ steps.meta-api.outputs.labels }}
+          load: true
+          push: ${{ github.event_name == 'push' }}
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta-api.outputs.tags }}
 
       - name: Smoke built runtime
-        run: pnpm smoke
-
-      - name: Log in to OCI registry
-        if: github.event_name == 'push'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.OCI_REGISTRY }}
-          username: ${{ secrets.OCI_USERNAME }}
-          password: ${{ secrets.OCI_PASSWORD }}
-
-      - name: Publish built release candidate
-        id: publish-release-candidate
-        if: github.event_name == 'push'
         env:
-          OCI_NAMESPACE: ${{ secrets.OCI_NAMESPACE }}
-          OCI_REGISTRY: ${{ secrets.OCI_REGISTRY }}
-        run: |
-          set -euo pipefail
-          release_tag="sha-${GITHUB_SHA}-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}"
-          web_ref="${OCI_REGISTRY}/${OCI_NAMESPACE}/ade-web:${release_tag}"
-          api_ref="${OCI_REGISTRY}/${OCI_NAMESPACE}/ade-api:${release_tag}"
-          docker image tag ade-web:local "${web_ref}"
-          docker image tag ade-api:local "${api_ref}"
-          docker image push "${web_ref}"
-          docker image push "${api_ref}"
-          echo "web_ref=${web_ref}" >> "$GITHUB_OUTPUT"
-          echo "api_ref=${api_ref}" >> "$GITHUB_OUTPUT"
+          ADE_API_IMAGE: ${{ steps.meta-api.outputs.tags }}
+          ADE_WEB_IMAGE: ${{ steps.meta-web.outputs.tags }}
+        run: pnpm smoke
 
       - name: Write release candidate metadata
         if: github.event_name == 'push'
-        env:
-          API_REF: ${{ steps.publish-release-candidate.outputs.api_ref }}
-          COMMIT_SHA: ${{ github.sha }}
-          WEB_REF: ${{ steps.publish-release-candidate.outputs.web_ref }}
         run: |
           set -euo pipefail
-          WEB_DIGEST="$(docker buildx imagetools inspect "${WEB_REF}" --format '{{json .}}' | node -e "let data = ''; process.stdin.on('data', (chunk) => { data += chunk }); process.stdin.on('end', () => { process.stdout.write(JSON.parse(data).manifest.digest) })")"
-          API_DIGEST="$(docker buildx imagetools inspect "${API_REF}" --format '{{json .}}' | node -e "let data = ''; process.stdin.on('data', (chunk) => { data += chunk }); process.stdin.on('end', () => { process.stdout.write(JSON.parse(data).manifest.digest) })")"
+          WEB_REF="$(printf '%s\n' '${{ steps.meta-web.outputs.tags }}' | head -n 1)"
+          API_REF="$(printf '%s\n' '${{ steps.meta-api.outputs.tags }}' | head -n 1)"
           WEB_REPO="${WEB_REF%:*}"
           API_REPO="${API_REF%:*}"
-          WEB_REPO="${WEB_REPO}" API_REPO="${API_REPO}" WEB_DIGEST="${WEB_DIGEST}" API_DIGEST="${API_DIGEST}" node -e "const fs = require('node:fs'); fs.writeFileSync('release-candidate.json', JSON.stringify({ commitSha: process.env.COMMIT_SHA, webDigest: `${process.env.WEB_REPO}@${process.env.WEB_DIGEST}`, apiDigest: `${process.env.API_REPO}@${process.env.API_DIGEST}` }, null, 2) + '\n')"
+          WEB_REPO="${WEB_REPO}" API_REPO="${API_REPO}" WEB_DIGEST="${{ steps.build-web.outputs.digest }}" API_DIGEST="${{ steps.build-api.outputs.digest }}" COMMIT_SHA="${{ github.sha }}" node -e "const fs = require('node:fs'); fs.writeFileSync('release-candidate.json', JSON.stringify({ commitSha: process.env.COMMIT_SHA, webDigest: `${process.env.WEB_REPO}@${process.env.WEB_DIGEST}`, apiDigest: `${process.env.API_REPO}@${process.env.API_DIGEST}` }, null, 2) + '\n')"
 
       - name: Upload release candidate metadata
         if: github.event_name == 'push'
