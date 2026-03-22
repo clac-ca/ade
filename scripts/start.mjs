@@ -115,7 +115,20 @@ async function main() {
       ADE_WEB_IMAGE: defaultImages.web
     }
   })
+  let composeError = null
   let shuttingDown = false
+  const composeExited = new Promise((resolve, reject) => {
+    compose.once('error', (error) => {
+      composeError = error
+      reject(error)
+    })
+    compose.once('exit', (code, signal) => {
+      resolve({
+        code,
+        signal
+      })
+    })
+  })
 
   const shutdown = registerShutdown(async () => {
     shuttingDown = true
@@ -150,7 +163,7 @@ async function main() {
       ],
       {
         timeoutMs: 60_000,
-        isAlive: () => compose.exitCode === null && compose.signalCode === null
+        isAlive: () => composeError === null && compose.exitCode === null && compose.signalCode === null
       }
     )
   } catch (error) {
@@ -164,6 +177,20 @@ async function main() {
   }
 
   console.log(`ADE is running at ${appUrl}`)
+
+  const result = await composeExited
+
+  if (shuttingDown) {
+    return
+  }
+
+  if (result.signal !== null) {
+    throw new Error(`Launcher child exited with signal ${result.signal}.`)
+  }
+
+  if (result.code !== 0) {
+    throw new Error(`Launcher child exited with code ${result.code ?? 'unknown'}.`)
+  }
 }
 
 void main().catch((error) => {

@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
-import { findAvailablePort, spawnCommand, waitForReady } from './shared.mjs'
+import { findAvailablePort, spawnCommand } from './shared.mjs'
 
 const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
@@ -57,6 +57,72 @@ async function assertVersion(url) {
   }
 }
 
+async function waitForStartupLine(child, expectedLine, timeoutMs = 120_000) {
+  const output = []
+
+  function mirror(stream, sink) {
+    stream.setEncoding('utf8')
+    stream.on('data', (chunk) => {
+      output.push(chunk)
+      sink.write(chunk)
+    })
+  }
+
+  if (!child.stdout || !child.stderr) {
+    throw new Error('Smoke runner requires piped child output.')
+  }
+
+  mirror(child.stdout, process.stdout)
+  mirror(child.stderr, process.stderr)
+
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Timed out waiting for startup output: ${expectedLine}`))
+    }, timeoutMs)
+
+    function cleanup() {
+      clearTimeout(timeout)
+      child.stdout?.off('data', onData)
+      child.stderr?.off('data', onData)
+      child.off('exit', onExit)
+      child.off('error', onError)
+    }
+
+    function hasExpectedLine() {
+      return output.join('').includes(expectedLine)
+    }
+
+    function onData() {
+      if (!hasExpectedLine()) {
+        return
+      }
+
+      cleanup()
+      resolve(undefined)
+    }
+
+    function onExit(code, signal) {
+      cleanup()
+      reject(new Error(`Start command exited before it reported readiness (code: ${code ?? 'unknown'}, signal: ${signal ?? 'none'}).`))
+    }
+
+    function onError(error) {
+      cleanup()
+      reject(error)
+    }
+
+    child.stdout.on('data', onData)
+    child.stderr.on('data', onData)
+    child.on('exit', onExit)
+    child.on('error', onError)
+
+    if (hasExpectedLine()) {
+      cleanup()
+      resolve(undefined)
+    }
+  })
+}
+
 async function main() {
   const rootDir = fileURLToPath(new URL('..', import.meta.url))
   const port = await findAvailablePort()
@@ -65,22 +131,13 @@ async function main() {
     pnpmCommand,
     ['run', 'start', '--', '--port', String(port), '--no-open'],
     {
-      cwd: rootDir
+      cwd: rootDir,
+      stdio: ['ignore', 'pipe', 'pipe']
     }
   )
 
   try {
-    await waitForReady(
-      [
-        `${appUrl}/`,
-        `${appUrl}/api/readyz`
-      ],
-      {
-        timeoutMs: 120_000,
-        isAlive: () => child.exitCode === null && child.signalCode === null
-      }
-    )
-
+    await waitForStartupLine(child, `ADE is running at ${appUrl}`)
     await assertOk(`${appUrl}/`)
     await assertOk(`${appUrl}/api/healthz`)
     await assertOk(`${appUrl}/api/readyz`)
