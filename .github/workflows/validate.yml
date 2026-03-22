@@ -71,7 +71,7 @@ jobs:
 
       - name: Extract web image metadata
         id: meta-web
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ade-web
           tags: |
@@ -79,7 +79,7 @@ jobs:
 
       - name: Extract API image metadata
         id: meta-api
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/ade-api
           tags: |
