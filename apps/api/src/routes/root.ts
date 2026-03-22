@@ -1,8 +1,9 @@
+import process from 'node:process'
 import { FastifyPluginAsync } from 'fastify'
-import { BuildInfo } from '../config'
+import { BundledBuildInfo } from '../config'
 
 export type RootRouteOptions = {
-  buildInfo: BuildInfo,
+  buildInfo: BundledBuildInfo,
   readiness: {
     isReady: boolean
   }
@@ -40,7 +41,10 @@ const root: FastifyPluginAsync<RootRouteOptions> = async (fastify, options): Pro
   })
 
   fastify.get('/version', async () => {
-    return options.buildInfo
+    return {
+      ...options.buildInfo,
+      nodeVersion: process.version
+    }
   })
 }
 

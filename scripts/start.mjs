@@ -15,6 +15,7 @@ const defaultImages = {
   web: process.env.ADE_WEB_IMAGE ?? 'ade-web:local',
   api: process.env.ADE_API_IMAGE ?? 'ade-api:local'
 }
+const hasExplicitImageRefs = Boolean(process.env.ADE_WEB_IMAGE || process.env.ADE_API_IMAGE)
 
 function composeArgs(projectName, ...args) {
   return ['compose', '--project-name', projectName, ...args]
@@ -84,6 +85,10 @@ async function main() {
         stdio: 'ignore'
       })
     } catch {
+      if (hasExplicitImageRefs) {
+        throw new Error(`The configured images are not available locally: ${imageRefs.join(', ')}. Run \`docker pull\` for those refs or \`pnpm build\` to rebuild the local candidate.`)
+      }
+
       throw new Error('Run `pnpm build` first.')
     }
   }

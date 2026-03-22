@@ -10,7 +10,7 @@ function createApp({ logger = true, ...options }: CreateAppOptions): FastifyInst
     logger
   })
 
-  void server.register(rootRoute, options)
+  server.register(rootRoute, options)
 
   return server
 }

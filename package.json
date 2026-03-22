@@ -7,22 +7,14 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "lint": "eslint .",
-    "typecheck": "pnpm --filter @ade/api typecheck && pnpm --filter @ade/web typecheck",
-    "test": "pnpm --filter @ade/api test",
+    "check": "pnpm exec eslint . && pnpm --filter @ade/api typecheck && pnpm --filter @ade/api test && pnpm --filter @ade/web build",
+    "check:python": "uv build --directory python/ade-engine && uv build --directory python/ade-config-template",
     "build": "node scripts/build.mjs",
     "start": "node scripts/start.mjs",
-    "clean": "pnpm -r --if-present run clean && rimraf python/ade-engine/dist python/ade-config-template/dist",
-    "build:web": "pnpm --filter @ade/web build",
-    "build:api": "pnpm --filter @ade/api build",
-    "build:python": "uv build --directory python/ade-engine && uv build --directory python/ade-config-template",
-    "package:api": "node -e \"require('node:fs').rmSync('apps/api/.package', { recursive: true, force: true })\" && pnpm --filter @ade/api deploy --prod --legacy apps/api/.package",
-    "image:web": "docker build -t ade-web:local apps/web",
-    "image:api": "docker build -t ade-api:local apps/api",
+    "clean": "node scripts/clean.mjs",
     "smoke": "node scripts/smoke-start.mjs",
     "dev:web": "pnpm --filter @ade/web dev",
-    "dev:api": "pnpm --filter @ade/api dev",
-    "check": "pnpm run lint && pnpm run typecheck && pnpm run test"
+    "dev:api": "pnpm --filter @ade/api dev"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -37,9 +37,7 @@ pnpm dev
 pnpm dev -- --port 4000
 pnpm dev -- --no-open
 pnpm check
-pnpm lint
-pnpm typecheck
-pnpm test
+pnpm check:python
 pnpm clean
 pnpm dev:web
 pnpm dev:api
@@ -50,14 +48,12 @@ pnpm dev:api
 | Command | Description |
 | --- | --- |
 | `pnpm dev` | Run the watch-mode development environment |
-| `pnpm lint` | Lint the TypeScript and Node code |
-| `pnpm typecheck` | Run the TypeScript type checks |
-| `pnpm test` | Run the automated tests |
+| `pnpm check` | Run the fast pre-checkin validation |
+| `pnpm check:python` | Validate the Python runtime packages |
 | `pnpm build` | Build the local release-candidate images |
 | `pnpm start` | Run the built release candidate |
 | `pnpm smoke` | Smoke test the built runtime |
-| `pnpm check` | Run the fast pre-checkin validation |
-| `pnpm clean` | Remove generated local build output |
+| `pnpm clean` | Remove generated local build output and local release-candidate images |
 | `pnpm dev:web` | Run the web app only |
 | `pnpm dev:api` | Run the API only |
 
@@ -71,6 +67,18 @@ The commit-stage workflow publishes the release candidate to an OCI registry on 
 - `OCI_PASSWORD`
 
 The workflow uploads `release-candidate.json` with `commitSha`, `webDigest`, and `apiDigest`. Acceptance and production should deploy those exact digests.
+
+To run a pushed release candidate locally, pull the digest refs first, then start ADE without rebuilding:
+
+```sh
+docker pull "registry.example.com/org/ade-web@sha256:..."
+docker pull "registry.example.com/org/ade-api@sha256:..."
+ADE_WEB_IMAGE="registry.example.com/org/ade-web@sha256:..." \
+ADE_API_IMAGE="registry.example.com/org/ade-api@sha256:..." \
+pnpm start
+```
+
+Deployments must use digests, not mutable tags.
 
 ## Working Rules
 

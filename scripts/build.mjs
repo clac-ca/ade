@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import process from 'node:process'
-import { spawnCommand } from './shared.mjs'
+import { runCommand } from './shared.mjs'
 
 const dockerCommand = process.platform === 'win32' ? 'docker.exe' : 'docker'
 const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
@@ -11,43 +12,24 @@ const apiPackage = JSON.parse(
   readFileSync(new URL('../apps/api/package.json', import.meta.url), 'utf8')
 )
 
-async function runCommand(command, args, options = {}) {
-  await new Promise((resolve, reject) => {
-    const child = spawnCommand(command, args, {
-      cwd: options.cwd ?? rootDir,
-      env: options.env,
-      stdio: options.stdio ?? 'inherit'
-    })
+function readGitMetadata() {
+  const gitSha = process.env.GITHUB_SHA ?? readGitValue(['rev-parse', 'HEAD']) ?? 'local'
+  const builtAt = readGitValue(['show', '--no-patch', '--format=%cI', gitSha]) ?? new Date().toISOString()
 
-    child.on('error', reject)
-    child.on('exit', (code, signal) => {
-      if (signal !== null) {
-        reject(new Error(`${command} exited with signal ${signal}`))
-        return
-      }
-
-      if (code !== 0) {
-        reject(new Error(`${command} exited with code ${code ?? 'unknown'}`))
-        return
-      }
-
-      resolve(undefined)
-    })
-  })
+  return {
+    builtAt,
+    gitSha
+  }
 }
 
-function readGitSha() {
-  if (process.env.GITHUB_SHA) {
-    return process.env.GITHUB_SHA
-  }
-
+function readGitValue(args) {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], {
+    return execFileSync('git', args, {
       cwd: rootDir,
       encoding: 'utf8'
     }).trim()
   } catch {
-    return 'local'
+    return null
   }
 }
 
@@ -62,26 +44,36 @@ async function ensureDocker() {
 }
 
 async function main() {
-  const builtAt = new Date().toISOString()
-  const gitSha = readGitSha()
+  const { builtAt, gitSha } = readGitMetadata()
+  const buildInfoPath = join(rootDir, 'apps', 'api', '.package', 'dist', 'build-info.json')
 
   await ensureDocker()
-  await runCommand(pnpmCommand, ['run', 'build:web'])
-  await runCommand(pnpmCommand, ['run', 'build:api'])
-  await runCommand(pnpmCommand, ['run', 'package:api'])
+  await runCommand(pnpmCommand, ['--filter', '@ade/web', 'build'], {
+    cwd: rootDir
+  })
+  await runCommand(pnpmCommand, ['--filter', '@ade/api', 'build'], {
+    cwd: rootDir
+  })
+  rmSync(join(rootDir, 'apps', 'api', '.package'), {
+    force: true,
+    recursive: true
+  })
+  await runCommand(pnpmCommand, ['--filter', '@ade/api', 'deploy', '--prod', 'apps/api/.package'], {
+    cwd: rootDir
+  })
+
+  mkdirSync(dirname(buildInfoPath), {
+    recursive: true
+  })
+  writeFileSync(buildInfoPath, JSON.stringify({
+    builtAt,
+    gitSha,
+    service: 'ade-api',
+    version: apiPackage.version
+  }, null, 2) + '\n')
+
   await runCommand(dockerCommand, ['build', '-t', 'ade-web:local', 'apps/web'])
-  await runCommand(dockerCommand, [
-    'build',
-    '-t',
-    'ade-api:local',
-    '--build-arg',
-    `ADE_BUILD_GIT_SHA=${gitSha}`,
-    '--build-arg',
-    `ADE_BUILD_TIMESTAMP=${builtAt}`,
-    '--build-arg',
-    `ADE_BUILD_VERSION=${apiPackage.version}`,
-    'apps/api'
-  ])
+  await runCommand(dockerCommand, ['build', '-t', 'ade-api:local', 'apps/api'])
 }
 
 void main().catch((error) => {
