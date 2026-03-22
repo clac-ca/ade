@@ -5,6 +5,10 @@
 ├── compose.yaml
 ├── README.md
 ├── PRINCIPLES.md
+├── infra/
+│   ├── main.bicep
+│   ├── environments/
+│   └── modules/
 ├── scripts/
 │   ├── dev.mjs
 │   ├── smoke-start.mjs

@@ -6,6 +6,8 @@ npm-debug.log*
 pnpm-debug.log*
 *.local
 apps/api/.package/
+infra/*.json
+infra/environments/*.json
 
 __pycache__/
 .pytest_cache/
