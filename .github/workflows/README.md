@@ -1,321 +1,177 @@
 # ADE Deployment Pipeline
 
-This is the **pure Farley, intentionally simple** pipeline for `clac-ca/ade`.
+This is the canonical deployment pipeline for `clac-ca/ade`.
 
-It is deliberately built around **three stages only**:
+It follows a strict three-stage shape:
 
-1. **Commit stage**
-2. **Acceptance stage**
-3. **Release stage**
+1. **Commit Stage**
+2. **Acceptance Stage**
+3. **Release Stage**
 
-Nothing else is treated as authoritative.
+The workflow lives at `.github/workflows/development_pipeline.yml`.
 
 ## Why this pipeline looks the way it does
 
-This pipeline follows Dave Farley and Jez Humble’s deployment-pipeline model very closely:
+This pipeline stays intentionally direct:
 
-- every check-in to the shared trunk creates a pipeline instance and a release candidate
-- the **commit stage** is the fast technical gate
-- the **acceptance stage** proves the candidate works in a production-shaped deployment
-- the **release stage** deploys the same accepted candidate to production without rebuilding it
-- the same candidate is promoted forward; it is **not rebuilt for release**
-- if the mainline build goes red, the team **stops the line** and fixes or reverts immediately
+- one workflow file
+- one commit-stage job
+- one acceptance-stage job
+- one release-stage job
+- the release candidate is built once in commit stage
+- pull requests stop after commit stage
+- pushes to `main` continue through acceptance and release
 
-This repository is still small, so the pipeline is kept intentionally compact:
+The goal is to make the delivery logic obvious from the YAML itself.
 
-- **one canonical workflow file**
-- **one commit stage implemented as 3 jobs**
-- **one acceptance-stage job**
-- **one release-stage job**
-- **no PR CI bureaucracy in the canonical pipeline**
-- **no duplicated test suites across multiple stages**
-- **no non-essential stages yet**
+## Operating model for ADE
 
-That is not an omission. It is the point.
+### 1. `main` is the authoritative integration branch
 
-## Pure Farley operating model for ADE
+Both pull requests to `main` and pushes to `main` run the **Commit Stage**.
 
-### 1. Main is the authoritative integration branch
-
-The authoritative deployment pipeline starts when a change lands on `main`.
+Only pushes to `main` continue beyond commit stage.
 
 That means:
 
-- developers integrate in **small batches**
-- branches, if used at all, stay **very short-lived**
-- the authoritative automated feedback is on `main`
-- if you keep pull requests, keep them tiny and fast; they are a collaboration tool, not the authoritative pipeline
+- pull requests get fast technical feedback
+- `main` remains the authoritative path to release
+- release candidates are only published from real commits on `main`
 
-### 2. The team owns the red build
+### 2. The release candidate is the built container image
 
-If `commit-stage` or `acceptance-stage` fails on `main`:
+The commit stage creates the local release candidate with `pnpm build`.
 
-- stop feature work
-- fix forward immediately **or revert immediately**
-- only resume normal work once `main` is green again
-
-### 3. Release means promoting an accepted version
-
-A version is releasable only after:
-
-- `commit-stage` passed on `main`
-- `acceptance-stage` passed on `main`
-- the workflow created an immutable Git tag of the form:
+On pushes to `main`, that same built candidate is tagged and pushed to public GHCR as:
 
 ```text
-candidate-<40-char-sha>
+ghcr.io/<owner>/ade-web:sha-<commit-sha>
+ghcr.io/<owner>/ade-api:sha-<commit-sha>
 ```
 
-Normal release on `main` is then:
+Those image refs are then reused in acceptance and release.
 
-- automatically deploy the accepted candidate to production
-- smoke test production immediately
-- create an immutable release tag if production smoke passes
+### 3. Acceptance tests the running release candidate
 
-Emergency redeploy is still explicit:
+Acceptance does not rebuild the app.
 
-- choose the accepted candidate SHA
-- run the workflow manually with `candidate_tag`
-- let the workflow redeploy that exact accepted candidate to production without rebuilding it
+It:
 
-That is the Farley model: **build once, test once per stage, then promote**.
+- pulls the published release-candidate images onto the GitHub runner
+- starts them with `docker compose`
+- waits for the API readiness endpoint
+- runs `pnpm test:acceptance` against the running candidate
+
+### 4. Release deploys the accepted candidate
+
+Release deploys the same accepted image refs to production through the repo-owned Azure deployment contract in `scripts/deploy-aca.mjs`.
+
+There is no extra rebuild, no tag resolution step, and no separate emergency-redeploy workflow in this simplified model.
 
 ## What each stage does
 
-## Commit stage
+## Commit Stage
 
-Purpose: reject bad changes quickly and produce an immutable release candidate.
+Purpose: reject bad changes quickly and create the release candidate.
 
-Current ADE commit stage does the following:
+Current ADE commit stage:
 
 - checks out the repo
-- uses the repo-pinned **Node 22.12.0** and **Python 3.12** toolchain
-- installs JavaScript dependencies with `pnpm install --frozen-lockfile` in the verification and build/smoke jobs
-- runs fast verification (`lint`, `format:check`, `typecheck`, `test:unit`, `package:python`) in parallel with candidate build and smoke
-- smoke tests the exact built images via the repo-owned `pnpm run test:smoke` contract
-- pushes immutable candidate image tags to GHCR:
+- sets up pnpm, Node, and Docker Buildx
+- installs dependencies with `pnpm install --frozen-lockfile`
+- runs `pnpm lint`
+- runs `pnpm test:unit`
+- runs `pnpm build`
+- on `push` to `main`, logs into GHCR and publishes the release-candidate images
 
-```text
-ghcr.io/<owner>/<repo>-web:sha-<commit-sha>
-ghcr.io/<owner>/<repo>-api:sha-<commit-sha>
-```
+This stage runs for:
 
-- publishes those image tags only after both verification and smoke pass
-- only then allows the acceptance stage to begin
-- uploads a `candidate-manifest.json` artifact for traceability
-- carries the accepted digests forward into the annotated `candidate-<sha>` tag so release can resolve the candidate from Git alone
+- `pull_request` to `main`
+- `push` to `main`
 
-### What belongs here today
+On pull requests, the publish step is skipped.
 
-Exactly the checks that are already meaningful and fast in this repo:
+## Acceptance Stage
 
-- TypeScript compile/build checks
-- API unit tests
-- Python package builds
-- image creation
-- tiny runtime smoke
+Purpose: prove the published release candidate works as a running system.
 
-### What does **not** belong here yet
+Current ADE acceptance stage:
 
-Do **not** add these to the commit stage yet:
+- runs only on `push` to `main`
+- depends on the commit stage outputs
+- checks out the repo
+- installs dependencies
+- starts the published release candidate on the GitHub runner with `docker compose`
+- waits for `http://127.0.0.1:4100/api/readyz`
+- runs `ADE_BASE_URL=http://127.0.0.1:4100 pnpm test:acceptance`
+- always tears the stack down afterward
 
-- browser end-to-end suites
-- performance tests
-- long-running integration environments
-- heavyweight security scans that add material latency
-- tool-driven “quality theatre” that is not yet part of your definition of deployable
+The acceptance environment is the GitHub runner itself. It is not a separate Azure staging deployment.
 
-If a check is not fast, deterministic, and clearly valuable right now, it stays out.
+## Release Stage
 
-## Acceptance stage
+Purpose: deploy the accepted release candidate to production.
 
-Purpose: deploy the exact release candidate and prove it works in a production-shaped acceptance environment.
+Current ADE release stage:
 
-Current ADE acceptance stage does the following:
+- runs only on `push` to `main`
+- depends on the acceptance stage
+- logs into Azure with OIDC
+- deploys the same accepted image refs to Azure Container Apps production with `pnpm run deploy:aca`
 
-- deploys the exact immutable candidate images created in commit stage to the `acceptance` Azure Container Apps environment
-- runs the deployed-environment smoke test via the same repo-owned `pnpm run test:smoke` contract, pointed at `ADE_BASE_URL`
-- runs the acceptance contract via the repo-owned `pnpm run test:acceptance` contract against the same deployed URL
-- if that passes, creates the immutable accepted-candidate tag:
-
-```text
-candidate-<commit-sha>
-```
-
-### Why the acceptance stage is still small right now
-
-Because ADE is still early.
-
-At the moment, the repository has:
-
-- a small Fastify API
-- a small Vite/React web app
-- a concrete Azure Container Apps deployment target in `infra/`
-- a deployed smoke contract for `/`, `/api/healthz`, `/api/readyz`, and `/api/version`
-- a minimal acceptance contract that currently stays close to those core behaviours
-
-So the right acceptance stage is a **small, real** acceptance stage, not a fake “enterprise” stage full of ceremony.
-
-### How acceptance grows later
-
-As ADE grows, acceptance is where you add:
-
-- browser acceptance tests
-- API workflow/integration tests
-- document processing happy-path tests
-- worker/runtime contract tests
-
-When those suites exist and become slow, **parallelize inside the acceptance stage**.
-Do **not** create extra stages unless the feedback economics actually require it.
-
-## Release stage
-
-Purpose: deploy an accepted version to production without rebuilding it.
-
-Current ADE release stage runs automatically on `main` after acceptance and is also exposed through `workflow_dispatch` for emergency redeploy with:
-
-- input: `candidate_tag`
-
-It then:
-
-- resolves the exact accepted image digests from the annotated candidate tag metadata
-- deploys those exact digests to the `production` Azure Container Apps environment
-- smoke tests production immediately after deploy via `pnpm run test:smoke`
-- on success, creates the matching immutable Git release tag:
-
-```text
-release-<utc-timestamp>-<sha12>
-```
-
-- uploads a `release-manifest.json` artifact
-- if production smoke fails, attempts rollback to the most recent successful `release-*` tag and leaves the run failed
-
-### Why release now deploys instead of only promoting
-
-Because this repo now contains a concrete deployment target and deployment contract.
-
-That is fine.
-
-For ADE, the simplest correct implementation is now:
-
-- prove the candidate is accepted
-- deploy the same accepted images to production
-- smoke test production immediately after deploy
-- rollback automatically if that smoke fails
-
-Do **not** change the stage structure when the app grows.
-Just extend the acceptance contract as the product needs it.
+Because the GHCR images are public, the workflow sets `ADE_REGISTRY_SERVER=ghcr.io` and does not pass registry credentials.
 
 ## GitHub repository setup required
 
-Create `.github/workflows/pipeline.yml` from the file in this directory.
+Create `.github/workflows/development_pipeline.yml` from the file in this directory.
 
 Then configure the repo like this:
 
-### 1. Acceptance and production environments
+### 1. Production environment
 
-Create GitHub environments named:
+Create a GitHub environment named:
 
 ```text
-acceptance
 production
 ```
 
-Set these variables on both environments:
+Set these variables on that environment:
 
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
 
-If the registry is private, also set:
-
-- `ADE_REGISTRY_SERVER`
-- `ADE_REGISTRY_USERNAME`
-- secret: `ADE_REGISTRY_PASSWORD`
-
-If one `ADE_REGISTRY_*` value is set, all three must be set.
-
 ### 2. Azure authentication
 
 The workflow uses `azure/login` with OIDC.
 
-Configure Azure federated credentials for the GitHub environments instead of storing long-lived cloud secrets in the repository.
+Configure Azure federated credentials for the `production` GitHub environment instead of storing long-lived cloud secrets in the repository.
 
-### 3. Container registry and workflow permissions
+### 3. GitHub Container Registry
 
-The workflow pushes candidate images to GitHub Container Registry (`ghcr.io`) using `GITHUB_TOKEN`. Permissions are granted per job with least privilege:
+The commit stage pushes release-candidate images to `ghcr.io` using `GITHUB_TOKEN`.
 
-- `commit_verify`: `contents: read`
-- `candidate_build_and_smoke`: `contents: read`
-- `publish_candidate`: `contents: read`, `packages: write`
-- `acceptance-stage`: `contents: write`, `id-token: write`
-- `production-release`: `contents: write`, `id-token: write`
-- `emergency-redeploy`: `contents: write`, `id-token: write`
+Set the `ade-web` and `ade-api` packages to public visibility in GitHub Packages.
 
 ### 4. Branching discipline
 
-Use `main` as the only authoritative integration branch.
+Use `main` as the authoritative integration branch.
 
 If you keep pull requests:
 
-- keep them very short-lived
-- merge quickly
-- do not treat PR-only automation as the authoritative pipeline
+- keep them short-lived
+- keep them small
+- treat them as collaboration support, not as a separate delivery path
 
-## How to release
+## Local equivalents
 
-Normal release:
+These commands line up with the workflow:
 
-1. Push to `main`.
-2. Wait for commit and acceptance to pass.
-3. The workflow deploys the accepted candidate to production automatically.
-4. If production smoke passes, the workflow creates the immutable release tag.
-
-Emergency redeploy:
-
-1. Find the accepted candidate tag (`candidate-<sha>`).
-2. Go to **Actions**.
-3. Run the **deployment-pipeline** workflow manually.
-4. Enter the accepted `candidate_tag`.
-5. The workflow redeploys that exact accepted candidate to production, smoke tests it, and creates a new release tag on success.
-
-## Why there is no PR CI in this initial implementation
-
-Because this pipeline is intentionally the **canonical Farley pipeline**, not a GitHub convenience layer.
-
-Dave Farley’s point is that the **real, authoritative feedback** is on the integrated change set on trunk. Anything else is, at best, a helpful approximation.
-
-If you want optional preflight automation later, add it later and keep it clearly non-authoritative.
-Do not let it replace the real deployment pipeline on `main`.
-
-## What to defer until the system matures
-
-Keep these out of the authoritative pipeline for now unless they become truly necessary:
-
-- CodeQL as a merge/release gate
-- SAST/dependency scanning as a blocking gate
-- performance/load stages
-- browser matrix testing
-- merge queue
-- ephemeral preview environments
-- deployment orchestration for infra you do not yet have
-
-Add them only when the system’s actual risk profile demands them.
-
-## Summary
-
-This pipeline is intentionally opinionated.
-
-It says:
-
-- integrate to `main`
-- get fast feedback on `main`
-- produce immutable candidates once
-- acceptance-test the same candidate in a real acceptance environment
-- mark accepted candidates explicitly
-- release the accepted candidate to production without rebuilding it
-- keep the number of stages low
-- keep every stage easy to explain
-
-That is the simplest ADE pipeline that is faithful to Dave Farley’s model and still practical for the repo you have today.
+```sh
+pnpm lint
+pnpm test:unit
+pnpm build
+pnpm start
+ADE_BASE_URL=http://localhost:8000 pnpm test:acceptance
+```

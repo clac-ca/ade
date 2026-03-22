@@ -102,18 +102,13 @@ async function assertApiRoot(baseUrl) {
   assertString(payload.version, "API root version");
 }
 
-async function runDeploySmoke(baseUrl) {
+async function runAcceptanceChecks(baseUrl) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   await assertAppShell(normalizedBaseUrl);
   await assertHealth(normalizedBaseUrl);
   await assertReady(normalizedBaseUrl);
   await assertVersion(normalizedBaseUrl);
-}
-
-async function runAcceptanceChecks(baseUrl) {
-  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
-  await runDeploySmoke(normalizedBaseUrl);
   await assertApiRoot(normalizedBaseUrl);
 }
 
-export { normalizeBaseUrl, runAcceptanceChecks, runDeploySmoke };
+export { runAcceptanceChecks };

@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -143,110 +142,6 @@ export async function runCommandCapture(command, args, options = {}) {
   });
 }
 
-export async function waitForChildExit(child, timeoutMs = 5_000) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-
-  await Promise.race([
-    new Promise((resolve) => {
-      child.once("exit", () => resolve(undefined));
-    }),
-    delay(timeoutMs),
-  ]);
-}
-
-export async function stopChildProcess(child, timeoutMs = 5_000) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-
-  child.kill("SIGTERM");
-  await waitForChildExit(child, timeoutMs);
-
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGKILL");
-    await waitForChildExit(child, 1_000);
-  }
-}
-
-export async function runCommandsParallel(commands) {
-  if (commands.length === 0) {
-    return;
-  }
-
-  await new Promise((resolve, reject) => {
-    const children = [];
-    let completed = 0;
-    let settled = false;
-
-    const stopOthers = async (currentChild) => {
-      await Promise.all(
-        children
-          .filter((child) => child !== currentChild)
-          .map((child) =>
-            stopChildProcess(child).catch(() => {
-              return undefined;
-            }),
-          ),
-      );
-    };
-
-    const fail = (error, currentChild = null) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      void stopOthers(currentChild).finally(() => {
-        reject(error);
-      });
-    };
-
-    for (const command of commands) {
-      const child = spawnCommand(command.command, command.args, {
-        cwd: command.cwd,
-        env: command.env,
-        stdio: command.stdio ?? "inherit",
-      });
-      children.push(child);
-
-      const label =
-        command.label ?? `${command.command} ${command.args.join(" ")}`;
-
-      child.on("error", (error) => {
-        fail(error, child);
-      });
-
-      child.on("exit", (code, signal) => {
-        if (settled) {
-          return;
-        }
-
-        if (signal !== null) {
-          fail(new Error(`${label} exited with signal ${signal}`), child);
-          return;
-        }
-
-        if (code !== 0) {
-          fail(
-            new Error(`${label} exited with code ${code ?? "unknown"}`),
-            child,
-          );
-          return;
-        }
-
-        completed += 1;
-
-        if (completed === commands.length) {
-          settled = true;
-          resolve(undefined);
-        }
-      });
-    }
-  });
-}
-
 export async function waitForReady(urls, options = {}) {
   const timeoutMs = options.timeoutMs ?? 30_000;
   const startedAt = Date.now();
@@ -275,33 +170,6 @@ export async function waitForReady(urls, options = {}) {
   }
 
   throw new Error(`Timed out waiting for: ${urls.join(", ")}`);
-}
-
-export async function findAvailablePort() {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-
-      if (!address || typeof address === "string") {
-        server.close(() =>
-          reject(new Error("Could not determine a free port.")),
-        );
-        return;
-      }
-
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve(address.port);
-      });
-    });
-  });
 }
 
 export function registerShutdown(handler) {

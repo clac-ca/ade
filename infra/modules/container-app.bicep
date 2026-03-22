@@ -25,7 +25,8 @@ param registryUsername string = ''
 @secure()
 param registryPassword string = ''
 
-var usesRegistryCredentials = registryServer != ''
+var usesRegistry = registryServer != ''
+var usesRegistryCredentials = registryServer != '' && registryUsername != '' && registryPassword != ''
 
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
@@ -47,14 +48,16 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         ]
         transport: transport
       }
-    }, usesRegistryCredentials ? {
+    }, usesRegistry ? {
       registries: [
-        {
-          passwordSecretRef: 'registry-password'
+        union({
           server: registryServer
+        }, usesRegistryCredentials ? {
+          passwordSecretRef: 'registry-password'
           username: registryUsername
-        }
+        } : {})
       ]
+    } : {}, usesRegistryCredentials ? {
       secrets: [
         {
           name: 'registry-password'

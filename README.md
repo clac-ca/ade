@@ -11,14 +11,14 @@ ADE is a document operations platform for messy spreadsheets. The TypeScript app
 - `python/ade-engine` - extraction runtime package
 - `python/ade-config-template` - configurable template package
 - `infra/` - infrastructure definitions
-- `scripts/` - root development, build, and smoke-test entrypoints
+- `scripts/` - root development, build, acceptance, and deployment entrypoints
 
 ## Requirements
 
 - Node.js 22+
 - pnpm 10+
 - Python 3.12
-- Docker running locally for `pnpm test`, `pnpm build`, `pnpm start`, and local `pnpm test:smoke`
+- Docker running locally for `pnpm test`, `pnpm build`, and `pnpm start`
 
 ## Quickstart
 
@@ -40,9 +40,8 @@ ADE opens at `http://localhost:8000`.
 | `pnpm lint`            | Run ESLint across the repo                                                  |
 | `pnpm format:check`    | Check the pipeline-owned repo files with Prettier                           |
 | `pnpm typecheck`       | Run the TypeScript typechecks                                               |
-| `pnpm test`            | Run the authoritative local commit-stage gate                               |
+| `pnpm test`            | Run the local commit-stage gate: lint, unit tests, then build               |
 | `pnpm test:unit`       | Run the API unit tests                                                      |
-| `pnpm test:smoke`      | Smoke test the built local runtime, or a deployed URL via `ADE_BASE_URL`    |
 | `pnpm test:acceptance` | Run the acceptance checks for a deployed environment via `ADE_BASE_URL`     |
 | `pnpm package:python`  | Build the Python packages                                                   |
 | `pnpm build`           | Build the local candidate artifacts and images, not the published candidate |
@@ -59,24 +58,17 @@ pnpm dev
 pnpm test
 ```
 
-Production-shaped local run:
+Run the local release candidate:
 
 ```sh
 pnpm build
 pnpm start
-pnpm test:smoke
 ```
 
-Commit-stage preflight before pushing:
+Run acceptance checks against a running candidate:
 
 ```sh
-pnpm test
-```
-
-Smoke test a deployed environment:
-
-```sh
-ADE_BASE_URL=https://example.test pnpm test:smoke
+ADE_BASE_URL=http://localhost:8000 pnpm test:acceptance
 ```
 
 Run on a different port or skip opening the browser:
@@ -97,8 +89,6 @@ pnpm format:check
 pnpm typecheck
 pnpm test
 pnpm test:unit
-pnpm test:smoke
-ADE_BASE_URL=https://example.test pnpm test:smoke
 ADE_BASE_URL=https://example.test pnpm test:acceptance
 pnpm package:python
 ADE_WEB_IMAGE=ghcr.io/example/ade-web@sha256:... ADE_API_IMAGE=ghcr.io/example/ade-api@sha256:... pnpm deploy:aca -- --environment acceptance --resource-group my-rg --parameters-file infra/environments/main.acceptance.bicepparam

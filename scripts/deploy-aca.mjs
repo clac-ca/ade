@@ -77,15 +77,21 @@ async function main() {
   const registryServer = process.env.ADE_REGISTRY_SERVER?.trim() ?? "";
   const registryUsername = process.env.ADE_REGISTRY_USERNAME?.trim() ?? "";
   const registryPassword = process.env.ADE_REGISTRY_PASSWORD?.trim() ?? "";
-  const configuredRegistryFields = [
-    registryServer,
-    registryUsername,
-    registryPassword,
-  ].filter(Boolean).length;
+  const hasRegistryServer = registryServer !== "";
+  const hasRegistryUsername = registryUsername !== "";
+  const hasRegistryPassword = registryPassword !== "";
+  const usesRegistryCredentials =
+    hasRegistryServer && hasRegistryUsername && hasRegistryPassword;
 
-  if (configuredRegistryFields > 0 && configuredRegistryFields < 3) {
+  if (!hasRegistryServer && (hasRegistryUsername || hasRegistryPassword)) {
     throw new Error(
-      "ADE_REGISTRY_SERVER, ADE_REGISTRY_USERNAME, and ADE_REGISTRY_PASSWORD must either all be set or all be empty.",
+      "ADE_REGISTRY_SERVER is required when ADE_REGISTRY_USERNAME or ADE_REGISTRY_PASSWORD is set.",
+    );
+  }
+
+  if (hasRegistryServer && hasRegistryUsername !== hasRegistryPassword) {
+    throw new Error(
+      "ADE_REGISTRY_USERNAME and ADE_REGISTRY_PASSWORD must either both be set or both be empty.",
     );
   }
 
@@ -145,7 +151,8 @@ async function main() {
     deploymentName,
     environment: environmentName,
     parametersFile: resolvePath(parametersFile),
-    registryConfigured: configuredRegistryFields === 3,
+    registryConfigured: hasRegistryServer,
+    registryUsesCredentials: usesRegistryCredentials,
     resourceGroup,
     webAppName,
     webImage,
