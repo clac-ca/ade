@@ -38,11 +38,43 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate
+      - name: Check
         run: pnpm check
 
       - name: Build release candidate
         run: pnpm build
 
       - name: Smoke built runtime
-        run: pnpm smoke:start
+        run: pnpm smoke
+
+      - name: Publish release candidate
+        if: github.event_name == 'push'
+        env:
+          GIT_SHA: ${{ github.sha }}
+          OCI_NAMESPACE: ${{ secrets.OCI_NAMESPACE }}
+          OCI_PASSWORD: ${{ secrets.OCI_PASSWORD }}
+          OCI_REGISTRY: ${{ secrets.OCI_REGISTRY }}
+          OCI_USERNAME: ${{ secrets.OCI_USERNAME }}
+        run: |
+          test -n "$OCI_REGISTRY" || { echo "Missing OCI_REGISTRY secret."; exit 1; }
+          test -n "$OCI_NAMESPACE" || { echo "Missing OCI_NAMESPACE secret."; exit 1; }
+          test -n "$OCI_USERNAME" || { echo "Missing OCI_USERNAME secret."; exit 1; }
+          test -n "$OCI_PASSWORD" || { echo "Missing OCI_PASSWORD secret."; exit 1; }
+          echo "$OCI_PASSWORD" | docker login "$OCI_REGISTRY" --username "$OCI_USERNAME" --password-stdin
+          WEB_IMAGE="$OCI_REGISTRY/$OCI_NAMESPACE/ade-web:$GIT_SHA"
+          API_IMAGE="$OCI_REGISTRY/$OCI_NAMESPACE/ade-api:$GIT_SHA"
+          docker tag ade-web:local "$WEB_IMAGE"
+          docker tag ade-api:local "$API_IMAGE"
+          docker push "$WEB_IMAGE"
+          docker push "$API_IMAGE"
+          WEB_DIGEST="$(docker image inspect "$WEB_IMAGE" --format '{{index .RepoDigests 0}}')"
+          API_DIGEST="$(docker image inspect "$API_IMAGE" --format '{{index .RepoDigests 0}}')"
+          node -e "const fs = require('node:fs'); fs.writeFileSync('release-candidate.json', JSON.stringify({ commitSha: process.argv[1], webDigest: process.argv[2], apiDigest: process.argv[3] }, null, 2) + '\n')" "$GIT_SHA" "$WEB_DIGEST" "$API_DIGEST"
+        shell: bash
+
+      - name: Upload release candidate metadata
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate
+          path: release-candidate.json

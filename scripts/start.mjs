@@ -11,7 +11,10 @@ import {
 
 const dockerCommand = process.platform === 'win32' ? 'docker.exe' : 'docker'
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
-const imageTags = ['ade-web:local', 'ade-api:local']
+const defaultImages = {
+  web: process.env.ADE_WEB_IMAGE ?? 'ade-web:local',
+  api: process.env.ADE_API_IMAGE ?? 'ade-api:local'
+}
 
 function composeArgs(projectName, ...args) {
   return ['compose', '--project-name', projectName, ...args]
@@ -63,6 +66,7 @@ async function main() {
 
   const appUrl = `http://localhost:${port}`
   const projectName = `ade-local-${port}`
+  const imageRefs = [defaultImages.web, defaultImages.api]
 
   async function ensureDocker() {
     try {
@@ -76,11 +80,11 @@ async function main() {
 
   async function ensureImages() {
     try {
-      await runDocker(['image', 'inspect', ...imageTags], {
+      await runDocker(['image', 'inspect', ...imageRefs], {
         stdio: 'ignore'
       })
     } catch {
-      throw new Error('Run pnpm build first.')
+      throw new Error('Run `pnpm build` first.')
     }
   }
 
@@ -89,7 +93,9 @@ async function main() {
       await runDocker(composeArgs(projectName, 'down', '--remove-orphans'), {
         stdio: 'ignore'
       })
-    } catch {}
+    } catch {
+      // Ignore compose cleanup failures so startup can continue.
+    }
   }
 
   await ensureDocker()
@@ -99,7 +105,9 @@ async function main() {
   const compose = spawnCommand(dockerCommand, composeArgs(projectName, 'up'), {
     cwd: rootDir,
     env: {
-      ADE_PORT: String(port)
+      ADE_API_IMAGE: defaultImages.api,
+      ADE_PORT: String(port),
+      ADE_WEB_IMAGE: defaultImages.web
     }
   })
   let shuttingDown = false
@@ -133,7 +141,7 @@ async function main() {
     await waitForReady(
       [
         `${appUrl}/`,
-        `${appUrl}/api/healthz`
+        `${appUrl}/api/readyz`
       ],
       {
         timeoutMs: 60_000,

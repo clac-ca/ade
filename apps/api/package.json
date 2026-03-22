@@ -10,6 +10,7 @@
     "clean": "rimraf dist .package coverage",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "tsx --test test/**/*.ts"
   },
   "dependencies": {
