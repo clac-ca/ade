@@ -1,0 +1,187 @@
+name: deployment-pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  ADE_NODE_VERSION: "22.12.0"
+  ADE_PNPM_VERSION: "10.30.1"
+
+permissions: {}
+
+jobs:
+  commit_stage:
+    name: Commit Stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      api_image: ${{ steps.publish_release_candidate.outputs.api_image }}
+      web_image: ${{ steps.publish_release_candidate.outputs.web_image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+        with:
+          version: ${{ env.ADE_PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          node-version: ${{ env.ADE_NODE_VERSION }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Unit tests
+        run: pnpm run test:unit
+
+      - name: Build release candidate
+        run: pnpm run build
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish release candidate
+        id: publish_release_candidate
+        if: github.event_name == 'push'
+        run: |
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          web_image="ghcr.io/${owner}/ade-web:sha-${GITHUB_SHA}"
+          api_image="ghcr.io/${owner}/ade-api:sha-${GITHUB_SHA}"
+
+          docker tag ade-web:local "${web_image}"
+          docker tag ade-api:local "${api_image}"
+
+          docker push "${web_image}"
+          docker push "${api_image}"
+
+          echo "web_image=${web_image}" >> "${GITHUB_OUTPUT}"
+          echo "api_image=${api_image}" >> "${GITHUB_OUTPUT}"
+
+  acceptance_stage:
+    name: Acceptance Stage
+    if: github.event_name == 'push'
+    needs:
+      - commit_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      api_image: ${{ steps.release_candidate.outputs.api_image }}
+      web_image: ${{ steps.release_candidate.outputs.web_image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+        with:
+          version: ${{ env.ADE_PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          node-version: ${{ env.ADE_NODE_VERSION }}
+
+      - name: Record release candidate
+        id: release_candidate
+        run: |
+          echo "web_image=${{ needs.commit_stage.outputs.web_image }}" >> "${GITHUB_OUTPUT}"
+          echo "api_image=${{ needs.commit_stage.outputs.api_image }}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start release candidate
+        env:
+          ADE_API_IMAGE: ${{ needs.commit_stage.outputs.api_image }}
+          ADE_PORT: "4100"
+          ADE_WEB_IMAGE: ${{ needs.commit_stage.outputs.web_image }}
+        run: |
+          docker compose pull
+          docker compose up -d
+
+      - name: Wait for release candidate
+        run: |
+          timeout 120 bash -c 'until curl -fsS http://127.0.0.1:4100/api/readyz; do sleep 1; done'
+
+      - name: Run acceptance tests
+        env:
+          ADE_BASE_URL: http://127.0.0.1:4100
+        run: pnpm run test:acceptance
+
+      - name: Stop release candidate
+        if: always()
+        run: docker compose down --remove-orphans
+
+  release_stage:
+    name: Release Stage
+    if: github.event_name == 'push'
+    needs:
+      - acceptance_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+        with:
+          version: ${{ env.ADE_PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.ADE_NODE_VERSION }}
+
+      - name: Log in to Azure
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+
+      - name: Deploy accepted release candidate
+        env:
+          ADE_API_IMAGE: ${{ needs.acceptance_stage.outputs.api_image }}
+          ADE_REGISTRY_SERVER: ghcr.io
+          ADE_WEB_IMAGE: ${{ needs.acceptance_stage.outputs.web_image }}
+        run: >
+          pnpm run deploy:aca -- --environment production
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --parameters-file infra/environments/main.prod.bicepparam
+          --manifest-path production-deployment-manifest.json

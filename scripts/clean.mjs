@@ -68,13 +68,6 @@ async function main() {
     force: true,
     recursive: true,
   });
-  rmSync(
-    fileURLToPath(new URL("../candidate-build-artifact", import.meta.url)),
-    {
-      force: true,
-      recursive: true,
-    },
-  );
   for (const projectName of readComposeProjects()) {
     await tryRun(
       dockerCommand,
