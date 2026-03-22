@@ -1,0 +1,15 @@
+services:
+  api:
+    image: ade-api:local
+    environment:
+      ADE_API_HOST: 0.0.0.0
+      ADE_API_PORT: 8001
+    expose:
+      - "8001"
+
+  web:
+    image: ade-web:local
+    depends_on:
+      - api
+    ports:
+      - "${ADE_PORT:-8000}:80"

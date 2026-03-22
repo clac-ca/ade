@@ -1,8 +1,14 @@
 {
-  "extends": "fastify-tsconfig",
   "compilerOptions": {
+    "target": "ES2023",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
     "outDir": "dist",
-    "sourceMap": true
+    "rootDir": "src",
+    "strict": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"]
 }

@@ -9,20 +9,22 @@ ADE is a document operations platform for messy spreadsheets. The TypeScript app
 - Node.js 22+
 - pnpm 10+
 - Python 3.12
+- Docker running locally for `pnpm build` and `pnpm start`
 
 ## Quickstart
 
 ```sh
 corepack enable
 pnpm install
-pnpm start
+pnpm dev
 ```
 
 ADE opens at `http://localhost:8000`.
 
-## Usage
+## Production-Shaped Local Run
 
 ```sh
+pnpm build
 pnpm start
 pnpm start -- --port 4000
 pnpm start -- --no-open
@@ -31,7 +33,11 @@ pnpm start -- --no-open
 ## Development
 
 ```sh
+pnpm dev
+pnpm dev -- --port 4000
+pnpm dev -- --no-open
 pnpm check
+pnpm clean
 pnpm dev:web
 pnpm dev:api
 ```
@@ -40,8 +46,11 @@ pnpm dev:api
 
 | Command | Description |
 | --- | --- |
-| `pnpm start` | Start ADE locally |
+| `pnpm dev` | Run the watch-mode development environment |
+| `pnpm build` | Create the local release candidate |
+| `pnpm start` | Run the built release candidate |
 | `pnpm check` | Run repo validation |
+| `pnpm clean` | Remove generated local build output |
 | `pnpm dev:web` | Run the web app only |
 | `pnpm dev:api` | Run the API only |
 

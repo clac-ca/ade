@@ -1,20 +1,8 @@
-import { join } from 'node:path'
-import AutoLoad, { AutoloadPluginOptions } from '@fastify/autoload'
-import { FastifyPluginAsync, FastifyServerOptions } from 'fastify'
+import { FastifyPluginAsync } from 'fastify'
+import rootRoute from './routes/root'
 
-export interface AppOptions extends FastifyServerOptions, Partial<AutoloadPluginOptions> {}
-
-const options: AppOptions = {}
-
-const app: FastifyPluginAsync<AppOptions> = async (
-  fastify,
-  opts
-): Promise<void> => {
-  void fastify.register(AutoLoad, {
-    dir: join(__dirname, 'routes'),
-    options: opts
-  })
+const app: FastifyPluginAsync = async (fastify): Promise<void> => {
+  await fastify.register(rootRoute)
 }
 
 export default app
-export { app, options }

@@ -2,19 +2,21 @@
   "name": "@ade/api",
   "private": true,
   "version": "0.1.0",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
+    "clean": "rimraf dist .package coverage",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "test": "tsx --test test/**/*.ts"
   },
   "dependencies": {
-    "@fastify/autoload": "^6.0.0",
     "fastify": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.8",
-    "fastify-tsconfig": "^3.0.0",
     "tsx": "^4.20.6",
     "typescript": "~5.9.2"
   }

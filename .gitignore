@@ -5,6 +5,7 @@ coverage/
 npm-debug.log*
 pnpm-debug.log*
 *.local
+apps/api/.package/
 
 __pycache__/
 .pytest_cache/
