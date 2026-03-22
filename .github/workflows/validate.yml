@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  commit_stage:
-    name: commit stage
+  validate:
+    name: validate
     runs-on: ubuntu-latest
     env:
       REGISTRY: ghcr.io
