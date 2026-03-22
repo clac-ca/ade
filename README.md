@@ -9,7 +9,7 @@ ADE is a document operations platform for messy spreadsheets. The TypeScript app
 - Node.js 22+
 - pnpm 10+
 - Python 3.12
-- Docker running locally for `pnpm build` and `pnpm start`
+- Docker running locally for `pnpm build`, `pnpm start`, and `pnpm smoke`
 
 ## Quickstart
 
@@ -37,6 +37,9 @@ pnpm dev
 pnpm dev -- --port 4000
 pnpm dev -- --no-open
 pnpm check
+pnpm lint
+pnpm typecheck
+pnpm test
 pnpm clean
 pnpm dev:web
 pnpm dev:api
@@ -47,12 +50,27 @@ pnpm dev:api
 | Command | Description |
 | --- | --- |
 | `pnpm dev` | Run the watch-mode development environment |
-| `pnpm build` | Create the local release candidate |
+| `pnpm lint` | Lint the TypeScript and Node code |
+| `pnpm typecheck` | Run the TypeScript type checks |
+| `pnpm test` | Run the automated tests |
+| `pnpm build` | Build the local release-candidate images |
 | `pnpm start` | Run the built release candidate |
-| `pnpm check` | Run repo validation |
+| `pnpm smoke` | Smoke test the built runtime |
+| `pnpm check` | Run the fast pre-checkin validation |
 | `pnpm clean` | Remove generated local build output |
 | `pnpm dev:web` | Run the web app only |
 | `pnpm dev:api` | Run the API only |
+
+## CI Registry Inputs
+
+The commit-stage workflow publishes the release candidate to an OCI registry on `main` pushes. Configure these repository secrets:
+
+- `OCI_REGISTRY`
+- `OCI_NAMESPACE`
+- `OCI_USERNAME`
+- `OCI_PASSWORD`
+
+The workflow uploads `release-candidate.json` with `commitSha`, `webDigest`, and `apiDigest`. Acceptance and production should deploy those exact digests.
 
 ## Working Rules
 

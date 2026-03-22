@@ -1,8 +1,20 @@
-import { FastifyPluginAsync } from 'fastify'
-import rootRoute from './routes/root'
+import Fastify, { FastifyInstance } from 'fastify'
+import rootRoute, { RootRouteOptions } from './routes/root'
 
-const app: FastifyPluginAsync = async (fastify): Promise<void> => {
-  await fastify.register(rootRoute)
+export type CreateAppOptions = RootRouteOptions & {
+  logger?: boolean
 }
 
-export default app
+function createApp({ logger = true, ...options }: CreateAppOptions): FastifyInstance {
+  const server = Fastify({
+    logger
+  })
+
+  void server.register(rootRoute, options)
+
+  return server
+}
+
+export {
+  createApp
+}

@@ -1,10 +1,19 @@
 import { FastifyPluginAsync } from 'fastify'
+import { BuildInfo } from '../config'
 
-const root: FastifyPluginAsync = async (fastify): Promise<void> => {
+export type RootRouteOptions = {
+  buildInfo: BuildInfo,
+  readiness: {
+    isReady: boolean
+  }
+}
+
+const root: FastifyPluginAsync<RootRouteOptions> = async (fastify, options): Promise<void> => {
   fastify.get('/', async () => {
     return {
       service: 'ade-api',
-      status: 'ok'
+      status: 'ok',
+      version: options.buildInfo.version
     }
   })
 
@@ -13,6 +22,25 @@ const root: FastifyPluginAsync = async (fastify): Promise<void> => {
       service: 'ade-api',
       status: 'ok'
     }
+  })
+
+  fastify.get('/readyz', async (_, reply) => {
+    if (!options.readiness.isReady) {
+      reply.status(503)
+      return {
+        service: 'ade-api',
+        status: 'not-ready'
+      }
+    }
+
+    return {
+      service: 'ade-api',
+      status: 'ready'
+    }
+  })
+
+  fastify.get('/version', async () => {
+    return options.buildInfo
   })
 }
 

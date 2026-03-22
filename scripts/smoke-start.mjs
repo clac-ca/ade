@@ -38,6 +38,23 @@ async function assertOk(url) {
   if (!response.ok) {
     throw new Error(`Expected ${url} to return 200, received ${response.status}.`)
   }
+
+  return response
+}
+
+async function assertVersion(url) {
+  const response = await assertOk(url)
+  const payload = await response.json()
+
+  if (
+    typeof payload.service !== 'string' ||
+    typeof payload.version !== 'string' ||
+    typeof payload.gitSha !== 'string' ||
+    typeof payload.builtAt !== 'string' ||
+    typeof payload.nodeVersion !== 'string'
+  ) {
+    throw new Error(`Expected ${url} to return build metadata.`)
+  }
 }
 
 async function main() {
@@ -56,7 +73,7 @@ async function main() {
     await waitForReady(
       [
         `${appUrl}/`,
-        `${appUrl}/api/healthz`
+        `${appUrl}/api/readyz`
       ],
       {
         timeoutMs: 120_000,
@@ -66,6 +83,8 @@ async function main() {
 
     await assertOk(`${appUrl}/`)
     await assertOk(`${appUrl}/api/healthz`)
+    await assertOk(`${appUrl}/api/readyz`)
+    await assertVersion(`${appUrl}/api/version`)
   } finally {
     await stopChild(child)
   }

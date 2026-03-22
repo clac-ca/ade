@@ -6,7 +6,8 @@
   "scripts": {
     "clean": "rimraf dist",
     "dev": "vite",
-    "build": "tsc -b && vite build"
+    "typecheck": "tsc -b --pretty false",
+    "build": "pnpm run typecheck && vite build"
   },
   "dependencies": {
     "react": "^19.2.4",

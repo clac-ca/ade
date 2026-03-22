@@ -1,15 +1,22 @@
 services:
   api:
-    image: ade-api:local
+    image: "${ADE_API_IMAGE:-ade-api:local}"
     environment:
       ADE_API_HOST: 0.0.0.0
       ADE_API_PORT: 8001
     expose:
       - "8001"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8001/readyz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 1s
 
   web:
-    image: ade-web:local
+    image: "${ADE_WEB_IMAGE:-ade-web:local}"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
       - "${ADE_PORT:-8000}:80"
