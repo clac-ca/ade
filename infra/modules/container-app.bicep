@@ -17,6 +17,15 @@ param memory string = '0.5Gi'
 param minReplicas int = 1
 param maxReplicas int = 1
 param tags object = {}
+@description('Container registry server used to pull the image, for example `ghcr.io`.')
+param registryServer string = ''
+@description('Username for the configured container registry.')
+param registryUsername string = ''
+@description('Password or token for the configured container registry.')
+@secure()
+param registryPassword string = ''
+
+var usesRegistryCredentials = registryServer != ''
 
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
@@ -24,7 +33,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   tags: tags
   properties: {
     managedEnvironmentId: managedEnvironmentId
-    configuration: {
+    configuration: union({
       activeRevisionsMode: 'Single'
       ingress: {
         allowInsecure: allowInsecure
@@ -38,7 +47,21 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         ]
         transport: transport
       }
-    }
+    }, usesRegistryCredentials ? {
+      registries: [
+        {
+          passwordSecretRef: 'registry-password'
+          server: registryServer
+          username: registryUsername
+        }
+      ]
+      secrets: [
+        {
+          name: 'registry-password'
+          value: registryPassword
+        }
+      ]
+    } : {})
     template: {
       containers: [
         {

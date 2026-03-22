@@ -1,8 +1,8 @@
 using '../main.bicep'
 
-param prefix = 'ade-prod'
+param prefix = 'ade-acceptance'
 param tags = {
-  environment: 'prod'
+  environment: 'acceptance'
 }
 param webImage = readEnvironmentVariable('ADE_WEB_IMAGE')
 param apiImage = readEnvironmentVariable('ADE_API_IMAGE')

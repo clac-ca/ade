@@ -15,6 +15,16 @@ param webImage string
 @description('Container image reference for the API app.')
 param apiImage string
 
+@description('Container registry server used by the deployed apps.')
+param registryServer string = ''
+
+@description('Container registry username used by the deployed apps.')
+param registryUsername string = ''
+
+@description('Container registry password or token used by the deployed apps.')
+@secure()
+param registryPassword string = ''
+
 @description('Name for the Log Analytics workspace.')
 param logAnalyticsWorkspaceName string = '${prefix}-logs'
 
@@ -78,6 +88,9 @@ module web 'modules/container-app.bicep' = {
     memory: webMemory
     minReplicas: webMinReplicas
     name: webAppName
+    registryPassword: registryPassword
+    registryServer: registryServer
+    registryUsername: registryUsername
     tags: mergedTags
   }
 }
@@ -104,11 +117,16 @@ module api 'modules/container-app.bicep' = {
     memory: apiMemory
     minReplicas: apiMinReplicas
     name: apiAppName
+    registryPassword: registryPassword
+    registryServer: registryServer
+    registryUsername: registryUsername
     tags: mergedTags
   }
 }
 
 output containerAppsEnvironmentId string = platform.outputs.containerAppsEnvironmentId
+output webAppName string = webAppName
 output webFqdn string = web.outputs.fqdn
 output webUrl string = web.outputs.url
+output apiAppName string = apiAppName
 output apiFqdn string = api.outputs.fqdn

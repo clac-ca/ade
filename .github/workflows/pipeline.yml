@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_tag:
-        description: "Accepted candidate tag to release (candidate-<40-character commit sha>)"
+        description: "Accepted candidate tag to redeploy (candidate-<40-character commit sha>)"
         required: true
         type: string
 
@@ -22,325 +22,449 @@ env:
 permissions: {}
 
 jobs:
-  commit_stage:
-    name: commit-stage
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  commit_verify:
+    name: commit-stage / verify
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
-      packages: write
-    outputs:
-      candidate_sha: ${{ steps.publish_candidate.outputs.candidate_sha }}
-      web_ref: ${{ steps.publish_candidate.outputs.web_ref }}
-      api_ref: ${{ steps.publish_candidate.outputs.api_ref }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
         with:
-          fetch-depth: 0
+          version: ${{ env.ADE_PNPM_VERSION }}
 
       - name: Set up Node
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
           node-version: ${{ env.ADE_NODE_VERSION }}
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-
-      - name: Install pnpm
-        run: npm install --global pnpm@${ADE_PNPM_VERSION}
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run commit-stage contract
-        id: commit_contract
-        run: |
-          set -euo pipefail
-          started_at="$(date +%s)"
-          pnpm run ci:commit
-          finished_at="$(date +%s)"
-          duration_seconds="$((finished_at - started_at))"
-          echo "duration_seconds=${duration_seconds}" >> "$GITHUB_OUTPUT"
-          echo "Commit stage finished in ${duration_seconds}s"
+      - name: Run fast verification contract
+        run: node scripts/test-fast.mjs
 
-      - name: Login to GitHub Container Registry
+  candidate_build_and_smoke:
+    name: commit-stage / build-and-smoke
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+        with:
+          version: ${{ env.ADE_PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          node-version: ${{ env.ADE_NODE_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build candidate artifacts and images
+        run: pnpm run build
+
+      - name: Run candidate smoke contract
+        run: pnpm run test:smoke
+
+      - name: Export candidate images
+        run: node scripts/export-candidate-images.mjs
+
+      - name: Upload candidate build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          if-no-files-found: error
+          name: candidate-build-${{ github.sha }}
+          path: candidate-build-artifact
+          retention-days: 1
+
+  publish_candidate:
+    name: commit-stage / publish
+    if: github.event_name == 'push'
+    needs:
+      - commit_verify
+      - candidate_build_and_smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      api_ref: ${{ steps.publish.outputs.api_ref }}
+      candidate_sha: ${{ steps.publish.outputs.candidate_sha }}
+      web_ref: ${{ steps.publish.outputs.web_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.ADE_NODE_VERSION }}
+
+      - name: Download candidate build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-build-${{ github.sha }}
+          path: candidate-build-artifact
+
+      - name: Load candidate images
+        run: node scripts/load-candidate-images.mjs --artifact-dir candidate-build-artifact
+
+      - name: Log in to GitHub Container Registry
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Publish immutable candidate images
-        id: publish_candidate
-        env:
-          CANDIDATE_SHA: ${{ github.sha }}
-          COMMIT_STAGE_DURATION_SECONDS: ${{ steps.commit_contract.outputs.duration_seconds }}
-          OWNER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ github.event.repository.name }}
-        run: |
-          set -euo pipefail
-
-          owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
-          repo="$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')"
-
-          web_candidate_tag="ghcr.io/${owner}/${repo}-web:sha-${CANDIDATE_SHA}"
-          api_candidate_tag="ghcr.io/${owner}/${repo}-api:sha-${CANDIDATE_SHA}"
-
-          docker tag ade-web:local "$web_candidate_tag"
-          docker tag ade-api:local "$api_candidate_tag"
-
-          docker push "$web_candidate_tag"
-          docker push "$api_candidate_tag"
-
-          web_ref="$(docker image inspect "$web_candidate_tag" --format='{{index .RepoDigests 0}}')"
-          api_ref="$(docker image inspect "$api_candidate_tag" --format='{{index .RepoDigests 0}}')"
-
-          cat > candidate-manifest.json <<EOF_MANIFEST
-          {
-            "candidate_sha": "${CANDIDATE_SHA}",
-            "commit_stage_duration_seconds": ${COMMIT_STAGE_DURATION_SECONDS},
-            "web_candidate_tag": "${web_candidate_tag}",
-            "api_candidate_tag": "${api_candidate_tag}",
-            "web_ref": "${web_ref}",
-            "api_ref": "${api_ref}"
-          }
-          EOF_MANIFEST
-
-          {
-            echo "candidate_sha=${CANDIDATE_SHA}"
-            echo "web_ref=${web_ref}"
-            echo "api_ref=${api_ref}"
-          } >> "$GITHUB_OUTPUT"
+        id: publish
+        run: node scripts/publish-candidate.mjs
 
       - name: Upload candidate manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
+          if-no-files-found: error
           name: candidate-manifest-${{ github.sha }}
           path: candidate-manifest.json
           retention-days: 30
 
   acceptance_stage:
     name: acceptance-stage
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      packages: read
+    if: github.event_name == 'push'
     needs:
-      - commit_stage
+      - publish_candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: acceptance
+    permissions:
+      contents: write
+      id-token: write
+    outputs:
+      candidate_tag: ${{ steps.candidate_tag.outputs.candidate_tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+        with:
+          version: ${{ env.ADE_PNPM_VERSION }}
+
       - name: Set up Node
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.ADE_NODE_VERSION }}
 
-      - name: Install pnpm
-        run: npm install --global pnpm@${ADE_PNPM_VERSION}
-
-      - name: Login to GitHub Container Registry
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-      - name: Pull exact candidate images
-        env:
-          WEB_REF: ${{ needs.commit_stage.outputs.web_ref }}
-          API_REF: ${{ needs.commit_stage.outputs.api_ref }}
-        run: |
-          set -euo pipefail
-          docker pull "$WEB_REF"
-          docker pull "$API_REF"
-
-      - name: Smoke test accepted deployment candidate
-        env:
-          ADE_WEB_IMAGE: ${{ needs.commit_stage.outputs.web_ref }}
-          ADE_API_IMAGE: ${{ needs.commit_stage.outputs.api_ref }}
-        run: pnpm run smoke
-
-  mark_candidate:
-    name: mark-accepted-candidate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    needs:
-      - commit_stage
-      - acceptance_stage
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Log in to Azure
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
-          fetch-depth: 0
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
 
-      - name: Create immutable accepted-candidate tag
+      - name: Deploy candidate to acceptance
+        id: acceptance_deploy
         env:
-          CANDIDATE_SHA: ${{ needs.commit_stage.outputs.candidate_sha }}
-          WEB_REF: ${{ needs.commit_stage.outputs.web_ref }}
-          API_REF: ${{ needs.commit_stage.outputs.api_ref }}
-        run: |
-          set -euo pipefail
-          candidate_tag="candidate-${CANDIDATE_SHA}"
+          ADE_API_IMAGE: ${{ needs.publish_candidate.outputs.api_ref }}
+          ADE_REGISTRY_PASSWORD: ${{ secrets.ADE_REGISTRY_PASSWORD }}
+          ADE_REGISTRY_SERVER: ${{ vars.ADE_REGISTRY_SERVER }}
+          ADE_REGISTRY_USERNAME: ${{ vars.ADE_REGISTRY_USERNAME }}
+          ADE_WEB_IMAGE: ${{ needs.publish_candidate.outputs.web_ref }}
+        run: >
+          pnpm run deploy:aca -- --environment acceptance
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --parameters-file infra/environments/main.acceptance.bicepparam
+          --manifest-path acceptance-deployment-manifest.json
 
-          git fetch --tags origin
-
-          if git rev-parse -q --verify "refs/tags/${candidate_tag}" >/dev/null; then
-            echo "${candidate_tag} already exists"
-            exit 0
-          fi
-
-          accepted_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          cat > candidate-tag-message.txt <<EOF_TAG
-          {
-            "candidate_sha": "${CANDIDATE_SHA}",
-            "accepted_at": "${accepted_at}",
-            "web_ref": "${WEB_REF}",
-            "api_ref": "${API_REF}"
-          }
-          EOF_TAG
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$candidate_tag" "$CANDIDATE_SHA" -F candidate-tag-message.txt
-          git push origin "$candidate_tag"
-
-  release_stage:
-    name: release-stage
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      group: release-${{ github.ref }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      packages: write
-    environment:
-      name: production
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          fetch-depth: 0
-
-      - name: Validate requested candidate
-        id: candidate
+      - name: Smoke test acceptance deployment
+        id: acceptance_smoke
         env:
-          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
-        run: |
-          set -euo pipefail
+          ADE_BASE_URL: ${{ steps.acceptance_deploy.outputs.web_url }}
+        run: pnpm run test:smoke
 
-          if [[ ! "$CANDIDATE_TAG" =~ ^candidate-([0-9a-f]{40})$ ]]; then
-            echo "candidate_tag must match candidate-<40-character lowercase commit SHA>" >&2
-            exit 1
-          fi
-
-          git fetch --tags origin
-
-          if ! git rev-parse -q --verify "refs/tags/${CANDIDATE_TAG}" >/dev/null; then
-            echo "Accepted candidate tag ${CANDIDATE_TAG} does not exist" >&2
-            exit 1
-          fi
-
-          git for-each-ref "refs/tags/${CANDIDATE_TAG}" --format='%(contents)' > candidate-tag.json
-
-          node <<'EOF_NODE' > candidate-tag.env
-          const fs = require('node:fs')
-          const payload = JSON.parse(fs.readFileSync('candidate-tag.json', 'utf8'))
-
-          if (!payload.candidate_sha || !payload.web_ref || !payload.api_ref) {
-            throw new Error('Candidate tag metadata must include candidate_sha, web_ref, and api_ref.')
-          }
-
-          console.log(`candidate_sha=${payload.candidate_sha}`)
-          console.log(`web_ref=${payload.web_ref}`)
-          console.log(`api_ref=${payload.api_ref}`)
-          EOF_NODE
-
-          source candidate-tag.env
-          release_tag="release-$(date -u +%Y%m%d%H%M%S)-${candidate_sha:0:12}"
-
-          {
-            cat candidate-tag.env
-            echo "release_tag=${release_tag}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Login to GitHub Container Registry
+      - name: Run acceptance contract
+        id: acceptance_contract
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          ADE_BASE_URL: ${{ steps.acceptance_deploy.outputs.web_url }}
+        run: pnpm run test:acceptance
 
-      - name: Promote accepted digests to release tags
+      - name: Tag accepted candidate
+        id: candidate_tag
         env:
-          CANDIDATE_SHA: ${{ steps.candidate.outputs.candidate_sha }}
-          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
-          WEB_REF: ${{ steps.candidate.outputs.web_ref }}
-          API_REF: ${{ steps.candidate.outputs.api_ref }}
-          RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
-          OWNER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ github.event.repository.name }}
-        run: |
-          set -euo pipefail
+          ACCEPTANCE_API_REVISION: ${{ steps.acceptance_deploy.outputs.api_revision }}
+          ACCEPTANCE_WEB_REVISION: ${{ steps.acceptance_deploy.outputs.web_revision }}
+          ACCEPTANCE_WEB_URL: ${{ steps.acceptance_deploy.outputs.web_url }}
+          API_REF: ${{ needs.publish_candidate.outputs.api_ref }}
+          CANDIDATE_SHA: ${{ needs.publish_candidate.outputs.candidate_sha }}
+          WEB_REF: ${{ needs.publish_candidate.outputs.web_ref }}
+        run: node scripts/create-candidate-tag.mjs
 
-          owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
-          repo="$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')"
-
-          web_release_tag="ghcr.io/${owner}/${repo}-web:${RELEASE_TAG}"
-          api_release_tag="ghcr.io/${owner}/${repo}-api:${RELEASE_TAG}"
-
-          docker pull "$WEB_REF"
-          docker pull "$API_REF"
-
-          web_id="$(docker image inspect "$WEB_REF" --format='{{.Id}}')"
-          api_id="$(docker image inspect "$API_REF" --format='{{.Id}}')"
-
-          docker tag "$web_id" "$web_release_tag"
-          docker tag "$api_id" "$api_release_tag"
-
-          docker push "$web_release_tag"
-          docker push "$api_release_tag"
-
-          cat > release-manifest.json <<EOF_MANIFEST
-          {
-            "release_tag": "${RELEASE_TAG}",
-            "candidate_sha": "${CANDIDATE_SHA}",
-            "candidate_tag": "${CANDIDATE_TAG}",
-            "web_ref": "${WEB_REF}",
-            "api_ref": "${API_REF}",
-            "web_release_tag": "${web_release_tag}",
-            "api_release_tag": "${api_release_tag}"
-          }
-          EOF_MANIFEST
-
-      - name: Push immutable release tag
-        env:
-          CANDIDATE_SHA: ${{ steps.candidate.outputs.candidate_sha }}
-          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
-          RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$RELEASE_TAG" "$CANDIDATE_SHA" -m "Release $RELEASE_TAG from $CANDIDATE_TAG"
-          git push origin "$RELEASE_TAG"
-
-      - name: Upload release manifest
+      - name: Upload acceptance deployment manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release-manifest-${{ steps.candidate.outputs.release_tag }}
-          path: release-manifest.json
+          if-no-files-found: error
+          name: acceptance-deployment-${{ github.sha }}
+          path: acceptance-deployment-manifest.json
+          retention-days: 30
+
+  production_release:
+    name: production-release
+    if: github.event_name == 'push'
+    needs:
+      - acceptance_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: production-release
+      cancel-in-progress: false
+    environment:
+      name: production
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+        with:
+          version: ${{ env.ADE_PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.ADE_NODE_VERSION }}
+
+      - name: Resolve accepted candidate
+        id: candidate
+        run: node scripts/resolve-candidate-tag.mjs --tag "${{ needs.acceptance_stage.outputs.candidate_tag }}"
+
+      - name: Log in to Azure
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+
+      - name: Deploy accepted candidate to production
+        id: production_deploy
+        env:
+          ADE_API_IMAGE: ${{ steps.candidate.outputs.api_ref }}
+          ADE_REGISTRY_PASSWORD: ${{ secrets.ADE_REGISTRY_PASSWORD }}
+          ADE_REGISTRY_SERVER: ${{ vars.ADE_REGISTRY_SERVER }}
+          ADE_REGISTRY_USERNAME: ${{ vars.ADE_REGISTRY_USERNAME }}
+          ADE_WEB_IMAGE: ${{ steps.candidate.outputs.web_ref }}
+        run: >
+          pnpm run deploy:aca -- --environment production
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --parameters-file infra/environments/main.prod.bicepparam
+          --manifest-path production-deployment-manifest.json
+
+      - name: Smoke test production deployment
+        id: production_smoke
+        env:
+          ADE_BASE_URL: ${{ steps.production_deploy.outputs.web_url }}
+        run: pnpm run test:smoke
+
+      - name: Resolve previous release for rollback
+        id: previous_release
+        if: failure() && steps.production_deploy.outcome == 'success' && steps.production_smoke.outcome == 'failure'
+        run: node scripts/resolve-latest-release.mjs
+
+      - name: Roll back production to previous release
+        id: rollback_deploy
+        if: failure() && steps.previous_release.outputs.found == 'true'
+        env:
+          ADE_API_IMAGE: ${{ steps.previous_release.outputs.api_ref }}
+          ADE_REGISTRY_PASSWORD: ${{ secrets.ADE_REGISTRY_PASSWORD }}
+          ADE_REGISTRY_SERVER: ${{ vars.ADE_REGISTRY_SERVER }}
+          ADE_REGISTRY_USERNAME: ${{ vars.ADE_REGISTRY_USERNAME }}
+          ADE_WEB_IMAGE: ${{ steps.previous_release.outputs.web_ref }}
+        run: >
+          pnpm run deploy:aca -- --environment production
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --parameters-file infra/environments/main.prod.bicepparam
+          --manifest-path rollback-deployment-manifest.json
+
+      - name: Smoke test rolled back production release
+        if: failure() && steps.previous_release.outputs.found == 'true'
+        env:
+          ADE_BASE_URL: ${{ steps.rollback_deploy.outputs.web_url }}
+        run: pnpm run test:smoke
+
+      - name: Create immutable release tag
+        id: release
+        env:
+          API_REF: ${{ steps.candidate.outputs.api_ref }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.candidate_sha }}
+          CANDIDATE_TAG: ${{ steps.candidate.outputs.candidate_tag }}
+          PRODUCTION_API_REVISION: ${{ steps.production_deploy.outputs.api_revision }}
+          PRODUCTION_WEB_REVISION: ${{ steps.production_deploy.outputs.web_revision }}
+          PRODUCTION_WEB_URL: ${{ steps.production_deploy.outputs.web_url }}
+          WEB_REF: ${{ steps.candidate.outputs.web_ref }}
+        run: node scripts/create-release-tag.mjs
+
+      - name: Upload production manifests
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          if-no-files-found: ignore
+          name: production-release-${{ github.sha }}
+          path: |
+            production-deployment-manifest.json
+            rollback-deployment-manifest.json
+            release-manifest.json
+          retention-days: 90
+
+  emergency_redeploy:
+    name: emergency-redeploy
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: production-release
+      cancel-in-progress: false
+    environment:
+      name: production
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+        with:
+          version: ${{ env.ADE_PNPM_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.ADE_NODE_VERSION }}
+
+      - name: Resolve accepted candidate
+        id: candidate
+        run: node scripts/resolve-candidate-tag.mjs --tag "${{ inputs.candidate_tag }}"
+
+      - name: Log in to Azure
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+
+      - name: Redeploy accepted candidate to production
+        id: production_deploy
+        env:
+          ADE_API_IMAGE: ${{ steps.candidate.outputs.api_ref }}
+          ADE_REGISTRY_PASSWORD: ${{ secrets.ADE_REGISTRY_PASSWORD }}
+          ADE_REGISTRY_SERVER: ${{ vars.ADE_REGISTRY_SERVER }}
+          ADE_REGISTRY_USERNAME: ${{ vars.ADE_REGISTRY_USERNAME }}
+          ADE_WEB_IMAGE: ${{ steps.candidate.outputs.web_ref }}
+        run: >
+          pnpm run deploy:aca -- --environment production
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --parameters-file infra/environments/main.prod.bicepparam
+          --manifest-path production-deployment-manifest.json
+
+      - name: Smoke test production deployment
+        id: production_smoke
+        env:
+          ADE_BASE_URL: ${{ steps.production_deploy.outputs.web_url }}
+        run: pnpm run test:smoke
+
+      - name: Resolve previous release for rollback
+        id: previous_release
+        if: failure() && steps.production_deploy.outcome == 'success' && steps.production_smoke.outcome == 'failure'
+        run: node scripts/resolve-latest-release.mjs
+
+      - name: Roll back production to previous release
+        id: rollback_deploy
+        if: failure() && steps.previous_release.outputs.found == 'true'
+        env:
+          ADE_API_IMAGE: ${{ steps.previous_release.outputs.api_ref }}
+          ADE_REGISTRY_PASSWORD: ${{ secrets.ADE_REGISTRY_PASSWORD }}
+          ADE_REGISTRY_SERVER: ${{ vars.ADE_REGISTRY_SERVER }}
+          ADE_REGISTRY_USERNAME: ${{ vars.ADE_REGISTRY_USERNAME }}
+          ADE_WEB_IMAGE: ${{ steps.previous_release.outputs.web_ref }}
+        run: >
+          pnpm run deploy:aca -- --environment production
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --parameters-file infra/environments/main.prod.bicepparam
+          --manifest-path rollback-deployment-manifest.json
+
+      - name: Smoke test rolled back production release
+        if: failure() && steps.previous_release.outputs.found == 'true'
+        env:
+          ADE_BASE_URL: ${{ steps.rollback_deploy.outputs.web_url }}
+        run: pnpm run test:smoke
+
+      - name: Create immutable release tag
+        id: release
+        env:
+          API_REF: ${{ steps.candidate.outputs.api_ref }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.candidate_sha }}
+          CANDIDATE_TAG: ${{ steps.candidate.outputs.candidate_tag }}
+          PRODUCTION_API_REVISION: ${{ steps.production_deploy.outputs.api_revision }}
+          PRODUCTION_WEB_REVISION: ${{ steps.production_deploy.outputs.web_revision }}
+          PRODUCTION_WEB_URL: ${{ steps.production_deploy.outputs.web_url }}
+          WEB_REF: ${{ steps.candidate.outputs.web_ref }}
+        run: node scripts/create-release-tag.mjs
+
+      - name: Upload production manifests
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          if-no-files-found: ignore
+          name: emergency-redeploy-${{ github.run_id }}
+          path: |
+            production-deployment-manifest.json
+            rollback-deployment-manifest.json
+            release-manifest.json
           retention-days: 90

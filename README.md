@@ -18,7 +18,7 @@ ADE is a document operations platform for messy spreadsheets. The TypeScript app
 - Node.js 22+
 - pnpm 10+
 - Python 3.12
-- Docker running locally for `pnpm build`, `pnpm start`, and `pnpm smoke`
+- Docker running locally for `pnpm test`, `pnpm build`, `pnpm start`, and local `pnpm test:smoke`
 
 ## Quickstart
 
@@ -32,22 +32,23 @@ ADE opens at `http://localhost:8000`.
 
 ## Root Commands
 
-| Command               | Use it for                                                              |
-| --------------------- | ----------------------------------------------------------------------- |
-| `pnpm dev`            | Run the full watch-mode development environment                         |
-| `pnpm dev:web`        | Run only the web app                                                    |
-| `pnpm dev:api`        | Run only the API                                                        |
-| `pnpm lint`           | Run ESLint across the repo                                              |
-| `pnpm format:check`   | Check the pipeline-owned repo files with Prettier                       |
-| `pnpm typecheck`      | Run the TypeScript typechecks                                           |
-| `pnpm test:unit`      | Run the API unit tests                                                  |
-| `pnpm package:python` | Build the Python packages                                               |
-| `pnpm ci:preflight`   | Run the fast local commit-stage contract without building images        |
-| `pnpm ci:commit`      | Run the full commit-stage contract, including the local candidate build |
-| `pnpm build`          | Build the local candidate images                                        |
-| `pnpm start`          | Run the built local images                                              |
-| `pnpm smoke`          | Smoke test the built local runtime                                      |
-| `pnpm clean`          | Remove generated local output and local images                          |
+| Command                | Use it for                                                                  |
+| ---------------------- | --------------------------------------------------------------------------- |
+| `pnpm dev`             | Run the full watch-mode development environment                             |
+| `pnpm dev:web`         | Run only the web app                                                        |
+| `pnpm dev:api`         | Run only the API                                                            |
+| `pnpm lint`            | Run ESLint across the repo                                                  |
+| `pnpm format:check`    | Check the pipeline-owned repo files with Prettier                           |
+| `pnpm typecheck`       | Run the TypeScript typechecks                                               |
+| `pnpm test`            | Run the authoritative local commit-stage gate                               |
+| `pnpm test:unit`       | Run the API unit tests                                                      |
+| `pnpm test:smoke`      | Smoke test the built local runtime, or a deployed URL via `ADE_BASE_URL`    |
+| `pnpm test:acceptance` | Run the acceptance checks for a deployed environment via `ADE_BASE_URL`     |
+| `pnpm package:python`  | Build the Python packages                                                   |
+| `pnpm build`           | Build the local candidate artifacts and images, not the published candidate |
+| `pnpm deploy:aca`      | Deploy image refs to Azure Container Apps using the repo Bicep contract     |
+| `pnpm start`           | Run the built local images                                                  |
+| `pnpm clean`           | Remove generated local output and local images                              |
 
 ## Common Flows
 
@@ -55,7 +56,7 @@ Day-to-day development:
 
 ```sh
 pnpm dev
-pnpm ci:preflight
+pnpm test
 ```
 
 Production-shaped local run:
@@ -63,13 +64,19 @@ Production-shaped local run:
 ```sh
 pnpm build
 pnpm start
-pnpm smoke
+pnpm test:smoke
 ```
 
 Commit-stage preflight before pushing:
 
 ```sh
-pnpm ci:preflight
+pnpm test
+```
+
+Smoke test a deployed environment:
+
+```sh
+ADE_BASE_URL=https://example.test pnpm test:smoke
 ```
 
 Run on a different port or skip opening the browser:
@@ -88,10 +95,13 @@ pnpm dev -- --no-open
 pnpm lint
 pnpm format:check
 pnpm typecheck
+pnpm test
 pnpm test:unit
+pnpm test:smoke
+ADE_BASE_URL=https://example.test pnpm test:smoke
+ADE_BASE_URL=https://example.test pnpm test:acceptance
 pnpm package:python
-pnpm ci:preflight
-pnpm ci:commit
+ADE_WEB_IMAGE=ghcr.io/example/ade-web@sha256:... ADE_API_IMAGE=ghcr.io/example/ade-api@sha256:... pnpm deploy:aca -- --environment acceptance --resource-group my-rg --parameters-file infra/environments/main.acceptance.bicepparam
 pnpm clean
 pnpm dev:web
 pnpm dev:api
@@ -99,7 +109,8 @@ pnpm dev:api
 
 ## Related Docs
 
-- [PRINCIPLES.md](/Users/justinkropp/.codex/worktrees/dfe6/ade/PRINCIPLES.md) - engineering and delivery principles for this repo
+- [PRINCIPLES.md](./PRINCIPLES.md) - engineering and delivery principles for this repo
+- [.github/workflows/README.md](./.github/workflows/README.md) - canonical pipeline design and required GitHub/Azure setup
 
 ## Working Rules
 
