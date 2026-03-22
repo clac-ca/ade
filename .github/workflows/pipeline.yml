@@ -1,0 +1,335 @@
+name: deployment-pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Accepted candidate SHA to release (40-character commit SHA from main)"
+        required: true
+        type: string
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  commit_stage:
+    name: commit-stage
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      candidate_sha: ${{ steps.publish_candidate.outputs.candidate_sha }}
+      web_ref: ${{ steps.publish_candidate.outputs.web_ref }}
+      api_ref: ${{ steps.publish_candidate.outputs.api_ref }}
+      web_candidate_tag: ${{ steps.publish_candidate.outputs.web_candidate_tag }}
+      api_candidate_tag: ${{ steps.publish_candidate.outputs.api_candidate_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.12.0'
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build API
+        run: pnpm --filter @ade/api build
+
+      - name: Test API
+        run: pnpm --filter @ade/api test
+
+      - name: Build web
+        run: pnpm --filter @ade/web build
+
+      - name: Build Python packages
+        run: |
+          uv build --directory python/ade-engine
+          uv build --directory python/ade-config-template
+
+      - name: Package API runtime
+        run: |
+          node -e "require('node:fs').rmSync('apps/api/.package', { recursive: true, force: true })"
+          pnpm --filter @ade/api deploy --prod --legacy apps/api/.package
+
+      - name: Write API build metadata
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          built_at="$(git show --no-patch --format=%cI "$CANDIDATE_SHA")"
+          version="$(node -p "require('./apps/api/package.json').version")"
+          cat > apps/api/.package/dist/build-info.json <<EOF
+          {
+            "builtAt": "${built_at}",
+            "gitSha": "${CANDIDATE_SHA}",
+            "service": "ade-api",
+            "version": "${version}"
+          }
+          EOF
+
+      - name: Build container images once
+        run: |
+          docker build -t ade-web:local apps/web
+          docker build -t ade-api:local apps/api
+
+      - name: Login to GitHub Container Registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish immutable candidate images
+        id: publish_candidate
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+          OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          repo="$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')"
+
+          web_candidate_tag="ghcr.io/${owner}/${repo}-web:sha-${CANDIDATE_SHA}"
+          api_candidate_tag="ghcr.io/${owner}/${repo}-api:sha-${CANDIDATE_SHA}"
+
+          docker tag ade-web:local "$web_candidate_tag"
+          docker tag ade-api:local "$api_candidate_tag"
+
+          docker push "$web_candidate_tag"
+          docker push "$api_candidate_tag"
+
+          web_ref="$(docker image inspect "$web_candidate_tag" --format='{{index .RepoDigests 0}}')"
+          api_ref="$(docker image inspect "$api_candidate_tag" --format='{{index .RepoDigests 0}}')"
+
+          cat > candidate-manifest.json <<EOF
+          {
+            "candidate_sha": "${CANDIDATE_SHA}",
+            "web_candidate_tag": "${web_candidate_tag}",
+            "api_candidate_tag": "${api_candidate_tag}",
+            "web_ref": "${web_ref}",
+            "api_ref": "${api_ref}"
+          }
+          EOF
+
+          {
+            echo "candidate_sha=${CANDIDATE_SHA}"
+            echo "web_candidate_tag=${web_candidate_tag}"
+            echo "api_candidate_tag=${api_candidate_tag}"
+            echo "web_ref=${web_ref}"
+            echo "api_ref=${api_ref}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload candidate manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-manifest-${{ github.sha }}
+          path: candidate-manifest.json
+          retention-days: 30
+
+  acceptance_stage:
+    name: acceptance-stage
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs:
+      - commit_stage
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.12.0'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Login to GitHub Container Registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull exact candidate images
+        env:
+          WEB_REF: ${{ needs.commit_stage.outputs.web_ref }}
+          API_REF: ${{ needs.commit_stage.outputs.api_ref }}
+        run: |
+          set -euo pipefail
+          docker pull "$WEB_REF"
+          docker pull "$API_REF"
+
+          web_id="$(docker image inspect "$WEB_REF" --format='{{.Id}}')"
+          api_id="$(docker image inspect "$API_REF" --format='{{.Id}}')"
+
+          docker tag "$web_id" ade-web:local
+          docker tag "$api_id" ade-api:local
+
+      - name: Smoke test accepted deployment candidate
+        run: pnpm run smoke:start
+
+  mark_candidate:
+    name: mark-accepted-candidate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - commit_stage
+      - acceptance_stage
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create immutable accepted-candidate tag
+        env:
+          CANDIDATE_SHA: ${{ needs.commit_stage.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          candidate_tag="candidate-${CANDIDATE_SHA}"
+
+          git fetch --tags origin
+
+          if git rev-parse -q --verify "refs/tags/${candidate_tag}" >/dev/null; then
+            echo "${candidate_tag} already exists"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$candidate_tag" "$CANDIDATE_SHA" -m "Accepted release candidate $candidate_tag"
+          git push origin "$candidate_tag"
+
+  release_stage:
+    name: release-stage
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate requested candidate
+        id: candidate
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "candidate_sha must be a 40-character lowercase commit SHA" >&2
+            exit 1
+          fi
+
+          git fetch --tags origin
+          candidate_tag="candidate-${CANDIDATE_SHA}"
+
+          if ! git rev-parse -q --verify "refs/tags/${candidate_tag}" >/dev/null; then
+            echo "Accepted candidate tag ${candidate_tag} does not exist" >&2
+            exit 1
+          fi
+
+          release_tag="release-$(date -u +%Y%m%d%H%M%S)-${CANDIDATE_SHA:0:12}"
+
+          {
+            echo "candidate_tag=${candidate_tag}"
+            echo "release_tag=${release_tag}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Login to GitHub Container Registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Promote exact candidate images to release tags
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
+          OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          repo="$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')"
+
+          web_candidate_tag="ghcr.io/${owner}/${repo}-web:sha-${CANDIDATE_SHA}"
+          api_candidate_tag="ghcr.io/${owner}/${repo}-api:sha-${CANDIDATE_SHA}"
+          web_release_tag="ghcr.io/${owner}/${repo}-web:${RELEASE_TAG}"
+          api_release_tag="ghcr.io/${owner}/${repo}-api:${RELEASE_TAG}"
+
+          docker pull "$web_candidate_tag"
+          docker pull "$api_candidate_tag"
+
+          web_id="$(docker image inspect "$web_candidate_tag" --format='{{.Id}}')"
+          api_id="$(docker image inspect "$api_candidate_tag" --format='{{.Id}}')"
+
+          docker tag "$web_id" "$web_release_tag"
+          docker tag "$api_id" "$api_release_tag"
+
+          docker push "$web_release_tag"
+          docker push "$api_release_tag"
+
+          cat > release-manifest.json <<EOF
+          {
+            "release_tag": "${RELEASE_TAG}",
+            "candidate_sha": "${CANDIDATE_SHA}",
+            "candidate_tag": "candidate-${CANDIDATE_SHA}",
+            "web_release_tag": "${web_release_tag}",
+            "api_release_tag": "${api_release_tag}"
+          }
+          EOF
+
+      - name: Push immutable release tag
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" "$CANDIDATE_SHA" -m "Release $RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+
+      - name: Upload release manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ steps.candidate.outputs.release_tag }}
+          path: release-manifest.json
+          retention-days: 90

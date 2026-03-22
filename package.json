@@ -11,6 +11,7 @@
     "check:python": "uv build --directory python/ade-engine && uv build --directory python/ade-config-template",
     "build": "node scripts/build.mjs",
     "start": "node scripts/start.mjs",
+    "smoke:start": "node scripts/smoke-start.mjs",
     "clean": "node scripts/clean.mjs",
     "smoke": "node scripts/smoke-start.mjs",
     "dev:web": "pnpm --filter @ade/web dev",
