@@ -32,17 +32,22 @@ ADE opens at `http://localhost:8000`.
 
 ## Root Commands
 
-| Command | Use it for |
-| --- | --- |
-| `pnpm dev` | Run the full watch-mode development environment |
-| `pnpm dev:web` | Run only the web app |
-| `pnpm dev:api` | Run only the API |
-| `pnpm check` | Run the fast pre-checkin validation |
-| `pnpm check:python` | Validate the Python runtime packages |
-| `pnpm build` | Build the local container images |
-| `pnpm start` | Run the built local images |
-| `pnpm smoke` | Smoke test the built local runtime |
-| `pnpm clean` | Remove generated local output and local images |
+| Command               | Use it for                                                              |
+| --------------------- | ----------------------------------------------------------------------- |
+| `pnpm dev`            | Run the full watch-mode development environment                         |
+| `pnpm dev:web`        | Run only the web app                                                    |
+| `pnpm dev:api`        | Run only the API                                                        |
+| `pnpm lint`           | Run ESLint across the repo                                              |
+| `pnpm format:check`   | Check the pipeline-owned repo files with Prettier                       |
+| `pnpm typecheck`      | Run the TypeScript typechecks                                           |
+| `pnpm test:unit`      | Run the API unit tests                                                  |
+| `pnpm package:python` | Build the Python packages                                               |
+| `pnpm ci:preflight`   | Run the fast local commit-stage contract without building images        |
+| `pnpm ci:commit`      | Run the full commit-stage contract, including the local candidate build |
+| `pnpm build`          | Build the local candidate images                                        |
+| `pnpm start`          | Run the built local images                                              |
+| `pnpm smoke`          | Smoke test the built local runtime                                      |
+| `pnpm clean`          | Remove generated local output and local images                          |
 
 ## Common Flows
 
@@ -50,7 +55,7 @@ Day-to-day development:
 
 ```sh
 pnpm dev
-pnpm check
+pnpm ci:preflight
 ```
 
 Production-shaped local run:
@@ -59,6 +64,12 @@ Production-shaped local run:
 pnpm build
 pnpm start
 pnpm smoke
+```
+
+Commit-stage preflight before pushing:
+
+```sh
+pnpm ci:preflight
 ```
 
 Run on a different port or skip opening the browser:
@@ -74,8 +85,13 @@ pnpm start -- --no-open
 pnpm dev
 pnpm dev -- --port 4000
 pnpm dev -- --no-open
-pnpm check
-pnpm check:python
+pnpm lint
+pnpm format:check
+pnpm typecheck
+pnpm test:unit
+pnpm package:python
+pnpm ci:preflight
+pnpm ci:commit
 pnpm clean
 pnpm dev:web
 pnpm dev:api
