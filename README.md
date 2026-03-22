@@ -4,6 +4,15 @@ Automatic Data Extractor.
 
 ADE is a document operations platform for messy spreadsheets. The TypeScript apps handle the web surface and backend API. The Python packages handle the extraction runtime: a stable engine and a customizable config template.
 
+## Repository Layout
+
+- `apps/web` - React web app
+- `apps/api` - Fastify API
+- `python/ade-engine` - extraction runtime package
+- `python/ade-config-template` - configurable template package
+- `infra/` - infrastructure definitions
+- `scripts/` - root development, build, and smoke-test entrypoints
+
 ## Requirements
 
 - Node.js 22+
@@ -21,16 +30,45 @@ pnpm dev
 
 ADE opens at `http://localhost:8000`.
 
-## Production-Shaped Local Run
+## Root Commands
+
+| Command | Use it for |
+| --- | --- |
+| `pnpm dev` | Run the full watch-mode development environment |
+| `pnpm dev:web` | Run only the web app |
+| `pnpm dev:api` | Run only the API |
+| `pnpm check` | Run the fast pre-checkin validation |
+| `pnpm check:python` | Validate the Python runtime packages |
+| `pnpm build` | Build the local container images |
+| `pnpm start` | Run the built local images |
+| `pnpm smoke` | Smoke test the built local runtime |
+| `pnpm clean` | Remove generated local output and local images |
+
+## Common Flows
+
+Day-to-day development:
+
+```sh
+pnpm dev
+pnpm check
+```
+
+Production-shaped local run:
 
 ```sh
 pnpm build
 pnpm start
+pnpm smoke
+```
+
+Run on a different port or skip opening the browser:
+
+```sh
 pnpm start -- --port 4000
 pnpm start -- --no-open
 ```
 
-## Development
+## Development Options
 
 ```sh
 pnpm dev
@@ -43,42 +81,9 @@ pnpm dev:web
 pnpm dev:api
 ```
 
-## Scripts
+## Related Docs
 
-| Command | Description |
-| --- | --- |
-| `pnpm dev` | Run the watch-mode development environment |
-| `pnpm check` | Run the fast pre-checkin validation |
-| `pnpm check:python` | Validate the Python runtime packages |
-| `pnpm build` | Build the local release-candidate images |
-| `pnpm start` | Run the built release candidate |
-| `pnpm smoke` | Smoke test the built runtime |
-| `pnpm clean` | Remove generated local build output and local release-candidate images |
-| `pnpm dev:web` | Run the web app only |
-| `pnpm dev:api` | Run the API only |
-
-## CI Registry Inputs
-
-The commit-stage workflow publishes the release candidate to an OCI registry on `main` pushes. Configure these repository secrets:
-
-- `OCI_REGISTRY`
-- `OCI_NAMESPACE`
-- `OCI_USERNAME`
-- `OCI_PASSWORD`
-
-The workflow uploads `release-candidate.json` with `commitSha`, `webDigest`, and `apiDigest`. Acceptance and production should deploy those exact digests.
-
-To run a pushed release candidate locally, pull the digest refs first, then start ADE without rebuilding:
-
-```sh
-docker pull "registry.example.com/org/ade-web@sha256:..."
-docker pull "registry.example.com/org/ade-api@sha256:..."
-ADE_WEB_IMAGE="registry.example.com/org/ade-web@sha256:..." \
-ADE_API_IMAGE="registry.example.com/org/ade-api@sha256:..." \
-pnpm start
-```
-
-Deployments must use digests, not mutable tags.
+- [PRINCIPLES.md](/Users/justinkropp/.codex/worktrees/dfe6/ade/PRINCIPLES.md) - engineering and delivery principles for this repo
 
 ## Working Rules
 
