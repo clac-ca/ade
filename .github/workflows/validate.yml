@@ -116,6 +116,9 @@ jobs:
           tags: ${{ steps.meta-api.outputs.tags }}
 
       - name: Smoke built runtime
+        env:
+          ADE_API_IMAGE: ${{ steps.meta-api.outputs.tags }}
+          ADE_WEB_IMAGE: ${{ steps.meta-web.outputs.tags }}
         run: pnpm smoke
 
       - name: Write release candidate metadata
