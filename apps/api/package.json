@@ -11,7 +11,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "test": "tsx --test test/**/*.ts"
+    "test": "tsx --test 'test/*.test.ts' 'test/**/*.test.ts'"
   },
   "dependencies": {
     "fastify": "^5.0.0"

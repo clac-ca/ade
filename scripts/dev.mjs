@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'node:url'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
@@ -9,20 +8,7 @@ import {
   waitForReady
 } from './shared.mjs'
 
-const apiDir = fileURLToPath(new URL('../apps/api', import.meta.url))
-const webDir = fileURLToPath(new URL('../apps/web', import.meta.url))
-const apiDevCommand = fileURLToPath(
-  new URL(
-    process.platform === 'win32' ? '../apps/api/node_modules/.bin/tsx.cmd' : '../apps/api/node_modules/.bin/tsx',
-    import.meta.url
-  )
-)
-const webDevCommand = fileURLToPath(
-  new URL(
-    process.platform === 'win32' ? '../apps/web/node_modules/.bin/vite.cmd' : '../apps/web/node_modules/.bin/vite',
-    import.meta.url
-  )
-)
+const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
 function signalChild(child, signal) {
   if (child.exitCode !== null || child.signalCode !== null) {
@@ -68,16 +54,14 @@ async function main() {
   })
 
   const detached = process.platform !== 'win32'
-  const api = spawnCommand(apiDevCommand, ['watch', 'src/server.ts'], {
-    cwd: apiDir,
+  const api = spawnCommand(pnpmCommand, ['--filter', '@ade/api', 'dev'], {
     detached,
     env: {
       ADE_API_HOST: '127.0.0.1',
       ADE_API_PORT: '8001'
     }
   })
-  const web = spawnCommand(webDevCommand, [], {
-    cwd: webDir,
+  const web = spawnCommand(pnpmCommand, ['--filter', '@ade/web', 'dev'], {
     detached,
     env: {
       ADE_API_ORIGIN: 'http://127.0.0.1:8001',
@@ -112,7 +96,7 @@ async function main() {
   try {
     await waitForReady(
       [
-        'http://127.0.0.1:8001/healthz'
+        'http://127.0.0.1:8001/readyz'
       ],
       {
         isAlive: () => children.every((child) => child.exitCode === null && child.signalCode === null)
@@ -122,7 +106,7 @@ async function main() {
     await waitForReady(
       [
         `${appUrl}/`,
-        `${appUrl}/api/healthz`
+        `${appUrl}/api/readyz`
       ],
       {
         isAlive: () => children.every((child) => child.exitCode === null && child.signalCode === null)

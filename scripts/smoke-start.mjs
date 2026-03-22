@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
-import { spawnCommand, waitForReady } from './shared.mjs'
+import { findAvailablePort, spawnCommand, waitForReady } from './shared.mjs'
 
 const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 
@@ -59,7 +59,7 @@ async function assertVersion(url) {
 
 async function main() {
   const rootDir = fileURLToPath(new URL('..', import.meta.url))
-  const port = 8010
+  const port = await findAvailablePort()
   const appUrl = `http://localhost:${port}`
   const child = spawnCommand(
     pnpmCommand,

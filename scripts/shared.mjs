@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:net'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 
@@ -25,9 +26,13 @@ export function parseArgs(argv, options = {}) {
         throw new Error('Missing value for --port')
       }
 
+      if (!/^[1-9]\d*$/.test(value)) {
+        throw new Error(`Invalid port: ${value}`)
+      }
+
       const parsed = Number.parseInt(value, 10)
 
-      if (!Number.isInteger(parsed) || parsed <= 0) {
+      if (parsed > 65_535) {
         throw new Error(`Invalid port: ${value}`)
       }
 
@@ -66,6 +71,32 @@ export function spawnCommand(command, args, options = {}) {
   return child
 }
 
+export async function runCommand(command, args, options = {}) {
+  await new Promise((resolve, reject) => {
+    const child = spawnCommand(command, args, {
+      cwd: options.cwd,
+      detached: options.detached,
+      env: options.env,
+      stdio: options.stdio ?? 'inherit'
+    })
+
+    child.on('error', reject)
+    child.on('exit', (code, signal) => {
+      if (signal !== null) {
+        reject(new Error(`${command} exited with signal ${signal}`))
+        return
+      }
+
+      if (code !== 0) {
+        reject(new Error(`${command} exited with code ${code ?? 'unknown'}`))
+        return
+      }
+
+      resolve(undefined)
+    })
+  })
+}
+
 export async function waitForReady(urls, options = {}) {
   const timeoutMs = options.timeoutMs ?? 30_000
   const startedAt = Date.now()
@@ -94,6 +125,31 @@ export async function waitForReady(urls, options = {}) {
   }
 
   throw new Error(`Timed out waiting for: ${urls.join(', ')}`)
+}
+
+export async function findAvailablePort() {
+  return await new Promise((resolve, reject) => {
+    const server = createServer()
+
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+
+      if (!address || typeof address === 'string') {
+        server.close(() => reject(new Error('Could not determine a free port.')))
+        return
+      }
+
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+
+        resolve(address.port)
+      })
+    })
+  })
 }
 
 export function registerShutdown(handler) {

@@ -1,16 +1,24 @@
 import process from 'node:process'
-import { createApp } from './app'
 import { readConfig } from './config'
+import { createRuntime, Runtime } from './runtime'
 
-async function main() {
+type ProcessHandle = {
+  exit: (code: number) => void,
+  on: (event: 'SIGINT' | 'SIGTERM', handler: () => void) => void
+}
+type ServerRuntime = Pick<Runtime, 'start' | 'stop'>
+
+function createProductionRuntime(): Runtime {
   const config = readConfig()
-  const readiness = {
-    isReady: false
-  }
-  const server = createApp({
+
+  return createRuntime({
     buildInfo: config.buildInfo,
-    readiness
+    host: config.host,
+    port: config.port
   })
+}
+
+async function runServer(processHandle: ProcessHandle = process, runtime: ServerRuntime = createProductionRuntime()) {
   let shuttingDown = false
 
   async function stop(exitCode: number) {
@@ -19,36 +27,39 @@ async function main() {
     }
 
     shuttingDown = true
-    readiness.isReady = false
 
     try {
-      await server.close()
-    } finally {
-      process.exit(exitCode)
+      await runtime.stop()
+      processHandle.exit(exitCode)
+    } catch (error) {
+      console.error(error)
+      processHandle.exit(1)
     }
   }
 
-  process.on('SIGINT', () => {
+  processHandle.on('SIGINT', () => {
     void stop(0)
   })
 
-  process.on('SIGTERM', () => {
+  processHandle.on('SIGTERM', () => {
     void stop(0)
   })
 
   try {
-    await server.listen({
-      host: config.host,
-      port: config.port
-    })
-    readiness.isReady = true
+    await runtime.start()
   } catch (error) {
     console.error(error)
     await stop(1)
   }
 }
 
-void main().catch((error) => {
-  console.error(error)
-  process.exit(1)
-})
+if (require.main === module) {
+  void runServer().catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })
+}
+
+export {
+  runServer
+}

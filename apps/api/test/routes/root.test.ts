@@ -62,5 +62,8 @@ test('version route exposes build metadata', async (t) => {
   })
 
   assert.equal(res.statusCode, 200)
-  assert.deepStrictEqual(JSON.parse(res.payload), buildInfo)
+  assert.deepStrictEqual(JSON.parse(res.payload), {
+    ...buildInfo,
+    nodeVersion: process.version
+  })
 })
