@@ -147,6 +147,10 @@ async function main() {
       return
     }
 
+    if (signal === null && code === 0) {
+      return
+    }
+
     if (signal === 'SIGINT' || signal === 'SIGTERM' || signal === 'SIGKILL') {
       return
     }

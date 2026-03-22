@@ -1,7 +1,9 @@
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
-import { findAvailablePort, spawnCommand } from './shared.mjs'
+import { findAvailablePort, runCommand, spawnCommand } from './shared.mjs'
+
+const dockerCommand = process.platform === 'win32' ? 'docker.exe' : 'docker'
 
 async function waitForExit(child, timeoutMs = 15_000) {
   if (child.exitCode !== null || child.signalCode !== null) {
@@ -27,6 +29,17 @@ async function stopChild(child) {
   if (child.exitCode === null && child.signalCode === null) {
     child.kill('SIGKILL')
     await waitForExit(child, 1_000)
+  }
+}
+
+async function composeDown(rootDir, projectName) {
+  try {
+    await runCommand(dockerCommand, ['compose', '--project-name', projectName, 'down', '--remove-orphans'], {
+      cwd: rootDir,
+      stdio: 'ignore'
+    })
+  } catch {
+    // Ignore cleanup failures so smoke failures preserve their original cause.
   }
 }
 
@@ -126,6 +139,7 @@ async function main() {
   const startScript = fileURLToPath(new URL('./start.mjs', import.meta.url))
   const port = await findAvailablePort()
   const appUrl = `http://localhost:${port}`
+  const projectName = `ade-local-${port}`
   const child = spawnCommand(
     process.execPath,
     [startScript, '--port', String(port), '--no-open'],
@@ -142,6 +156,7 @@ async function main() {
     await assertOk(`${appUrl}/api/readyz`)
     await assertVersion(`${appUrl}/api/version`)
   } finally {
+    await composeDown(rootDir, projectName)
     await stopChild(child)
   }
 }
