@@ -3,8 +3,6 @@ import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { findAvailablePort, spawnCommand } from './shared.mjs'
 
-const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-
 async function waitForExit(child, timeoutMs = 15_000) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return
@@ -125,11 +123,12 @@ async function waitForStartupLine(child, expectedLine, timeoutMs = 120_000) {
 
 async function main() {
   const rootDir = fileURLToPath(new URL('..', import.meta.url))
+  const startScript = fileURLToPath(new URL('./start.mjs', import.meta.url))
   const port = await findAvailablePort()
   const appUrl = `http://localhost:${port}`
   const child = spawnCommand(
-    pnpmCommand,
-    ['run', 'start', '--', '--port', String(port), '--no-open'],
+    process.execPath,
+    [startScript, '--port', String(port), '--no-open'],
     {
       cwd: rootDir,
       stdio: ['ignore', 'pipe', 'pipe']
