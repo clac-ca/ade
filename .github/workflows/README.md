@@ -84,14 +84,11 @@ Purpose: reject bad changes quickly and produce an immutable release candidate.
 Current ADE commit stage does the following:
 
 - checks out the repo
-- uses **Node 22.12.0** and **Python 3.12**
+- uses the repo-pinned **Node 22.12.0** and **Python 3.12** toolchain
 - installs JavaScript dependencies with `pnpm install --frozen-lockfile`
-- builds the API
-- runs the API tests
-- builds the web app
-- builds the two Python wheels
-- packages the API runtime directory
-- builds the web and API container images **once**
+- runs the repo-owned `pnpm run ci:commit` contract
+- includes static analysis, typechecks, API unit tests, Python package builds, API packaging, and image creation
+- measures and records the commit-stage wall-clock duration
 - pushes immutable candidate image tags to GHCR:
 
 ```text
@@ -100,6 +97,7 @@ ghcr.io/<owner>/<repo>-api:sha-<commit-sha>
 ```
 
 - uploads a `candidate-manifest.json` artifact for traceability
+- carries the accepted digests forward into the annotated `candidate-<sha>` tag so release can resolve the candidate from Git alone
 
 ### What belongs here today
 
@@ -129,17 +127,11 @@ Purpose: deploy the exact release candidate and prove it works in a production-s
 Current ADE acceptance stage does the following:
 
 - pulls the exact immutable candidate images created in commit stage
-- retags them locally to the repo’s expected local names:
-
-```text
-ade-web:local
-ade-api:local
-```
-
-- runs the existing production-shaped smoke test:
+- injects those exact digest refs into the existing compose-based startup path
+- runs the existing production-shaped smoke test via the repo-owned `pnpm run smoke` contract:
 
 ```sh
-pnpm run smoke:start
+pnpm run smoke
 ```
 
 - if that passes, creates the immutable accepted-candidate tag:
@@ -180,11 +172,12 @@ Purpose: choose an accepted version and promote it without rebuilding.
 Current ADE release stage is triggered manually with:
 
 - `workflow_dispatch`
-- input: `candidate_sha`
+- input: `candidate_tag`
 
 It then:
 
-- verifies that `candidate-<sha>` exists
+- verifies that the requested accepted candidate tag exists
+- resolves the exact accepted image digests from the annotated candidate tag metadata
 - waits for approval on the protected `production` environment
 - promotes the exact immutable candidate images to immutable release tags:
 
@@ -242,11 +235,12 @@ Configure it with:
 
 ### 2. Container registry permissions
 
-The workflow pushes images to GitHub Container Registry (`ghcr.io`) using `GITHUB_TOKEN`.
-The workflow already requests:
+The workflow pushes images to GitHub Container Registry (`ghcr.io`) using `GITHUB_TOKEN`. Permissions are granted per job with least privilege:
 
-- `packages: write`
-- `contents: write`
+- `commit-stage`: `contents: read`, `packages: write`
+- `acceptance-stage`: `contents: read`, `packages: read`
+- `mark-accepted-candidate`: `contents: write`
+- `release-stage`: `contents: write`, `packages: write`
 
 ### 3. Branching discipline
 
@@ -261,10 +255,10 @@ If you keep pull requests:
 ## How to release
 
 1. Wait for a `main` pipeline run to pass commit and acceptance.
-2. Find the accepted candidate SHA (the workflow will have created a tag `candidate-<sha>`).
+2. Find the accepted candidate tag (the workflow will have created a tag `candidate-<sha>`).
 3. Go to **Actions**.
 4. Run the **deployment-pipeline** workflow manually.
-5. Enter the 40-character `candidate_sha`.
+5. Enter the accepted `candidate_tag`.
 6. Approve the `production` environment when prompted.
 7. The workflow will create immutable release tags for the images and Git history.
 
@@ -276,21 +270,6 @@ Dave Farley’s point is that the **real, authoritative feedback** is on the int
 
 If you want optional preflight automation later, add it later and keep it clearly non-authoritative.
 Do not let it replace the real deployment pipeline on `main`.
-
-## What to improve next in the repo itself
-
-The workflow works with the repository as it stands today, but the next code cleanup should be to make the package scripts mirror the pipeline more directly.
-
-The current `package.json` overlaps some work between `check` and `build`.
-The next repo tidy-up should introduce scripts with names like:
-
-- `verify:ts`
-- `package:python`
-- `package:api`
-- `build:images`
-- `acceptance`
-
-That is not required to start using the workflow, but it is the next simplification step.
 
 ## What to defer until the system matures
 
