@@ -40,13 +40,16 @@ async function main() {
   await tryRun(pnpmCommand, ["-r", "--if-present", "run", "clean"], {
     cwd: rootDir,
   });
-  rmSync(fileURLToPath(new URL("../python/ade-engine/dist", import.meta.url)), {
-    force: true,
-    recursive: true,
-  });
+  rmSync(
+    fileURLToPath(new URL("../packages/ade-engine/dist", import.meta.url)),
+    {
+      force: true,
+      recursive: true,
+    },
+  );
   rmSync(
     fileURLToPath(
-      new URL("../python/ade-config-template/dist", import.meta.url),
+      new URL("../packages/ade-config-template/dist", import.meta.url),
     ),
     {
       force: true,

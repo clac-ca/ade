@@ -4,7 +4,7 @@ import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', 'apps/api/.package/**', 'python/**']
+    ignores: ['**/dist/**', '**/node_modules/**', 'apps/ade-api/.package/**', 'packages/**']
   },
   {
     files: ['**/*.{js,mjs,cjs,ts,tsx}'],
@@ -16,7 +16,7 @@ export default tseslint.config(
     }
   },
   {
-    files: ['apps/web/src/**/*.{ts,tsx}'],
+    files: ['apps/ade-web/src/**/*.{ts,tsx}'],
     languageOptions: {
       globals: {
         ...globals.browser

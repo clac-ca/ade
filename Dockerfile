@@ -6,7 +6,7 @@ ENV NODE_ENV=production
 ENV PORT=8000
 ENV HOST=0.0.0.0
 
-COPY apps/api/.package/ ./
+COPY apps/ade-api/.package/ ./
 
 EXPOSE 8000
 
