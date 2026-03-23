@@ -11,7 +11,7 @@ ADE is a document operations platform for messy spreadsheets.
 - `python/ade-engine` - extraction runtime package
 - `python/ade-config-template` - configurable template package
 - `infra/` - infrastructure definitions
-- `infra/bootstrap` - one-time Azure bootstrap guidance
+- `infra/README.md` - Azure infrastructure setup and first deployment guide
 - `scripts/` - root development, build, acceptance, and deployment entrypoints
 
 ## Requirements
@@ -49,7 +49,7 @@ ADE opens at `http://localhost:8000`.
 
 ## Azure Production Bootstrap
 
-The Azure/GitHub trust setup is intentionally manual and documented in [infra/bootstrap/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/infra/bootstrap/README.md).
+The Azure production setup is intentionally direct and documented in [infra/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/infra/README.md).
 
 Keep these values out of tracked files:
 
