@@ -11,6 +11,7 @@ ADE is a document operations platform for messy spreadsheets.
 - `python/ade-engine` - extraction runtime package
 - `python/ade-config-template` - configurable template package
 - `infra/` - infrastructure definitions
+- `infra/bootstrap` - one-time Azure bootstrap guidance
 - `scripts/` - root development, build, acceptance, and deployment entrypoints
 
 ## Requirements
@@ -45,3 +46,14 @@ ADE opens at `http://localhost:8000`.
 | `pnpm build`           | Build the single local release-candidate image `ade:local`              |
 | `pnpm start`           | Run the built local image                                               |
 | `pnpm clean`           | Remove generated local output and local images                          |
+
+## Azure Production Bootstrap
+
+The Azure/GitHub trust setup is intentionally manual and documented in [infra/bootstrap/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/infra/bootstrap/README.md).
+
+Keep these values out of tracked files:
+
+- tenant ID
+- subscription ID
+
+Store them only in the GitHub `production` environment variables used by the deployment pipeline.

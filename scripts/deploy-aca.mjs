@@ -33,7 +33,18 @@ async function runAzureJsonCommand(args) {
       cwd: rootDir,
     },
   );
-  return JSON.parse(stdout);
+  const trimmed = stdout.trim();
+  const jsonStart = Math.min(
+    ...["{", "["]
+      .map((marker) => trimmed.indexOf(marker))
+      .filter((index) => index !== -1),
+  );
+
+  if (!Number.isFinite(jsonStart)) {
+    throw new Error(`Azure CLI did not return JSON output.\n${trimmed}`);
+  }
+
+  return JSON.parse(trimmed.slice(jsonStart));
 }
 
 async function runAzureTextCommand(args) {
@@ -73,25 +84,6 @@ async function main() {
     readArg("manifest-path") ?? `${environmentName}-deployment-manifest.json`,
   );
   const image = requireEnv("ADE_IMAGE");
-  const registryServer = process.env.ADE_REGISTRY_SERVER?.trim() ?? "";
-  const registryUsername = process.env.ADE_REGISTRY_USERNAME?.trim() ?? "";
-  const registryPassword = process.env.ADE_REGISTRY_PASSWORD?.trim() ?? "";
-  const hasRegistryServer = registryServer !== "";
-  const hasRegistryUsername = registryUsername !== "";
-  const hasRegistryPassword = registryPassword !== "";
-  const usesRegistryCredentials = hasRegistryUsername && hasRegistryPassword;
-
-  if (!hasRegistryServer && (hasRegistryUsername || hasRegistryPassword)) {
-    throw new Error(
-      "ADE_REGISTRY_SERVER is required when ADE_REGISTRY_USERNAME or ADE_REGISTRY_PASSWORD is set.",
-    );
-  }
-
-  if (hasRegistryServer && hasRegistryUsername !== hasRegistryPassword) {
-    throw new Error(
-      "ADE_REGISTRY_USERNAME and ADE_REGISTRY_PASSWORD must either both be set or both be empty.",
-    );
-  }
 
   const startedAt = Date.now();
   const outputs = await runAzureJsonCommand([
@@ -108,24 +100,24 @@ async function main() {
     "properties.outputs",
   ]);
 
-  const webUrl = outputs.webUrl?.value;
-  const webAppName = outputs.webAppName?.value;
+  const appUrl = outputs.appUrl?.value;
+  const appName = outputs.appName?.value;
 
-  if (typeof webUrl !== "string" || webUrl.trim() === "") {
-    throw new Error("Azure deployment did not return webUrl.");
+  if (typeof appUrl !== "string" || appUrl.trim() === "") {
+    throw new Error("Azure deployment did not return appUrl.");
   }
 
-  if (typeof webAppName !== "string") {
+  if (typeof appName !== "string") {
     throw new Error("Azure deployment did not return the container app name.");
   }
 
-  const webRevision = await runAzureTextCommand([
+  const appRevision = await runAzureTextCommand([
     "containerapp",
     "show",
     "--resource-group",
     resourceGroup,
     "--name",
-    webAppName,
+    appName,
     "--query",
     "properties.latestRevisionName",
   ]);
@@ -136,20 +128,18 @@ async function main() {
     environment: environmentName,
     image,
     parametersFile: resolvePath(parametersFile),
-    registryConfigured: hasRegistryServer,
-    registryUsesCredentials: usesRegistryCredentials,
     resourceGroup,
-    webAppName,
-    webRevision,
-    webUrl,
+    appName,
+    appRevision,
+    appUrl,
   };
 
   writeJsonFile(manifestPath, manifest);
   writeGitHubOutput({
     deployment_duration_seconds: manifest.deploymentDurationSeconds,
     deployment_manifest: manifestPath,
-    web_revision: webRevision,
-    web_url: webUrl,
+    app_revision: appRevision,
+    app_url: appUrl,
   });
 }
 

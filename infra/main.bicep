@@ -12,36 +12,29 @@ param tags object = {}
 @description('Container image reference for the deployed ADE app.')
 param image string
 
-@description('Container registry server used by the deployed apps.')
-param registryServer string = ''
-
-@description('Container registry username used by the deployed apps.')
-param registryUsername string = ''
-
-@description('Container registry password or token used by the deployed apps.')
-@secure()
-param registryPassword string = ''
-
 @description('Name for the Log Analytics workspace.')
 param logAnalyticsWorkspaceName string = '${prefix}-logs'
 
 @description('Name for the Container Apps environment.')
 param containerAppsEnvironmentName string = '${prefix}-env'
 
+@description('User-assigned managed identity resource ID attached to the ADE app for runtime access.')
+param runtimeManagedIdentityResourceId string = ''
+
 @description('Name for the public ADE container app.')
-param webAppName string = 'web'
+param appName string = prefix
 
 @description('CPU allocation for the ADE container app.')
-param webCpu string = '0.25'
+param appCpu string = '0.25'
 
 @description('Memory allocation for the ADE container app.')
-param webMemory string = '0.5Gi'
+param appMemory string = '0.5Gi'
 
 @description('Minimum replica count for the ADE container app.')
-param webMinReplicas int = 1
+param appMinReplicas int = 1
 
 @description('Maximum replica count for the ADE container app.')
-param webMaxReplicas int = 1
+param appMaxReplicas int = 1
 
 var mergedTags = union({
   project: 'ade'
@@ -57,11 +50,11 @@ module platform 'modules/container-app-platform.bicep' = {
   }
 }
 
-module web 'modules/container-app.bicep' = {
-  name: 'webContainerApp'
+module app 'modules/container-app.bicep' = {
+  name: 'appContainerApp'
   params: {
     containerPort: 8000
-    cpu: webCpu
+    cpu: appCpu
     env: [
       {
         name: 'HOST'
@@ -75,18 +68,16 @@ module web 'modules/container-app.bicep' = {
     externalIngress: true
     image: image
     managedEnvironmentId: platform.outputs.containerAppsEnvironmentId
-    maxReplicas: webMaxReplicas
-    memory: webMemory
-    minReplicas: webMinReplicas
-    name: webAppName
-    registryPassword: registryPassword
-    registryServer: registryServer
-    registryUsername: registryUsername
+    maxReplicas: appMaxReplicas
+    memory: appMemory
+    minReplicas: appMinReplicas
+    name: appName
+    runtimeManagedIdentityResourceId: runtimeManagedIdentityResourceId
     tags: mergedTags
   }
 }
 
 output containerAppsEnvironmentId string = platform.outputs.containerAppsEnvironmentId
-output webAppName string = webAppName
-output webFqdn string = web.outputs.fqdn
-output webUrl string = web.outputs.url
+output appName string = appName
+output appFqdn string = app.outputs.fqdn
+output appUrl string = app.outputs.url
