@@ -117,7 +117,7 @@ Current ADE release stage:
 - runs only on `push` to `main`
 - depends on the acceptance stage
 - logs into Azure with OIDC
-- deploys the same accepted image refs to Azure Container Apps production with `pnpm run deploy:aca`
+- deploys the same accepted image refs to Azure Container Apps production with `node scripts/deploy-aca.mjs`
 
 Because the GHCR images are public, the workflow sets `ADE_REGISTRY_SERVER=ghcr.io` and does not pass registry credentials.
 

@@ -12,7 +12,7 @@
     "typecheck": "pnpm --filter @ade/api typecheck && pnpm --filter @ade/web typecheck",
     "test:unit": "pnpm --filter @ade/api test",
     "package:python": "uv build --directory python/ade-engine && uv build --directory python/ade-config-template",
-    "test": "pnpm run lint && pnpm run test:unit && pnpm run build",
+    "test": "pnpm lint && pnpm test:unit && pnpm build",
     "test:acceptance": "node scripts/acceptance.mjs",
     "build": "node scripts/build.mjs",
     "deploy:aca": "node scripts/deploy-aca.mjs",
