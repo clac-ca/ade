@@ -14,7 +14,10 @@ import { runCommand } from "./shared.mjs";
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const apiPackage = JSON.parse(
-  readFileSync(new URL("../apps/api/package.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../apps/ade-api/package.json", import.meta.url),
+    "utf8",
+  ),
 );
 
 function readGitMetadata() {
@@ -43,10 +46,10 @@ function readGitValue(args) {
 
 async function buildArtifacts() {
   const { builtAt, gitSha } = readGitMetadata();
-  const packageRoot = join(rootDir, "apps", "api", ".package");
+  const packageRoot = join(rootDir, "apps", "ade-api", ".package");
   const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   const publicPath = join(packageRoot, "public");
-  const webDistPath = join(rootDir, "apps", "web", "dist");
+  const webDistPath = join(rootDir, "apps", "ade-web", "dist");
 
   await runCommand(pnpmCommand, ["--filter", "@ade/web", "build"], {
     cwd: rootDir,
@@ -60,7 +63,7 @@ async function buildArtifacts() {
   });
   await runCommand(
     pnpmCommand,
-    ["--filter", "@ade/api", "deploy", "--prod", "apps/api/.package"],
+    ["--filter", "@ade/api", "deploy", "--prod", "apps/ade-api/.package"],
     {
       cwd: rootDir,
     },

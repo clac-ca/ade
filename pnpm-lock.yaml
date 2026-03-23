@@ -27,7 +27,7 @@ importers:
         specifier: ^8.57.1
         version: 8.57.1(eslint@10.1.0)(typescript@5.9.3)
 
-  apps/api:
+  apps/ade-api:
     dependencies:
       '@fastify/static':
         specifier: ^8.3.0
@@ -46,7 +46,7 @@ importers:
         specifier: ~5.9.2
         version: 5.9.3
 
-  apps/web:
+  apps/ade-web:
     dependencies:
       react:
         specifier: ^19.2.4

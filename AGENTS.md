@@ -12,14 +12,14 @@
 ├── scripts/
 │   ├── acceptance.mjs
 │   ├── build.mjs
+│   ├── clean.mjs
 │   ├── dev.mjs
-│   ├── deploy-aca.mjs
 │   ├── start.mjs
 │   └── shared.mjs
 ├── apps/
-│   ├── web/
-│   └── api/
-└── python/
+│   ├── ade-api/
+│   └── ade-web/
+└── packages/
     ├── ade-engine/
     └── ade-config-template/
 ```

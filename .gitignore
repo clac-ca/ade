@@ -5,7 +5,7 @@ coverage/
 npm-debug.log*
 pnpm-debug.log*
 *.local
-apps/api/.package/
+apps/ade-api/.package/
 .buildx-cache/
 infra/*.json
 infra/environments/*.json
