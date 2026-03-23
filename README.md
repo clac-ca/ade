@@ -2,11 +2,10 @@
 
 Automatic Data Extractor.
 
-ADE is a document operations platform for messy spreadsheets. The TypeScript apps handle the web surface and backend API. The Python packages handle the extraction runtime: a stable engine and a customizable config template.
+ADE is a document operations platform for messy spreadsheets.
 
 ## Repository Layout
 
-- `Dockerfile` - single production image definition
 - `apps/web` - React web app
 - `apps/api` - Fastify API and production web host
 - `python/ade-engine` - extraction runtime package
@@ -49,66 +48,3 @@ ADE opens at `http://localhost:8000`.
 | `pnpm deploy:aca`      | Deploy one image to Azure Container Apps using the repo Bicep contract  |
 | `pnpm start`           | Run the built local image                                               |
 | `pnpm clean`           | Remove generated local output and local images                          |
-
-## Common Flows
-
-Day-to-day development:
-
-```sh
-pnpm dev
-pnpm test
-```
-
-Run the local release candidate:
-
-```sh
-pnpm build
-pnpm start
-```
-
-Run acceptance checks against a running candidate:
-
-```sh
-ADE_BASE_URL=http://localhost:8000 pnpm test:acceptance
-```
-
-Run on a different port or skip opening the browser:
-
-```sh
-pnpm start -- --port 4000
-pnpm start -- --no-open
-```
-
-## Development Options
-
-```sh
-pnpm dev
-pnpm dev -- --port 4000
-pnpm dev -- --no-open
-pnpm lint
-pnpm format:check
-pnpm typecheck
-pnpm test
-pnpm test:unit
-ADE_BASE_URL=https://example.test pnpm test:acceptance
-pnpm package:python
-ADE_IMAGE=ghcr.io/example/ade@sha256:... pnpm deploy:aca -- --environment acceptance --resource-group my-rg --parameters-file infra/environments/main.acceptance.bicepparam
-pnpm clean
-pnpm dev:web
-pnpm dev:api
-```
-
-`pnpm build` creates the local release candidate. The deployment pipeline publishes that same built candidate to GHCR on pushes to `main`.
-
-## Related Docs
-
-- [PRINCIPLES.md](./PRINCIPLES.md) - engineering and delivery principles for this repo
-- [.github/workflows/README.md](./.github/workflows/README.md) - canonical pipeline design and required GitHub/Azure setup
-
-## Working Rules
-
-- Work trunk-based with short-lived branches.
-- `main` stays green and releasable.
-- Do not add empty scaffolding.
-- Do not commit generated artifacts.
-- Do not add tooling unless it removes current pain.
