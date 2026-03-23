@@ -8,11 +8,27 @@ ADE is a document operations platform for messy spreadsheets.
 
 - `apps/ade-web` - React web app
 - `apps/ade-api` - Fastify API and production web host
-- `packages/ade-engine` - extraction runtime CLI/package
-- `packages/ade-config-template` - configurable template package
+- `packages/ade-config` - installed product package and `ade` CLI
+- `packages/ade-engine` - extraction runtime library used by `ade-config`
 - `infra/` - infrastructure definitions
 - `infra/README.md` - Azure infrastructure setup and first deployment guide
 - `scripts/` - root development, build, acceptance, and deployment entrypoints
+
+## Python Product Shape
+
+The Python side is intentionally split into:
+
+- `ade-config` - the installed product package users run with `ade`
+- `ade-engine` - the runtime library that `ade-config` calls into
+
+The public processing shape is:
+
+```sh
+pip install ade-config
+ade process <input-path> --output-dir <dir>
+```
+
+`<input-path>` can be either a single file or a directory.
 
 ## Requirements
 
