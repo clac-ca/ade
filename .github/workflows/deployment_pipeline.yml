@@ -158,4 +158,4 @@ jobs:
           az deployment group create
           --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
-          --parameters-file infra/environments/main.prod.bicepparam
+          --parameters infra/environments/main.prod.bicepparam
