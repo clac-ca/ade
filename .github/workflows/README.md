@@ -63,7 +63,7 @@ It:
 
 ### 4. Release deploys the accepted candidate
 
-Release deploys the same accepted image ref to production through the repo-owned Azure deployment contract in `scripts/deploy-aca.mjs`.
+Release deploys the same accepted image ref to production with direct Azure CLI deployment.
 
 There is no extra rebuild, no tag resolution step, and no separate emergency-redeploy workflow in this simplified model.
 
@@ -116,8 +116,8 @@ Current ADE release stage:
 - runs only on `push` to `main`
 - depends on the acceptance stage
 - logs into Azure with OIDC
-- derives the runtime managed-identity resource ID from the GitHub `production` environment variables
-- deploys the same accepted image ref to Azure Container Apps production with `node scripts/deploy-aca.mjs`
+- sets `ADE_IMAGE` to the accepted release-candidate image ref
+- deploys Azure Container Apps production with `az deployment group create --parameters infra/environments/main.prod.bicepparam`
 
 Because the GHCR image is public, the release deployment does not configure registry credentials.
 
@@ -148,7 +148,7 @@ The workflow uses `azure/login` with OIDC.
 
 Configure Azure federated credentials for the `production` GitHub environment instead of storing long-lived cloud secrets in the repository.
 
-For the one-time Azure bootstrap, follow [infra/bootstrap/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/infra/bootstrap/README.md).
+For the one-time Azure setup and first manual deployment, follow [infra/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/infra/README.md).
 
 ### 3. GitHub Container Registry
 
