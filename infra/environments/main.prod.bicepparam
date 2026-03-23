@@ -4,8 +4,7 @@ param prefix = 'ade-prod'
 param tags = {
   environment: 'prod'
 }
-param webImage = readEnvironmentVariable('ADE_WEB_IMAGE')
-param apiImage = readEnvironmentVariable('ADE_API_IMAGE')
+param image = readEnvironmentVariable('ADE_IMAGE')
 param registryServer = readEnvironmentVariable('ADE_REGISTRY_SERVER', '')
 param registryUsername = readEnvironmentVariable('ADE_REGISTRY_USERNAME', '')
 param registryPassword = readEnvironmentVariable('ADE_REGISTRY_PASSWORD', '')

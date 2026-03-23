@@ -57,8 +57,8 @@ async function main() {
   const api = spawnCommand(pnpmCommand, ["--filter", "@ade/api", "dev"], {
     detached,
     env: {
-      ADE_API_HOST: "127.0.0.1",
-      ADE_API_PORT: "8001",
+      HOST: "127.0.0.1",
+      PORT: "8001",
     },
   });
   const web = spawnCommand(pnpmCommand, ["--filter", "@ade/web", "dev"], {
@@ -96,7 +96,7 @@ async function main() {
   }
 
   try {
-    await waitForReady(["http://127.0.0.1:8001/readyz"], {
+    await waitForReady(["http://127.0.0.1:8001/api/readyz"], {
       isAlive: () =>
         children.every(
           (child) => child.exitCode === null && child.signalCode === null,

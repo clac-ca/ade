@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import * as test from 'node:test'
 import { createApp } from '../src/app'
 import { BundledBuildInfo } from '../src/config'
@@ -12,11 +13,12 @@ export type BuildOptions = {
 }
 
 const defaultBuildInfo: BundledBuildInfo = {
-  service: 'ade-api',
+  service: 'ade',
   version: 'test-version',
   gitSha: 'test-git-sha',
   builtAt: '2026-03-21T00:00:00.000Z'
 }
+const webRoot = fileURLToPath(new URL('./fixtures/web-dist', import.meta.url))
 
 async function build(t: TestContext, options: BuildOptions = {}) {
   const readiness = {
@@ -25,7 +27,8 @@ async function build(t: TestContext, options: BuildOptions = {}) {
   const fastify = createApp({
     buildInfo: options.buildInfo ?? defaultBuildInfo,
     logger: false,
-    readiness
+    readiness,
+    webRoot
   })
 
   await fastify.ready()

@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import process from 'node:process'
 import { readConfig } from './config'
 import { createRuntime, Runtime } from './runtime'
@@ -14,7 +15,8 @@ function createProductionRuntime(): Runtime {
   return createRuntime({
     buildInfo: config.buildInfo,
     host: config.host,
-    port: config.port
+    port: config.port,
+    webRoot: join(__dirname, '..', 'public')
   })
 }
 

@@ -45,8 +45,7 @@ The commit stage creates the local release candidate with `pnpm build`.
 On pushes to `main`, that same built candidate is tagged and pushed to public GHCR as:
 
 ```text
-ghcr.io/<owner>/ade-web:sha-<commit-sha>
-ghcr.io/<owner>/ade-api:sha-<commit-sha>
+ghcr.io/<owner>/ade:sha-<commit-sha>
 ```
 
 Those image refs are then reused in acceptance and release.
@@ -57,8 +56,8 @@ Acceptance does not rebuild the app.
 
 It:
 
-- pulls the published release-candidate images onto the GitHub runner
-- starts them with `docker compose`
+- pulls the published release-candidate image onto the GitHub runner
+- starts it with `docker run`
 - waits for the API readiness endpoint
 - runs `pnpm test:acceptance` against the running candidate
 
@@ -82,7 +81,7 @@ Current ADE commit stage:
 - runs `pnpm lint`
 - runs `pnpm test:unit`
 - runs `pnpm build`
-- on `push` to `main`, logs into GHCR and publishes the release-candidate images
+- on `push` to `main`, logs into GHCR and publishes the release-candidate image
 
 This stage runs for:
 
@@ -101,10 +100,10 @@ Current ADE acceptance stage:
 - depends on the commit stage outputs
 - checks out the repo
 - installs dependencies
-- starts the published release candidate on the GitHub runner with `docker compose`
+- starts the published release candidate on the GitHub runner with `docker run`
 - waits for `http://127.0.0.1:4100/api/readyz`
 - runs `ADE_BASE_URL=http://127.0.0.1:4100 pnpm test:acceptance`
-- always tears the stack down afterward
+- always stops the container afterward
 
 The acceptance environment is the GitHub runner itself. It is not a separate Azure staging deployment.
 
@@ -150,9 +149,9 @@ Configure Azure federated credentials for the `production` GitHub environment in
 
 ### 3. GitHub Container Registry
 
-The commit stage pushes release-candidate images to `ghcr.io` using `GITHUB_TOKEN`.
+The commit stage pushes the release-candidate image to `ghcr.io` using `GITHUB_TOKEN`.
 
-Set the `ade-web` and `ade-api` packages to public visibility in GitHub Packages.
+Set the `ade` package to public visibility in GitHub Packages.
 
 ### 4. Branching discipline
 

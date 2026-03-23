@@ -12,7 +12,7 @@ export type RootRouteOptions = {
 const root: FastifyPluginAsync<RootRouteOptions> = async (fastify, options): Promise<void> => {
   fastify.get('/', async () => {
     return {
-      service: 'ade-api',
+      service: 'ade',
       status: 'ok',
       version: options.buildInfo.version
     }
@@ -20,7 +20,7 @@ const root: FastifyPluginAsync<RootRouteOptions> = async (fastify, options): Pro
 
   fastify.get('/healthz', async () => {
     return {
-      service: 'ade-api',
+      service: 'ade',
       status: 'ok'
     }
   })
@@ -29,13 +29,13 @@ const root: FastifyPluginAsync<RootRouteOptions> = async (fastify, options): Pro
     if (!options.readiness.isReady) {
       reply.status(503)
       return {
-        service: 'ade-api',
+        service: 'ade',
         status: 'not-ready'
       }
     }
 
     return {
-      service: 'ade-api',
+      service: 'ade',
       status: 'ready'
     }
   })

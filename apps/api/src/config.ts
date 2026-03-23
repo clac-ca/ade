@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 
 export type BundledBuildInfo = {
-  service: 'ade-api',
+  service: 'ade',
   version: string,
   gitSha: string,
   builtAt: string
@@ -29,19 +29,19 @@ const bundledBuildInfoPath = join(__dirname, 'build-info.json')
 
 function readPort(value: string | undefined): number {
   if (value === undefined) {
-    return 8001
+    return 8000
   }
 
   const rawValue = value.trim()
 
   if (!/^[1-9]\d*$/.test(rawValue)) {
-    throw new Error(`ADE_API_PORT must be a positive integer, received: ${rawValue}`)
+    throw new Error(`PORT must be a positive integer, received: ${rawValue}`)
   }
 
   const port = Number.parseInt(rawValue, 10)
 
   if (port > 65_535) {
-    throw new Error(`ADE_API_PORT must be 65535 or lower, received: ${rawValue}`)
+    throw new Error(`PORT must be 65535 or lower, received: ${rawValue}`)
   }
 
   return port
@@ -53,7 +53,7 @@ function readDevelopmentBuildInfo(): BundledBuildInfo {
   return {
     builtAt: readGitValue(['show', '--no-patch', '--format=%cI', 'HEAD']) ?? 'dev',
     gitSha: readGitValue(['rev-parse', 'HEAD']) ?? 'dev',
-    service: 'ade-api',
+    service: 'ade',
     version: packageJson.version
   }
 }
@@ -84,8 +84,8 @@ function validateBuildInfo(value: unknown): BundledBuildInfo {
     }
   }
 
-  if (buildInfo.service !== 'ade-api') {
-    throw new Error('ADE build info service must be "ade-api".')
+  if (buildInfo.service !== 'ade') {
+    throw new Error('ADE build info service must be "ade".')
   }
 
   const builtAt = buildInfo.builtAt as string
@@ -95,7 +95,7 @@ function validateBuildInfo(value: unknown): BundledBuildInfo {
   return {
     builtAt,
     gitSha,
-    service: 'ade-api',
+    service: 'ade',
     version
   }
 }
@@ -116,8 +116,8 @@ function readBuildInfo(env: NodeJS.ProcessEnv, options: ReadConfigOptions): Bund
 
 function readConfig(env: NodeJS.ProcessEnv = process.env, options: ReadConfigOptions = {}): ApiConfig {
   return {
-    host: env.ADE_API_HOST?.trim() || '127.0.0.1',
-    port: readPort(env.ADE_API_PORT),
+    host: env.HOST?.trim() || (env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
+    port: readPort(env.PORT),
     buildInfo: readBuildInfo(env, options)
   }
 }

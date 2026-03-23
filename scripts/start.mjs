@@ -1,64 +1,69 @@
-import { fileURLToPath } from "node:url";
 import process from "node:process";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   openBrowser,
   parseArgs,
   registerShutdown,
+  runCommand,
+  runCommandCapture,
   spawnCommand,
   waitForReady,
 } from "./shared.mjs";
 
 const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
-const rootDir = fileURLToPath(new URL("..", import.meta.url));
-const defaultImages = {
-  web: process.env.ADE_WEB_IMAGE ?? "ade-web:local",
-  api: process.env.ADE_API_IMAGE ?? "ade-api:local",
-};
-const hasExplicitImageRefs = Boolean(
-  process.env.ADE_WEB_IMAGE || process.env.ADE_API_IMAGE,
-);
+const defaultImage = process.env.ADE_IMAGE ?? "ade:local";
 
-function composeArgs(projectName, ...args) {
-  return ["compose", "--project-name", projectName, ...args];
-}
-
-async function runDocker(args, options = {}) {
-  await new Promise((resolve, reject) => {
-    const child = spawnCommand(dockerCommand, args, {
-      cwd: rootDir,
-      env: options.env,
-      stdio: options.stdio ?? "inherit",
+async function ensureDocker() {
+  try {
+    await runCommand(dockerCommand, ["info"], {
+      stdio: "ignore",
     });
-
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      if (signal !== null) {
-        reject(new Error(`docker exited with signal ${signal}`));
-        return;
-      }
-
-      if (code !== 0) {
-        reject(new Error(`docker exited with code ${code ?? "unknown"}`));
-        return;
-      }
-
-      resolve(undefined);
-    });
-  });
-}
-
-async function waitForExit(child, timeoutMs = 5_000) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
+  } catch {
+    throw new Error(
+      "Docker is required for `pnpm start`, and the Docker daemon must be running.",
+    );
   }
+}
 
-  await Promise.race([
-    new Promise((resolve) => {
-      child.once("exit", () => resolve(undefined));
-    }),
-    delay(timeoutMs),
-  ]);
+async function ensureImage(image) {
+  try {
+    await runCommand(dockerCommand, ["image", "inspect", image], {
+      stdio: "ignore",
+    });
+  } catch {
+    if (process.env.ADE_IMAGE) {
+      throw new Error(
+        `The configured image is not available locally: ${image}. Run \`docker pull ${image}\` or \`pnpm build\`.`,
+      );
+    }
+
+    throw new Error("Run `pnpm build` first.");
+  }
+}
+
+async function removeContainer(name) {
+  try {
+    await runCommand(dockerCommand, ["container", "rm", "--force", name], {
+      stdio: "ignore",
+    });
+  } catch {
+    // Ignore missing-container cleanup failures.
+  }
+}
+
+async function isContainerRunning(name) {
+  try {
+    const { stdout } = await runCommandCapture(
+      dockerCommand,
+      ["container", "inspect", "--format", "{{.State.Running}}", name],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
 }
 
 async function main() {
@@ -66,94 +71,37 @@ async function main() {
     defaultPort: 8000,
     allowNoOpen: true,
   });
-
+  const containerName = `ade-local-${port}`;
   const appUrl = `http://localhost:${port}`;
-  const projectName = `ade-local-${port}`;
-  const imageRefs = [defaultImages.web, defaultImages.api];
-
-  async function ensureDocker() {
-    try {
-      await runDocker(["info"], {
-        stdio: "ignore",
-      });
-    } catch {
-      throw new Error(
-        "Docker is required for `pnpm start`, and the Docker daemon must be running.",
-      );
-    }
-  }
-
-  async function ensureImages() {
-    try {
-      await runDocker(["image", "inspect", ...imageRefs], {
-        stdio: "ignore",
-      });
-    } catch {
-      if (hasExplicitImageRefs) {
-        throw new Error(
-          `The configured images are not available locally: ${imageRefs.join(", ")}. Run \`docker pull\` for those refs or \`pnpm build\` to rebuild the local candidate.`,
-        );
-      }
-
-      throw new Error("Run `pnpm build` first.");
-    }
-  }
-
-  async function composeDown() {
-    try {
-      await runDocker(composeArgs(projectName, "down", "--remove-orphans"), {
-        stdio: "ignore",
-      });
-    } catch {
-      // Ignore compose cleanup failures so startup can continue.
-    }
-  }
 
   await ensureDocker();
-  await ensureImages();
-  await composeDown();
+  await ensureImage(defaultImage);
+  await removeContainer(containerName);
 
-  const compose = spawnCommand(dockerCommand, composeArgs(projectName, "up"), {
-    cwd: rootDir,
-    env: {
-      ADE_API_IMAGE: defaultImages.api,
-      ADE_PORT: String(port),
-      ADE_WEB_IMAGE: defaultImages.web,
+  const container = spawnCommand(
+    dockerCommand,
+    [
+      "run",
+      "--rm",
+      "--name",
+      containerName,
+      "--publish",
+      `${port}:8000`,
+      defaultImage,
+    ],
+    {
+      stdio: "inherit",
     },
-  });
-  let composeError = null;
+  );
   let shuttingDown = false;
-  const composeExited = new Promise((resolve, reject) => {
-    compose.once("error", (error) => {
-      composeError = error;
-      reject(error);
-    });
-    compose.once("exit", (code, signal) => {
-      resolve({
-        code,
-        signal,
-      });
-    });
-  });
 
   const shutdown = registerShutdown(async () => {
     shuttingDown = true;
-    await composeDown();
-    compose.kill("SIGINT");
-    await waitForExit(compose);
-
-    if (compose.exitCode === null && compose.signalCode === null) {
-      compose.kill("SIGKILL");
-      await waitForExit(compose, 1_000);
-    }
+    await removeContainer(containerName);
   });
 
-  compose.on("exit", (code, signal) => {
+  container.on("exit", (code, signal) => {
     if (shuttingDown) {
-      return;
-    }
-
-    if (signal === null && code === 0) {
       return;
     }
 
@@ -171,12 +119,30 @@ async function main() {
     await waitForReady([`${appUrl}/`, `${appUrl}/api/readyz`], {
       timeoutMs: 60_000,
       isAlive: () =>
-        composeError === null &&
-        compose.exitCode === null &&
-        compose.signalCode === null,
+        container.exitCode === null &&
+        container.signalCode === null &&
+        !shuttingDown,
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
+
+    if (await isContainerRunning(containerName)) {
+      try {
+        const { stdout } = await runCommandCapture(
+          dockerCommand,
+          ["logs", containerName],
+          {
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+        if (stdout.trim() !== "") {
+          console.error(stdout.trim());
+        }
+      } catch {
+        // Ignore log collection failures during startup cleanup.
+      }
+    }
+
     await shutdown(1);
     process.exit(1);
   }
@@ -187,21 +153,7 @@ async function main() {
 
   console.log(`ADE is running at ${appUrl}`);
 
-  const result = await composeExited;
-
-  if (shuttingDown) {
-    return;
-  }
-
-  if (result.signal !== null) {
-    throw new Error(`Launcher child exited with signal ${result.signal}.`);
-  }
-
-  if (result.code !== 0) {
-    throw new Error(
-      `Launcher child exited with code ${result.code ?? "unknown"}.`,
-    );
-  }
+  await new Promise(() => {});
 }
 
 void main().catch((error) => {

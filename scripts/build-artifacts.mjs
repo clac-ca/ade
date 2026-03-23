@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import process from "node:process";
@@ -37,14 +43,10 @@ function readGitValue(args) {
 
 async function buildArtifacts() {
   const { builtAt, gitSha } = readGitMetadata();
-  const buildInfoPath = join(
-    rootDir,
-    "apps",
-    "api",
-    ".package",
-    "dist",
-    "build-info.json",
-  );
+  const packageRoot = join(rootDir, "apps", "api", ".package");
+  const buildInfoPath = join(packageRoot, "dist", "build-info.json");
+  const publicPath = join(packageRoot, "public");
+  const webDistPath = join(rootDir, "apps", "web", "dist");
 
   await runCommand(pnpmCommand, ["--filter", "@ade/web", "build"], {
     cwd: rootDir,
@@ -52,7 +54,7 @@ async function buildArtifacts() {
   await runCommand(pnpmCommand, ["--filter", "@ade/api", "build"], {
     cwd: rootDir,
   });
-  rmSync(join(rootDir, "apps", "api", ".package"), {
+  rmSync(packageRoot, {
     force: true,
     recursive: true,
   });
@@ -67,13 +69,20 @@ async function buildArtifacts() {
   mkdirSync(dirname(buildInfoPath), {
     recursive: true,
   });
+  rmSync(publicPath, {
+    force: true,
+    recursive: true,
+  });
+  cpSync(webDistPath, publicPath, {
+    recursive: true,
+  });
   writeFileSync(
     buildInfoPath,
     JSON.stringify(
       {
         builtAt,
         gitSha,
-        service: "ade-api",
+        service: "ade",
         version: apiPackage.version,
       },
       null,

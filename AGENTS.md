@@ -2,7 +2,7 @@
 
 ```text
 .
-├── compose.yaml
+├── Dockerfile
 ├── README.md
 ├── PRINCIPLES.md
 ├── infra/
@@ -18,10 +18,7 @@
 │   └── shared.mjs
 ├── apps/
 │   ├── web/
-│   │   ├── Dockerfile
-│   │   └── nginx.conf
 │   └── api/
-│       └── Dockerfile
 └── python/
     ├── ade-engine/
     └── ade-config-template/

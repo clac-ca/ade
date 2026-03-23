@@ -23,8 +23,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      api_image: ${{ steps.publish_release_candidate.outputs.api_image }}
-      web_image: ${{ steps.publish_release_candidate.outputs.web_image }}
+      image: ${{ steps.publish_release_candidate.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -67,17 +66,12 @@ jobs:
         if: github.event_name == 'push'
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          web_image="ghcr.io/${owner}/ade-web:sha-${GITHUB_SHA}"
-          api_image="ghcr.io/${owner}/ade-api:sha-${GITHUB_SHA}"
+          image="ghcr.io/${owner}/ade:sha-${GITHUB_SHA}"
 
-          docker tag ade-web:local "${web_image}"
-          docker tag ade-api:local "${api_image}"
+          docker tag ade:local "${image}"
+          docker push "${image}"
 
-          docker push "${web_image}"
-          docker push "${api_image}"
-
-          echo "web_image=${web_image}" >> "${GITHUB_OUTPUT}"
-          echo "api_image=${api_image}" >> "${GITHUB_OUTPUT}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
 
   acceptance_stage:
     name: Acceptance Stage
@@ -107,14 +101,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Pull release candidate
+        run: docker pull "${{ needs.commit_stage.outputs.image }}"
+
       - name: Start release candidate
-        env:
-          ADE_API_IMAGE: ${{ needs.commit_stage.outputs.api_image }}
-          ADE_PORT: "4100"
-          ADE_WEB_IMAGE: ${{ needs.commit_stage.outputs.web_image }}
         run: |
-          docker compose pull
-          docker compose up -d
+          docker rm --force ade-acceptance 2>/dev/null || true
+          docker run --detach --rm --name ade-acceptance --publish 4100:8000 "${{ needs.commit_stage.outputs.image }}"
 
       - name: Wait for release candidate
         run: |
@@ -127,7 +120,7 @@ jobs:
 
       - name: Stop release candidate
         if: always()
-        run: docker compose down --remove-orphans
+        run: docker rm --force ade-acceptance || true
 
   release_stage:
     name: Release Stage
@@ -160,11 +153,18 @@ jobs:
 
       - name: Deploy accepted release candidate
         env:
-          ADE_API_IMAGE: ${{ needs.commit_stage.outputs.api_image }}
+          ADE_IMAGE: ${{ needs.commit_stage.outputs.image }}
           ADE_REGISTRY_SERVER: ghcr.io
-          ADE_WEB_IMAGE: ${{ needs.commit_stage.outputs.web_image }}
         run: >
           node scripts/deploy-aca.mjs --environment production
           --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
           --parameters-file infra/environments/main.prod.bicepparam
           --manifest-path production-deployment-manifest.json
+
+      - name: Delete legacy api container app
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: |
+          if az containerapp show --resource-group "${AZURE_RESOURCE_GROUP}" --name api --only-show-errors >/dev/null 2>&1; then
+            az containerapp delete --resource-group "${AZURE_RESOURCE_GROUP}" --name api --yes --only-show-errors
+          fi

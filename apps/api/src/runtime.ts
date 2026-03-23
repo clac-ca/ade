@@ -6,7 +6,8 @@ export type RuntimeOptions = {
   buildInfo: BundledBuildInfo,
   host: string,
   logger?: boolean,
-  port: number
+  port: number,
+  webRoot?: string
 }
 
 export type Runtime = {
@@ -18,14 +19,15 @@ export type Runtime = {
   stop: () => Promise<void>
 }
 
-function createRuntime({ buildInfo, host, logger = true, port }: RuntimeOptions): Runtime {
+function createRuntime({ buildInfo, host, logger = true, port, webRoot }: RuntimeOptions): Runtime {
   const readiness = {
     isReady: false
   }
   const app = createApp({
     buildInfo,
     logger,
-    readiness
+    readiness,
+    webRoot
   })
 
   async function start() {
