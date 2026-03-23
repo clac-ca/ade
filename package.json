@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "lint": "pnpm exec eslint .",
-    "format:check": "pnpm exec prettier --check package.json README.md PRINCIPLES.md .github/workflows/development_pipeline.yml .github/workflows/README.md scripts/*.mjs apps/api/package.json",
+    "format:check": "pnpm exec prettier --check package.json README.md PRINCIPLES.md .github/workflows/deployment_pipeline.yml .github/workflows/README.md scripts/*.mjs apps/api/package.json",
     "typecheck": "pnpm --filter @ade/api typecheck && pnpm --filter @ade/web typecheck",
     "test:unit": "pnpm --filter @ade/api test",
     "package:python": "uv build --directory python/ade-engine && uv build --directory python/ade-config-template",

@@ -8,7 +8,7 @@ It follows a strict three-stage shape:
 2. **Acceptance Stage**
 3. **Release Stage**
 
-The workflow lives at `.github/workflows/development_pipeline.yml`.
+The workflow lives at `.github/workflows/deployment_pipeline.yml`.
 
 ## Why this pipeline looks the way it does
 
@@ -122,7 +122,7 @@ Because the GHCR images are public, the workflow sets `ADE_REGISTRY_SERVER=ghcr.
 
 ## GitHub repository setup required
 
-Create `.github/workflows/development_pipeline.yml` from the file in this directory.
+Create `.github/workflows/deployment_pipeline.yml` from the file in this directory.
 
 Then configure the repo like this:
 
