@@ -34,6 +34,4 @@ pnpm test
 pnpm test:unit
 pnpm test:acceptance
 pnpm clean
-pnpm dev:web
-pnpm dev:api
 ```

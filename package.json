@@ -15,11 +15,8 @@
     "test": "pnpm lint && pnpm test:unit && pnpm build",
     "test:acceptance": "node scripts/acceptance.mjs",
     "build": "node scripts/build.mjs",
-    "deploy:aca": "node scripts/deploy-aca.mjs",
     "start": "node scripts/start.mjs",
-    "clean": "node scripts/clean.mjs",
-    "dev:web": "pnpm --filter @ade/web dev",
-    "dev:api": "pnpm --filter @ade/api dev"
+    "clean": "node scripts/clean.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
