@@ -63,8 +63,7 @@ async function buildImage(tag, contextPath, cacheKey) {
 async function main() {
   await ensureDocker();
   await buildArtifacts();
-  await buildImage("ade-web:local", "apps/web", "web");
-  await buildImage("ade-api:local", "apps/api", "api");
+  await buildImage("ade:local", ".", "app");
 }
 
 void main().catch((error) => {

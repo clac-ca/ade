@@ -11,8 +11,8 @@ test('readConfig returns development defaults when bundled build info is absent'
   })
 
   assert.equal(config.host, '127.0.0.1')
-  assert.equal(config.port, 8001)
-  assert.equal(config.buildInfo.service, 'ade-api')
+  assert.equal(config.port, 8000)
+  assert.equal(config.buildInfo.service, 'ade')
   assert.match(config.buildInfo.version, /\S+/)
   assert.match(config.buildInfo.gitSha, /\S+/)
   assert.match(config.buildInfo.builtAt, /\S+/)
@@ -22,9 +22,9 @@ test('readConfig rejects invalid ports', () => {
   for (const value of ['', '-1', '0', '1e3', '123abc', 'abc']) {
     assert.throws(
       () => readConfig({
-        ADE_API_PORT: value
+        PORT: value
       }),
-      /ADE_API_PORT/
+      /PORT/
     )
   }
 })
@@ -36,7 +36,7 @@ test('readConfig ignores runtime provenance overrides when bundled build info ex
   writeFileSync(buildInfoPath, JSON.stringify({
     builtAt: '2026-03-21T00:00:00.000Z',
     gitSha: 'sha-from-file',
-    service: 'ade-api',
+    service: 'ade',
     version: 'version-from-file'
   }))
 
@@ -51,7 +51,7 @@ test('readConfig ignores runtime provenance overrides when bundled build info ex
   assert.deepStrictEqual(config.buildInfo, {
     builtAt: '2026-03-21T00:00:00.000Z',
     gitSha: 'sha-from-file',
-    service: 'ade-api',
+    service: 'ade',
     version: 'version-from-file'
   })
 })
@@ -74,7 +74,7 @@ test('readConfig rejects invalid bundled build info', () => {
   writeFileSync(buildInfoPath, JSON.stringify({
     builtAt: '',
     gitSha: 'sha',
-    service: 'ade-api',
+    service: 'ade',
     version: '0.1.0'
   }))
 

@@ -6,8 +6,9 @@ ADE is a document operations platform for messy spreadsheets. The TypeScript app
 
 ## Repository Layout
 
+- `Dockerfile` - single production image definition
 - `apps/web` - React web app
-- `apps/api` - Fastify API
+- `apps/api` - Fastify API and production web host
 - `python/ade-engine` - extraction runtime package
 - `python/ade-config-template` - configurable template package
 - `infra/` - infrastructure definitions
@@ -32,22 +33,22 @@ ADE opens at `http://localhost:8000`.
 
 ## Root Commands
 
-| Command                | Use it for                                                                  |
-| ---------------------- | --------------------------------------------------------------------------- |
-| `pnpm dev`             | Run the full watch-mode development environment                             |
-| `pnpm dev:web`         | Run only the web app                                                        |
-| `pnpm dev:api`         | Run only the API                                                            |
-| `pnpm lint`            | Run ESLint across the repo                                                  |
-| `pnpm format:check`    | Check the pipeline-owned repo files with Prettier                           |
-| `pnpm typecheck`       | Run the TypeScript typechecks                                               |
-| `pnpm test`            | Run the local commit-stage gate: lint, unit tests, then build               |
-| `pnpm test:unit`       | Run the API unit tests                                                      |
-| `pnpm test:acceptance` | Run the acceptance checks for a deployed environment via `ADE_BASE_URL`     |
-| `pnpm package:python`  | Build the Python packages                                                   |
-| `pnpm build`           | Build the local candidate artifacts and images, not the published candidate |
-| `pnpm deploy:aca`      | Deploy image refs to Azure Container Apps using the repo Bicep contract     |
-| `pnpm start`           | Run the built local images                                                  |
-| `pnpm clean`           | Remove generated local output and local images                              |
+| Command                | Use it for                                                              |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `pnpm dev`             | Run the full watch-mode development environment                         |
+| `pnpm dev:web`         | Run only the web app                                                    |
+| `pnpm dev:api`         | Run only the API                                                        |
+| `pnpm lint`            | Run ESLint across the repo                                              |
+| `pnpm format:check`    | Check the pipeline-owned repo files with Prettier                       |
+| `pnpm typecheck`       | Run the TypeScript typechecks                                           |
+| `pnpm test`            | Run the local commit-stage gate: lint, unit tests, then build           |
+| `pnpm test:unit`       | Run the API unit tests                                                  |
+| `pnpm test:acceptance` | Run the acceptance checks for a deployed environment via `ADE_BASE_URL` |
+| `pnpm package:python`  | Build the Python packages                                               |
+| `pnpm build`           | Build the single local release-candidate image `ade:local`              |
+| `pnpm deploy:aca`      | Deploy one image to Azure Container Apps using the repo Bicep contract  |
+| `pnpm start`           | Run the built local image                                               |
+| `pnpm clean`           | Remove generated local output and local images                          |
 
 ## Common Flows
 
@@ -91,11 +92,13 @@ pnpm test
 pnpm test:unit
 ADE_BASE_URL=https://example.test pnpm test:acceptance
 pnpm package:python
-ADE_WEB_IMAGE=ghcr.io/example/ade-web@sha256:... ADE_API_IMAGE=ghcr.io/example/ade-api@sha256:... pnpm deploy:aca -- --environment acceptance --resource-group my-rg --parameters-file infra/environments/main.acceptance.bicepparam
+ADE_IMAGE=ghcr.io/example/ade@sha256:... pnpm deploy:aca -- --environment acceptance --resource-group my-rg --parameters-file infra/environments/main.acceptance.bicepparam
 pnpm clean
 pnpm dev:web
 pnpm dev:api
 ```
+
+`pnpm build` creates the local release candidate. The deployment pipeline publishes that same built candidate to GHCR on pushes to `main`.
 
 ## Related Docs
 

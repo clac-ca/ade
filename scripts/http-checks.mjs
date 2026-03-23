@@ -53,9 +53,9 @@ async function assertAppShell(baseUrl) {
 async function assertHealth(baseUrl) {
   const payload = await readJson(`${baseUrl}/api/healthz`, "API health check");
 
-  if (payload.service !== "ade-api" || payload.status !== "ok") {
+  if (payload.service !== "ade" || payload.status !== "ok") {
     throw new Error(
-      'Expected /api/healthz to report service "ade-api" with status "ok".',
+      'Expected /api/healthz to report service "ade" with status "ok".',
     );
   }
 }
@@ -66,9 +66,9 @@ async function assertReady(baseUrl) {
     "API readiness check",
   );
 
-  if (payload.service !== "ade-api" || payload.status !== "ready") {
+  if (payload.service !== "ade" || payload.status !== "ready") {
     throw new Error(
-      'Expected /api/readyz to report service "ade-api" with status "ready".',
+      'Expected /api/readyz to report service "ade" with status "ready".',
     );
   }
 }
@@ -85,18 +85,16 @@ async function assertVersion(baseUrl) {
   assertString(payload.builtAt, "version payload builtAt");
   assertString(payload.nodeVersion, "version payload nodeVersion");
 
-  if (payload.service !== "ade-api") {
-    throw new Error('Expected /api/version to report service "ade-api".');
+  if (payload.service !== "ade") {
+    throw new Error('Expected /api/version to report service "ade".');
   }
 }
 
 async function assertApiRoot(baseUrl) {
   const payload = await readJson(`${baseUrl}/api/`, "API root endpoint");
 
-  if (payload.service !== "ade-api" || payload.status !== "ok") {
-    throw new Error(
-      'Expected /api/ to report service "ade-api" with status "ok".',
-    );
+  if (payload.service !== "ade" || payload.status !== "ok") {
+    throw new Error('Expected /api/ to report service "ade" with status "ok".');
   }
 
   assertString(payload.version, "API root version");

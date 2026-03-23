@@ -8,22 +8,20 @@ test('default root route', async (t) => {
   const res = await app.inject({
     url: '/'
   })
-  assert.deepStrictEqual(JSON.parse(res.payload), {
-    service: 'ade-api',
-    status: 'ok',
-    version: 'test-version'
-  })
+  assert.equal(res.statusCode, 200)
+  assert.match(res.headers['content-type'] ?? '', /text\/html/)
+  assert.match(res.payload, /id="root"/)
 })
 
 test('health route', async (t) => {
   const { app } = await build(t)
 
   const res = await app.inject({
-    url: '/healthz'
+    url: '/api/healthz'
   })
   assert.equal(res.statusCode, 200)
   assert.deepStrictEqual(JSON.parse(res.payload), {
-    service: 'ade-api',
+    service: 'ade',
     status: 'ok'
   })
 })
@@ -34,22 +32,22 @@ test('ready route reflects readiness state', async (t) => {
   })
 
   const notReady = await app.inject({
-    url: '/readyz'
+    url: '/api/readyz'
   })
   assert.equal(notReady.statusCode, 503)
   assert.deepStrictEqual(JSON.parse(notReady.payload), {
-    service: 'ade-api',
+    service: 'ade',
     status: 'not-ready'
   })
 
   readiness.isReady = true
 
   const ready = await app.inject({
-    url: '/readyz'
+    url: '/api/readyz'
   })
   assert.equal(ready.statusCode, 200)
   assert.deepStrictEqual(JSON.parse(ready.payload), {
-    service: 'ade-api',
+    service: 'ade',
     status: 'ready'
   })
 })
@@ -58,7 +56,7 @@ test('version route exposes build metadata', async (t) => {
   const { app, buildInfo } = await build(t)
 
   const res = await app.inject({
-    url: '/version'
+    url: '/api/version'
   })
 
   assert.equal(res.statusCode, 200)
@@ -66,4 +64,26 @@ test('version route exposes build metadata', async (t) => {
     ...buildInfo,
     nodeVersion: process.version
   })
+})
+
+test('spa fallback serves index html for unknown frontend routes', async (t) => {
+  const { app } = await build(t)
+
+  const res = await app.inject({
+    url: '/documents/example'
+  })
+
+  assert.equal(res.statusCode, 200)
+  assert.match(res.headers['content-type'] ?? '', /text\/html/)
+  assert.match(res.payload, /id="root"/)
+})
+
+test('unknown api routes still return 404', async (t) => {
+  const { app } = await build(t)
+
+  const res = await app.inject({
+    url: '/api/unknown'
+  })
+
+  assert.equal(res.statusCode, 404)
 })

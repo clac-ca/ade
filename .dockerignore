@@ -1,0 +1,8 @@
+.buildx-cache
+.git
+.github
+node_modules
+python/*/dist
+apps/*/node_modules
+apps/*/coverage
+apps/*/dist

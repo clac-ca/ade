@@ -16,32 +16,21 @@ async function tryRun(command, args, options = {}) {
   }
 }
 
-function readComposeProjects() {
+function readAdeContainers() {
   try {
     const output = execFileSync(
       dockerCommand,
-      [
-        "ps",
-        "-a",
-        "--filter",
-        "label=com.docker.compose.project",
-        "--format",
-        '{{.Label "com.docker.compose.project"}}',
-      ],
+      ["ps", "-a", "--filter", "name=^ade-local-", "--format", "{{.Names}}"],
       {
         cwd: rootDir,
         encoding: "utf8",
       },
     );
 
-    return [
-      ...new Set(
-        output
-          .split("\n")
-          .map((value) => value.trim())
-          .filter((value) => value.startsWith("ade-local-")),
-      ),
-    ];
+    return output
+      .split("\n")
+      .map((value) => value.trim())
+      .filter(Boolean);
   } catch {
     return [];
   }
@@ -68,24 +57,18 @@ async function main() {
     force: true,
     recursive: true,
   });
-  for (const projectName of readComposeProjects()) {
-    await tryRun(
-      dockerCommand,
-      ["compose", "--project-name", projectName, "down", "--remove-orphans"],
-      {
-        cwd: rootDir,
-        stdio: "ignore",
-      },
-    );
-  }
-  await tryRun(
-    dockerCommand,
-    ["image", "rm", "--force", "ade-web:local", "ade-api:local"],
-    {
+
+  for (const containerName of readAdeContainers()) {
+    await tryRun(dockerCommand, ["container", "rm", "--force", containerName], {
       cwd: rootDir,
       stdio: "ignore",
-    },
-  );
+    });
+  }
+
+  await tryRun(dockerCommand, ["image", "rm", "--force", "ade:local"], {
+    cwd: rootDir,
+    stdio: "ignore",
+  });
 }
 
 void main().catch((error) => {
