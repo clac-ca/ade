@@ -48,8 +48,56 @@ async function main() {
     },
   );
   rmSync(
+    fileURLToPath(new URL("../packages/ade-config/dist", import.meta.url)),
+    {
+      force: true,
+      recursive: true,
+    },
+  );
+  rmSync(
+    fileURLToPath(new URL("../packages/ade-engine/.venv", import.meta.url)),
+    {
+      force: true,
+      recursive: true,
+    },
+  );
+  rmSync(
+    fileURLToPath(new URL("../packages/ade-config/.venv", import.meta.url)),
+    {
+      force: true,
+      recursive: true,
+    },
+  );
+  rmSync(
+    fileURLToPath(new URL("../packages/ade-engine/uv.lock", import.meta.url)),
+    {
+      force: true,
+    },
+  );
+  rmSync(
+    fileURLToPath(new URL("../packages/ade-config/uv.lock", import.meta.url)),
+    {
+      force: true,
+    },
+  );
+  rmSync(
     fileURLToPath(
-      new URL("../packages/ade-config-template/dist", import.meta.url),
+      new URL(
+        "../packages/ade-engine/src/ade_engine/__pycache__",
+        import.meta.url,
+      ),
+    ),
+    {
+      force: true,
+      recursive: true,
+    },
+  );
+  rmSync(
+    fileURLToPath(
+      new URL(
+        "../packages/ade-config/src/ade_config/__pycache__",
+        import.meta.url,
+      ),
     ),
     {
       force: true,

@@ -21,7 +21,7 @@
 │   └── ade-web/
 └── packages/
     ├── ade-engine/
-    └── ade-config-template/
+    └── ade-config/
 ```
 
 ```sh
@@ -33,5 +33,6 @@ pnpm lint
 pnpm test
 pnpm test:unit
 pnpm test:acceptance
+pnpm package:python
 pnpm clean
 ```

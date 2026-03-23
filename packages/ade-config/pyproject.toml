@@ -1,0 +1,18 @@
+[project]
+name = "ade-config"
+version = "0.1.0"
+description = "Installed ADE business package and CLI"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["ade-engine==0.1.0", "typer>=0.24,<0.25"]
+
+[project.scripts]
+ade = "ade_config.cli:app"
+
+# Local in-repo development uses the adjacent ade-engine source in editable mode.
+[tool.uv.sources]
+ade-engine = { path = "../ade-engine", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.9.28,<0.10.0"]
+build-backend = "uv_build"
