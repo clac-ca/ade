@@ -13,7 +13,7 @@ ADE is a document operations platform for messy spreadsheets.
 
 ## Requirements
 
-- Node.js 22+
+- Node.js 24+
 - pnpm 10+
 - Python 3.12
 - Docker

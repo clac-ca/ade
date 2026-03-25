@@ -3,7 +3,7 @@
   "name": "ade",
   "private": true,
   "engines": {
-    "node": ">=22 <23"
+    "node": ">=24 <25"
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
