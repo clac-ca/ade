@@ -1,7 +1,6 @@
 param accountName string
 param blobContainerName string
-param privateEndpointSubnetId string
-param privateDnsZoneId string
+param virtualNetworkSubnetId string
 param location string
 param tags object = {}
 
@@ -17,7 +16,17 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2024-01-01' = {
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
     minimumTlsVersion: 'TLS1_2'
-    publicNetworkAccess: 'Disabled'
+    networkAcls: {
+      bypass: 'None'
+      defaultAction: 'Deny'
+      virtualNetworkRules: [
+        {
+          action: 'Allow'
+          id: virtualNetworkSubnetId
+        }
+      ]
+    }
+    publicNetworkAccess: 'Enabled'
     supportsHttpsTrafficOnly: true
   }
 }
@@ -32,43 +41,6 @@ resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/container
   name: blobContainerName
   properties: {
     publicAccess: 'None'
-  }
-}
-
-resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
-  name: 'pep-${accountName}-blob'
-  location: location
-  tags: tags
-  properties: {
-    privateLinkServiceConnections: [
-      {
-        name: 'blob'
-        properties: {
-          groupIds: [
-            'blob'
-          ]
-          privateLinkServiceId: storageAccount.id
-        }
-      }
-    ]
-    subnet: {
-      id: privateEndpointSubnetId
-    }
-  }
-}
-
-resource privateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
-  parent: privateEndpoint
-  name: 'default'
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: 'blob'
-        properties: {
-          privateDnsZoneId: privateDnsZoneId
-        }
-      }
-    ]
   }
 }
 

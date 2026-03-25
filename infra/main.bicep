@@ -42,14 +42,11 @@ param virtualNetworkName string = '${prefix}-vnet'
 @description('Name for the Container Apps infrastructure subnet.')
 param containerAppsSubnetName string = 'aca-infra'
 
-@description('Name for the private endpoint subnet.')
-param privateEndpointSubnetName string = 'private-endpoints'
-
 @description('Name for the Azure SQL logical server.')
 param sqlServerName string = '${prefix}-sql'
 
 @description('Name for the Azure SQL database.')
-param sqlDatabaseName string = prefix
+param sqlDatabaseName string = 'sqldb-${prefix}'
 
 @description('Name for the Azure Storage account.')
 param storageAccountName string
@@ -81,19 +78,14 @@ param virtualNetworkAddressPrefix string = '10.42.0.0/16'
 @description('Address prefix for the Container Apps subnet.')
 param containerAppsSubnetAddressPrefix string = '10.42.0.0/27'
 
-@description('Address prefix for the private endpoint subnet.')
-param privateEndpointSubnetAddressPrefix string = '10.42.0.32/27'
-
 var mergedTags = union({
   project: 'ade'
 }, tags)
 var githubOidcSubject = 'repo:${githubOrganization}/${githubRepository}:environment:${githubEnvironmentName}'
-var blobPrivateDnsZoneName = 'privatelink.blob.${environment().suffixes.storage}'
 var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 )
-var sqlPrivateDnsZoneName = 'privatelink${environment().suffixes.sqlServerHostname}'
 
 resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: deploymentManagedIdentityName
@@ -120,13 +112,9 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2024-01-01' existing 
 module network 'modules/network.bicep' = {
   name: 'adeNetwork'
   params: {
-    blobPrivateDnsZoneName: blobPrivateDnsZoneName
     containerAppsSubnetAddressPrefix: containerAppsSubnetAddressPrefix
     containerAppsSubnetName: containerAppsSubnetName
     location: location
-    privateEndpointSubnetAddressPrefix: privateEndpointSubnetAddressPrefix
-    privateEndpointSubnetName: privateEndpointSubnetName
-    sqlPrivateDnsZoneName: sqlPrivateDnsZoneName
     tags: mergedTags
     virtualNetworkAddressPrefix: virtualNetworkAddressPrefix
     virtualNetworkName: virtualNetworkName
@@ -151,10 +139,9 @@ module sql 'modules/sql-database.bicep' = {
     deploymentManagedIdentityName: deploymentManagedIdentity.name
     deploymentManagedIdentityClientId: deploymentManagedIdentity.properties.clientId
     location: location
-    privateDnsZoneId: network.outputs.sqlPrivateDnsZoneId
-    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     serverName: sqlServerName
     tags: mergedTags
+    virtualNetworkSubnetId: network.outputs.containerAppsSubnetId
   }
 }
 
@@ -164,9 +151,8 @@ module storage 'modules/storage-account.bicep' = {
     accountName: storageAccountName
     blobContainerName: blobContainerName
     location: location
-    privateDnsZoneId: network.outputs.blobPrivateDnsZoneId
-    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     tags: mergedTags
+    virtualNetworkSubnetId: network.outputs.containerAppsSubnetId
   }
 }
 

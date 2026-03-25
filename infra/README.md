@@ -6,8 +6,7 @@ That template deploys the production resource group shape ADE runs on:
 
 - one deployment user-assigned managed identity
 - one GitHub OIDC federated credential on that deployment identity
-- one VNet with a Container Apps subnet and a private endpoint subnet
-- private DNS zones for Azure SQL and Blob Storage
+- one VNet with a delegated Container Apps subnet that enables service endpoints for Azure SQL and Blob Storage
 - one Azure SQL logical server and database
 - one Blob Storage account and blob container
 - one Log Analytics workspace
@@ -39,7 +38,7 @@ These are the production names used by [`infra/environments/main.prod.bicepparam
 - Migration job: `job-ade-migrate-prod-cc-002`
 - Virtual network: `vnet-ade-prod-canadacentral-002`
 - Azure SQL logical server: `sql-ade-prod-cc-002`
-- Azure SQL database: `ade`
+- Azure SQL database: `sqldb-ade-prod-cc-002`
 - Storage account: `stadeprodcc002`
 - Blob container: `documents`
 - Region: `canadacentral`
@@ -53,8 +52,10 @@ Lock these assumptions in:
 - the migration job authenticates to Azure SQL with the **deployment managed identity**
 - the deployment managed identity is also the Azure SQL logical server's Microsoft Entra admin
 - the SQL logical server itself has a **system-assigned managed identity**
-- Azure SQL public network access is disabled
-- Blob Storage public network access is disabled
+- the Container Apps subnet uses **service endpoints** for `Microsoft.Sql` and `Microsoft.Storage.Global`
+- Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a **virtual network rule**
+- Blob Storage public network access stays enabled, but access is restricted to the Container Apps subnet with **storage firewall virtual network rules**
+- the Azure SQL database uses the **General Purpose serverless** compute tier with auto-pause enabled
 - runtime SQL passwords and Storage account keys are intentionally not part of the production design
 
 ## Prerequisites

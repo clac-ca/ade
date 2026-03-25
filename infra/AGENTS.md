@@ -9,7 +9,7 @@
 
 ## In Practice
 
-- Bicep owns the deployment identity, federated credential, VNet, private DNS, Azure SQL Database, Blob Storage, Container Apps environment, Container App, migration job, ingress, and scale settings.
+- Bicep owns the deployment identity, federated credential, VNet, subnet service endpoints, Azure SQL Database, Blob Storage, Container Apps environment, Container App, migration job, ingress, and scale settings.
 - The running Container App uses a system-assigned managed identity.
 - The manual migration job uses the deployment managed identity.
 - `infra/README.md` shows the exact direct `az`, `gh`, and Microsoft Graph PowerShell commands to bootstrap a new production resource group and hand off to the deployment pipeline.
