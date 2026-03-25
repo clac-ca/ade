@@ -6,7 +6,7 @@ That template deploys the production resource group shape ADE runs on:
 
 - one deployment user-assigned managed identity
 - one GitHub OIDC federated credential on that deployment identity
-- one VNet with a delegated Container Apps subnet that enables service endpoints for Azure SQL and Blob Storage
+- one VNet with a delegated Container Apps subnet that enables same-region service endpoints for Azure SQL and Blob Storage
 - one Azure SQL logical server and database
 - one Blob Storage account and blob container
 - one Log Analytics workspace
@@ -52,11 +52,13 @@ Lock these assumptions in:
 - the migration job authenticates to Azure SQL with the **deployment managed identity**
 - the deployment managed identity is also the Azure SQL logical server's Microsoft Entra admin
 - the SQL logical server itself has a **system-assigned managed identity**
-- the Container Apps subnet uses **service endpoints** for `Microsoft.Sql` and `Microsoft.Storage.Global`
+- the Container Apps subnet uses **service endpoints** for `Microsoft.Sql` and same-region `Microsoft.Storage`
 - Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a **virtual network rule**
 - Blob Storage public network access stays enabled, but access is restricted to the Container Apps subnet with **storage firewall virtual network rules**
 - the Azure SQL database uses the **General Purpose serverless** compute tier with auto-pause enabled
 - runtime SQL passwords and Storage account keys are intentionally not part of the production design
+
+`Microsoft.Storage.Global` is intentionally not used today. Revisit it only if ADE later needs cross-region storage access from the Container Apps subnet.
 
 ## Prerequisites
 
@@ -142,7 +144,7 @@ The deployment identity needs three Azure RBAC grants:
 
 The current template creates one Azure RBAC resource for the running app:
 
-- `Storage Blob Data Contributor` on the storage account for the Container App system-assigned identity
+- `Storage Blob Data Contributor` on the `documents` blob container for the Container App system-assigned identity
 
 That Bicep resource is created with `Microsoft.Authorization/roleAssignments`, so the deployment identity must have permission for `Microsoft.Authorization/roleAssignments/write`.
 
@@ -247,7 +249,7 @@ az deployment group create \
   --parameters infra/environments/main.prod.bicepparam
 ```
 
-Resolve the running app principal ID and the storage account ID:
+Resolve the running app principal ID and the blob container ID:
 
 ```sh
 export ADE_APP_PRINCIPAL_ID="$(
@@ -258,10 +260,11 @@ export ADE_APP_PRINCIPAL_ID="$(
     --output tsv
 )"
 
-export ADE_STORAGE_ACCOUNT_ID="$(
-  az storage account show \
-    --name stadeprodcc002 \
-    --resource-group rg-ade-prod-canadacentral-002 \
+export ADE_BLOB_CONTAINER_ID="$(
+  az storage container show \
+    --name documents \
+    --account-name stadeprodcc002 \
+    --auth-mode login \
     --query id \
     --output tsv
 )"
@@ -272,7 +275,7 @@ Confirm the Bicep-created storage RBAC assignment exists:
 ```sh
 az role assignment list \
   --assignee-object-id "${ADE_APP_PRINCIPAL_ID}" \
-  --scope "${ADE_STORAGE_ACCOUNT_ID}" \
+  --scope "${ADE_BLOB_CONTAINER_ID}" \
   --output table
 ```
 

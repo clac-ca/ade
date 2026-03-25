@@ -1,7 +1,7 @@
 param serverName string
 param databaseName string
 param deploymentManagedIdentityName string
-param deploymentManagedIdentityClientId string
+param deploymentManagedIdentityPrincipalId string
 param virtualNetworkSubnetId string
 param location string
 param tags object = {}
@@ -12,7 +12,7 @@ param skuCapacity int = 2
 param autoPauseDelay int = 60
 var minCapacity = json('0.5')
 
-resource sqlServer 'Microsoft.Sql/servers@2024-05-01-preview' = {
+resource sqlServer 'Microsoft.Sql/servers@2023-08-01' = {
   name: serverName
   location: location
   identity: {
@@ -20,21 +20,24 @@ resource sqlServer 'Microsoft.Sql/servers@2024-05-01-preview' = {
   }
   tags: tags
   properties: {
-    administrators: {
-      administratorType: 'ActiveDirectory'
-      azureADOnlyAuthentication: true
-      login: deploymentManagedIdentityName
-      principalType: 'Application'
-      sid: deploymentManagedIdentityClientId
-      tenantId: tenant().tenantId
-    }
     minimalTlsVersion: '1.2'
     publicNetworkAccess: 'Enabled'
     version: '12.0'
   }
 }
 
-resource sqlDatabase 'Microsoft.Sql/servers/databases@2024-05-01-preview' = {
+resource sqlAdministrator 'Microsoft.Sql/servers/administrators@2023-08-01' = {
+  parent: sqlServer
+  name: 'ActiveDirectory'
+  properties: {
+    administratorType: 'ActiveDirectory'
+    login: deploymentManagedIdentityName
+    sid: deploymentManagedIdentityPrincipalId
+    tenantId: tenant().tenantId
+  }
+}
+
+resource sqlDatabase 'Microsoft.Sql/servers/databases@2023-08-01' = {
   parent: sqlServer
   name: databaseName
   location: location
@@ -51,7 +54,7 @@ resource sqlDatabase 'Microsoft.Sql/servers/databases@2024-05-01-preview' = {
   }
 }
 
-resource sqlEntraOnlyAuth 'Microsoft.Sql/servers/azureADOnlyAuthentications@2024-05-01-preview' = {
+resource sqlEntraOnlyAuth 'Microsoft.Sql/servers/azureADOnlyAuthentications@2023-08-01' = {
   parent: sqlServer
   name: 'Default'
   properties: {
@@ -59,7 +62,7 @@ resource sqlEntraOnlyAuth 'Microsoft.Sql/servers/azureADOnlyAuthentications@2024
   }
 }
 
-resource virtualNetworkRule 'Microsoft.Sql/servers/virtualNetworkRules@2024-05-01-preview' = {
+resource virtualNetworkRule 'Microsoft.Sql/servers/virtualNetworkRules@2023-08-01' = {
   parent: sqlServer
   name: 'aca'
   properties: {

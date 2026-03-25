@@ -39,7 +39,7 @@ resource containerAppsSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-
         ]
       }
       {
-        service: 'Microsoft.Storage.Global'
+        service: 'Microsoft.Storage'
         locations: [
           location
         ]

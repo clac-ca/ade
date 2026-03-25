@@ -109,6 +109,16 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2024-01-01' existing 
   name: storageAccountName
 }
 
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2024-01-01' existing = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2024-01-01' existing = {
+  parent: blobService
+  name: blobContainerName
+}
+
 module network 'modules/network.bicep' = {
   name: 'adeNetwork'
   params: {
@@ -137,7 +147,7 @@ module sql 'modules/sql-database.bicep' = {
   params: {
     databaseName: sqlDatabaseName
     deploymentManagedIdentityName: deploymentManagedIdentity.name
-    deploymentManagedIdentityClientId: deploymentManagedIdentity.properties.clientId
+    deploymentManagedIdentityPrincipalId: deploymentManagedIdentity.properties.principalId
     location: location
     serverName: sqlServerName
     tags: mergedTags
@@ -182,6 +192,47 @@ module app 'modules/container-app.bicep' = {
         value: '8000'
       }
     ]
+    probes: [
+      {
+        type: 'Startup'
+        httpGet: {
+          path: '/api/healthz'
+          port: 8000
+          scheme: 'HTTP'
+        }
+        initialDelaySeconds: 1
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 24
+        successThreshold: 1
+      }
+      {
+        type: 'Readiness'
+        httpGet: {
+          path: '/api/readyz'
+          port: 8000
+          scheme: 'HTTP'
+        }
+        initialDelaySeconds: 1
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 3
+        successThreshold: 1
+      }
+      {
+        type: 'Liveness'
+        httpGet: {
+          path: '/api/healthz'
+          port: 8000
+          scheme: 'HTTP'
+        }
+        initialDelaySeconds: 10
+        periodSeconds: 30
+        timeoutSeconds: 3
+        failureThreshold: 3
+        successThreshold: 1
+      }
+    ]
     externalIngress: true
     image: image
     managedEnvironmentId: platform.outputs.containerAppsEnvironmentId
@@ -194,8 +245,8 @@ module app 'modules/container-app.bicep' = {
 }
 
 resource blobDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, appName, storageBlobDataContributorRoleDefinitionId)
-  scope: storageAccount
+  name: guid(blobContainer.id, appName, storageBlobDataContributorRoleDefinitionId)
+  scope: blobContainer
   properties: {
     principalId: app.outputs.principalId
     roleDefinitionId: storageBlobDataContributorRoleDefinitionId

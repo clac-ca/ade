@@ -12,6 +12,7 @@ param allowInsecure bool = false
 ])
 param transport string = 'auto'
 param env array = []
+param probes array = []
 param cpu string = '0.25'
 param memory string = '0.5Gi'
 param minReplicas int = 1
@@ -48,6 +49,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: env
           image: image
           name: name
+          probes: probes
           resources: {
             cpu: json(cpu)
             memory: memory
