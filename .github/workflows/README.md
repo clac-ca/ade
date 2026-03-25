@@ -85,10 +85,7 @@ Current ADE acceptance stage:
 
 The acceptance environment is the GitHub runner itself. It is not a separate Azure staging deployment.
 
-The app still receives the same standard env names it uses everywhere else:
-
-- `AZURE_SQL_CONNECTIONSTRING`
-- `AZURE_STORAGEBLOB_CONNECTIONSTRING`
+The app still receives the same runtime env names documented in [docs/environment-variables.md](../../docs/environment-variables.md).
 
 There are no acceptance-specific application env names in the runtime contract.
 
@@ -116,6 +113,9 @@ The split is intentional:
 That keeps the infrastructure definition declarative and keeps migration execution visible in `release_stage`.
 
 ## GitHub repository setup required
+
+Shared runtime variable names are documented in [docs/environment-variables.md](../../docs/environment-variables.md).
+This document only covers workflow-specific variables and deployment wiring.
 
 Then configure the repo like this:
 
@@ -157,3 +157,5 @@ pnpm test
 pnpm start
 ADE_BASE_URL=http://localhost:8000 pnpm test:acceptance
 ```
+
+Runtime env reference: [docs/environment-variables.md](../../docs/environment-variables.md)

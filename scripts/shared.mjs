@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { spawn } from "node:child_process";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -14,6 +14,40 @@ const devPortOffsets = {
   web: 0,
 };
 const maxDevPortOffset = Math.max(...Object.values(devPortOffsets));
+
+export function loadOptionalEnvFile(path = ".env") {
+  if (!existsSync(path)) {
+    return;
+  }
+
+  process.loadEnvFile(path);
+}
+
+export function readOptionalPort(value, name = "PORT") {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const rawValue = value.trim();
+
+  if (rawValue === "") {
+    return undefined;
+  }
+
+  if (!/^[1-9]\d*$/.test(rawValue)) {
+    throw new Error(
+      `${name} must be a positive integer, received: ${rawValue}`,
+    );
+  }
+
+  const parsed = Number.parseInt(rawValue, 10);
+
+  if (parsed > 65_535) {
+    throw new Error(`${name} must be 65535 or lower, received: ${rawValue}`);
+  }
+
+  return parsed;
+}
 
 export function parseArgs(argv, options = {}) {
   const { defaultPort, allowNoOpen = false } = options;
