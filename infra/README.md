@@ -26,6 +26,9 @@ That split is intentional:
 - Bicep owns declarative resource creation
 - the release workflow owns the imperative "run migrations now" step
 
+Shared runtime environment variable names are documented in [docs/environment-variables.md](../docs/environment-variables.md).
+This document stays focused on Azure resource shape, bootstrap, and deployment flow.
+
 ## Production names
 
 These are the production names used by [`environments/main.prod.bicepparam`](environments/main.prod.bicepparam):

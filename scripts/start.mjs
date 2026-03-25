@@ -1,7 +1,9 @@
 import process from "node:process";
 import {
+  loadOptionalEnvFile,
   openBrowser,
   parseArgs,
+  readOptionalPort,
   registerShutdown,
   runCommand,
   runCommandCapture,
@@ -11,6 +13,13 @@ import {
 
 const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
 const defaultImage = process.env.ADE_IMAGE ?? "ade:local";
+const runtimeEnvNames = [
+  "HOST",
+  "PORT",
+  "AZURE_SQL_CONNECTIONSTRING",
+  "AZURE_STORAGEBLOB_CONNECTIONSTRING",
+  "AZURE_STORAGEBLOB_RESOURCEENDPOINT",
+];
 
 async function ensureDocker() {
   try {
@@ -67,12 +76,18 @@ async function isContainerRunning(name) {
 }
 
 async function main() {
+  loadOptionalEnvFile();
+
+  const runtimePort = readOptionalPort(process.env.PORT) ?? 8000;
   const { port, noOpen } = parseArgs(process.argv.slice(2), {
     defaultPort: 8000,
     allowNoOpen: true,
   });
   const containerName = `ade-local-${port}`;
   const appUrl = `http://localhost:${port}`;
+  const runtimeEnvArgs = runtimeEnvNames.flatMap((name) =>
+    process.env[name]?.trim() ? ["--env", name] : [],
+  );
 
   await ensureDocker();
   await ensureImage(defaultImage);
@@ -86,7 +101,8 @@ async function main() {
       "--name",
       containerName,
       "--publish",
-      `${port}:8000`,
+      `${port}:${runtimePort}`,
+      ...runtimeEnvArgs,
       defaultImage,
     ],
     {

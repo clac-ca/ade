@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "lint": "pnpm exec eslint .",
-    "format:check": "pnpm exec prettier --check package.json compose.yaml README.md AGENTS.md PRINCIPLES.md infra/README.md infra/AGENTS.md .github/workflows/deployment_pipeline.yml .github/workflows/README.md scripts/*.mjs apps/ade-api/package.json packages/ade-config/README.md packages/ade-engine/README.md",
+    "format:check": "pnpm exec prettier --check package.json compose.yaml README.md AGENTS.md PRINCIPLES.md docs/environment-variables.md infra/README.md infra/AGENTS.md .github/workflows/deployment_pipeline.yml .github/workflows/README.md scripts/*.mjs apps/ade-api/package.json packages/ade-config/README.md packages/ade-engine/README.md",
     "typecheck": "pnpm --filter @ade/api typecheck && pnpm --filter @ade/web typecheck",
     "test:unit": "pnpm --filter @ade/api test",
     "package:python": "uv build --directory packages/ade-engine && uv build --directory packages/ade-config",
