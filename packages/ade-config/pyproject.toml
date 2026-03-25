@@ -14,5 +14,5 @@ ade = "ade_config.cli:app"
 ade-engine = { path = "../ade-engine", editable = true }
 
 [build-system]
-requires = ["uv_build>=0.9.28,<0.10.0"]
+requires = ["uv_build>=0.9.28,<0.12.0"]
 build-backend = "uv_build"
