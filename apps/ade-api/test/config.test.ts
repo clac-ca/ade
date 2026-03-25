@@ -16,6 +16,9 @@ test('readConfig returns development defaults when bundled build info is absent'
   assert.match(config.buildInfo.version, /\S+/)
   assert.match(config.buildInfo.gitSha, /\S+/)
   assert.match(config.buildInfo.builtAt, /\S+/)
+  assert.equal(config.sqlConnectionString, undefined)
+  assert.equal(config.blobStorage.connectionString, undefined)
+  assert.equal(config.blobStorage.resourceEndpoint, undefined)
 })
 
 test('readConfig rejects invalid ports', () => {
@@ -83,5 +86,41 @@ test('readConfig rejects invalid bundled build info', () => {
       buildInfoPath
     }),
     /non-empty string/
+  )
+})
+
+test('readConfig reads optional SQL and Blob settings', () => {
+  const config = readConfig({
+    AZURE_SQL_CONNECTIONSTRING: 'Server=127.0.0.1,1433;Database=ade;User Id=sa;Password=Password!234;Encrypt=false;TrustServerCertificate=true',
+    AZURE_STORAGEBLOB_CONNECTIONSTRING: 'UseDevelopmentStorage=true'
+  }, {
+    buildInfoPath: join(tmpdir(), 'missing-build-info.json')
+  })
+
+  assert.match(config.sqlConnectionString ?? '', /Database=ade/)
+  assert.equal(config.blobStorage.connectionString, 'UseDevelopmentStorage=true')
+  assert.equal(config.blobStorage.resourceEndpoint, undefined)
+})
+
+test('readConfig rejects multiple Blob transport settings', () => {
+  assert.throws(
+    () => readConfig({
+      AZURE_STORAGEBLOB_CONNECTIONSTRING: 'UseDevelopmentStorage=true',
+      AZURE_STORAGEBLOB_RESOURCEENDPOINT: 'https://example.blob.core.windows.net/'
+    }, {
+      buildInfoPath: join(tmpdir(), 'missing-build-info.json')
+    }),
+    /not both/
+  )
+})
+
+test('readConfig rejects insecure Blob resource endpoints', () => {
+  assert.throws(
+    () => readConfig({
+      AZURE_STORAGEBLOB_RESOURCEENDPOINT: 'http://example.blob.core.windows.net/'
+    }, {
+      buildInfoPath: join(tmpdir(), 'missing-build-info.json')
+    }),
+    /https/
   )
 })

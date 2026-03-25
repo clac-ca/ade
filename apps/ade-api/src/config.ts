@@ -17,7 +17,12 @@ export type VersionInfo = BundledBuildInfo & {
 export type ApiConfig = {
   host: string,
   port: number,
-  buildInfo: BundledBuildInfo
+  buildInfo: BundledBuildInfo,
+  sqlConnectionString?: string,
+  blobStorage: {
+    connectionString?: string,
+    resourceEndpoint?: string
+  }
 }
 
 export type ReadConfigOptions = {
@@ -114,11 +119,48 @@ function readBuildInfo(env: NodeJS.ProcessEnv, options: ReadConfigOptions): Bund
   return readDevelopmentBuildInfo()
 }
 
+function readOptionalTrimmed(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const value = env[name]
+
+  if (value === undefined) {
+    return undefined
+  }
+
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+function readBlobStorage(env: NodeJS.ProcessEnv) {
+  const connectionString = readOptionalTrimmed(env, 'AZURE_STORAGEBLOB_CONNECTIONSTRING')
+  const resourceEndpoint = readOptionalTrimmed(env, 'AZURE_STORAGEBLOB_RESOURCEENDPOINT')
+
+  if (connectionString && resourceEndpoint) {
+    throw new Error(
+      'Set either AZURE_STORAGEBLOB_CONNECTIONSTRING or AZURE_STORAGEBLOB_RESOURCEENDPOINT, not both.'
+    )
+  }
+
+  if (resourceEndpoint) {
+    const url = new URL(resourceEndpoint)
+
+    if (url.protocol !== 'https:') {
+      throw new Error('AZURE_STORAGEBLOB_RESOURCEENDPOINT must use https.')
+    }
+  }
+
+  return {
+    connectionString,
+    resourceEndpoint
+  }
+}
+
 function readConfig(env: NodeJS.ProcessEnv = process.env, options: ReadConfigOptions = {}): ApiConfig {
   return {
     host: env.HOST?.trim() || (env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
     port: readPort(env.PORT),
-    buildInfo: readBuildInfo(env, options)
+    buildInfo: readBuildInfo(env, options),
+    sqlConnectionString: readOptionalTrimmed(env, 'AZURE_SQL_CONNECTIONSTRING'),
+    blobStorage: readBlobStorage(env)
   }
 }
 

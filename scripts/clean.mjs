@@ -2,11 +2,16 @@ import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
-import { runCommand } from "./shared.mjs";
+import {
+  createDevProjectName,
+  createLocalSqlPassword,
+  runCommand,
+} from "./shared.mjs";
 
 const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
+const projectName = createDevProjectName(rootDir);
 
 async function tryRun(command, args, options = {}) {
   try {
@@ -115,6 +120,19 @@ async function main() {
       stdio: "ignore",
     });
   }
+
+  await tryRun(
+    dockerCommand,
+    ["compose", "-p", projectName, "down", "-v", "--remove-orphans"],
+    {
+      cwd: rootDir,
+      env: {
+        ...process.env,
+        ADE_SQL_SA_PASSWORD: createLocalSqlPassword(projectName),
+      },
+      stdio: "ignore",
+    },
+  );
 
   await tryRun(dockerCommand, ["image", "rm", "--force", "ade:local"], {
     cwd: rootDir,

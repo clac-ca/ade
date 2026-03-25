@@ -1,4 +1,4 @@
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import * as test from 'node:test'
 import { createApp } from '../src/app'
 import { BundledBuildInfo } from '../src/config'
@@ -18,7 +18,7 @@ const defaultBuildInfo: BundledBuildInfo = {
   gitSha: 'test-git-sha',
   builtAt: '2026-03-21T00:00:00.000Z'
 }
-const webRoot = fileURLToPath(new URL('./fixtures/web-dist', import.meta.url))
+const webRoot = join(__dirname, 'fixtures', 'web-dist')
 
 async function build(t: TestContext, options: BuildOptions = {}) {
   const readiness = {

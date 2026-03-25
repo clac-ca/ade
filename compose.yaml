@@ -1,0 +1,53 @@
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: >
+      azurite
+      --blobHost 0.0.0.0
+      --queueHost 0.0.0.0
+      --tableHost 0.0.0.0
+      --location /data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('node:http').get('http://127.0.0.1:10000/devstoreaccount1', (res) => process.exit(res.statusCode >= 200 && res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    ports:
+      - "${ADE_AZURITE_BLOB_PORT:-8010}:10000"
+      - "${ADE_AZURITE_QUEUE_PORT:-8011}:10001"
+      - "${ADE_AZURITE_TABLE_PORT:-8012}:10002"
+    volumes:
+      - azurite-data:/data
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: "${ADE_SQL_SA_PASSWORD:-AdeLocal1!adeclean}"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          '/opt/mssql-tools18/bin/sqlcmd -S 127.0.0.1 -U sa -P "$${MSSQL_SA_PASSWORD}" -C -Q "SELECT 1" || exit 1',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    ports:
+      - "${ADE_SQL_PORT:-8013}:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+
+volumes:
+  azurite-data:
+  sqlserver-data:

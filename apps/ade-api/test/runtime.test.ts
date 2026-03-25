@@ -1,9 +1,9 @@
 import * as assert from 'node:assert'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { createRuntime } from '../src/runtime'
 
-const webRoot = fileURLToPath(new URL('./fixtures/web-dist', import.meta.url))
+const webRoot = join(__dirname, 'fixtures', 'web-dist')
 const buildInfo = {
   builtAt: '2026-03-21T00:00:00.000Z',
   gitSha: 'test-git-sha',

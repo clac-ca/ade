@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import { spawn } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
@@ -170,6 +172,130 @@ export async function waitForReady(urls, options = {}) {
   }
 
   throw new Error(`Timed out waiting for: ${urls.join(", ")}`);
+}
+
+export async function ensureDocker(command) {
+  try {
+    await runCommand(command, ["info"], {
+      stdio: "ignore",
+    });
+  } catch {
+    throw new Error(
+      "Docker is required for this command, and the Docker daemon must be running.",
+    );
+  }
+}
+
+export function createDevProjectName(rootDir) {
+  const safeBase =
+    basename(rootDir)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 20) || "ade";
+  const hash = createHash("sha256").update(rootDir).digest("hex").slice(0, 8);
+
+  return `ade-${safeBase}-${hash}`;
+}
+
+export function createDevPorts(basePort) {
+  return {
+    api: basePort + 1,
+    azuriteBlob: basePort + 10,
+    azuriteQueue: basePort + 11,
+    azuriteTable: basePort + 12,
+    sql: basePort + 13,
+    web: basePort,
+  };
+}
+
+export function createLocalSqlPassword(projectName) {
+  return `AdeLocal1!${projectName.slice(-8)}`;
+}
+
+export function createAzuriteBlobConnectionString(ports) {
+  return [
+    "DefaultEndpointsProtocol=http",
+    "AccountName=devstoreaccount1",
+    "AccountKey=Eby8vdM02xNOcqFeqCnf2fV4i+7VQ8Jtq/K1SZFPTOtr/KBHBeksoGMGwP/IQ+J4MJBxRcQ6vL6gE0Gv6hA==",
+    `BlobEndpoint=http://127.0.0.1:${ports.azuriteBlob}/devstoreaccount1`,
+    `QueueEndpoint=http://127.0.0.1:${ports.azuriteQueue}/devstoreaccount1`,
+    `TableEndpoint=http://127.0.0.1:${ports.azuriteTable}/devstoreaccount1`,
+  ].join(";");
+}
+
+export function createLocalSqlConnectionString({ database, password, port }) {
+  return [
+    `Server=127.0.0.1,${port}`,
+    `Database=${database}`,
+    "User Id=sa",
+    `Password=${password}`,
+    "Encrypt=false",
+    "TrustServerCertificate=true",
+  ].join(";");
+}
+
+export async function waitForDockerServiceHealth(
+  dockerCommand,
+  projectName,
+  services,
+  options = {},
+) {
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  const startedAt = Date.now();
+  const env = {
+    ...process.env,
+    ...options.env,
+  };
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const statuses = [];
+
+    for (const service of services) {
+      const { stdout: containerId } = await runCommandCapture(
+        dockerCommand,
+        ["compose", "-p", projectName, "ps", "-q", service],
+        {
+          cwd: options.cwd,
+          env,
+        },
+      );
+      const id = containerId.trim();
+
+      if (id === "") {
+        statuses.push("missing");
+        continue;
+      }
+
+      const { stdout } = await runCommandCapture(
+        dockerCommand,
+        [
+          "inspect",
+          "--format",
+          "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
+          id,
+        ],
+        {
+          cwd: options.cwd,
+          env,
+        },
+      );
+
+      statuses.push(stdout.trim());
+    }
+
+    if (
+      statuses.every((status) => status === "healthy" || status === "running")
+    ) {
+      return;
+    }
+
+    await delay(500);
+  }
+
+  throw new Error(
+    `Timed out waiting for Docker services to become healthy: ${services.join(", ")}`,
+  );
 }
 
 export function registerShutdown(handler) {
