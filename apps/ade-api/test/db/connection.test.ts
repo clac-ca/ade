@@ -2,6 +2,7 @@ import * as assert from 'node:assert'
 import { test } from 'node:test'
 import {
   buildPoolConfig,
+  ensureDatabaseExists,
   parseSqlConnectionString,
   quoteSqlIdentifier,
   withDatabase
@@ -64,4 +65,56 @@ test('withDatabase rewrites the database name', () => {
     ),
     'server=127.0.0.1,1433;database=master;user id=sa;password=Password!234'
   )
+})
+
+test('ensureDatabaseExists connects to master and creates the target database for SQL auth', async () => {
+  const connections: string[] = []
+  const batches: string[] = []
+  let closed = false
+
+  await ensureDatabaseExists(
+    'Server=127.0.0.1,1433;Database=ade;User Id=sa;Password=Password!234;Encrypt=false;TrustServerCertificate=true',
+    async (connectionString) => {
+      connections.push(connectionString)
+
+      return {
+        close: async () => {
+          closed = true
+        },
+        request: () => ({
+          batch: async (statement: string) => {
+            batches.push(statement)
+          }
+        })
+      }
+    }
+  )
+
+  assert.deepStrictEqual(connections, [
+    'server=127.0.0.1,1433;database=master;user id=sa;password=Password!234;encrypt=false;trustservercertificate=true'
+  ])
+  assert.equal(closed, true)
+  assert.equal(batches.length, 1)
+  assert.match(batches[0], /DB_ID\(N'ade'\)/)
+  assert.match(batches[0], /CREATE DATABASE \[ade\]/)
+})
+
+test('ensureDatabaseExists skips database creation for managed identity connections', async () => {
+  let connected = false
+
+  await ensureDatabaseExists(
+    'Data Source=tcp:sql-ade.database.windows.net,1433;Initial Catalog=ade;Authentication=ActiveDirectoryManagedIdentity;Encrypt=true;TrustServerCertificate=false',
+    async () => {
+      connected = true
+
+      return {
+        close: async () => undefined,
+        request: () => ({
+          batch: async () => undefined
+        })
+      }
+    }
+  )
+
+  assert.equal(connected, false)
 })

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import sql from 'mssql'
-import { connectToSql, quoteSqlIdentifier } from './connection'
+import { connectToSql, ensureDatabaseExists, quoteSqlIdentifier } from './connection'
 
 export type MigrationResult = {
   applied: string[],
@@ -121,6 +121,8 @@ async function runMigrations({
   migrationsDir = join(process.cwd(), 'migrations'),
   runtimePrincipalName
 }: RunMigrationsOptions): Promise<MigrationResult> {
+  await ensureDatabaseExists(connectionString)
+
   const pool = await connectToSql(connectionString)
 
   try {

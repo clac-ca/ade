@@ -28,7 +28,7 @@ pnpm dev
 
 ADE opens at `http://localhost:8000`.
 
-`pnpm dev` starts local Azurite and SQL Server dependencies, bootstraps the local `ade` database, runs migrations, and then starts the API and web on the host.
+`pnpm dev` starts local Azurite and SQL Server dependencies, runs migrations that create the local `ade` database if needed, and then starts the API and web on the host.
 
 Use `pnpm dev -- --port 8100` to run a second worktree on the same machine.
 

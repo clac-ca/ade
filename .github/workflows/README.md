@@ -40,8 +40,7 @@ It:
 
 - pulls the published release-candidate image onto the GitHub runner
 - starts Azurite and SQL Server with the root `compose.yaml`
-- runs the accepted image once to create the local `ade` database
-- runs the accepted image again to apply migrations
+- runs the accepted image once to apply migrations, creating the local `ade` database if needed
 - starts the accepted image as the running app with `docker run`
 - waits for the API readiness endpoint
 - runs `pnpm test:acceptance` against the running candidate
@@ -80,7 +79,6 @@ Current ADE acceptance stage:
 - checks out the repo
 - installs dependencies
 - starts Azurite and SQL Server with `docker compose`
-- runs `node dist/ensure-dev-db.js` inside the accepted image on the Compose network
 - runs `node dist/migrate.js` inside the accepted image on the Compose network
 - starts the published release candidate on the GitHub runner with `docker run`
 - waits for `http://127.0.0.1:4100/api/readyz`

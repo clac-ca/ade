@@ -11,6 +11,15 @@ export type ParsedSqlConnectionString = {
   userId?: string
 }
 
+type SqlBatchConnection = {
+  close(): Promise<void>,
+  request(): {
+    batch(statement: string): Promise<unknown>
+  }
+}
+
+type ConnectToSqlLike = (connectionString: string) => Promise<SqlBatchConnection>
+
 const DEFAULT_SQL_PORT = 1433
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
@@ -193,6 +202,32 @@ async function connectToSql(connectionString: string): Promise<sql.ConnectionPoo
   }
 }
 
+async function ensureDatabaseExists(
+  connectionString: string,
+  connect: ConnectToSqlLike = connectToSql
+): Promise<void> {
+  const parsed = parseSqlConnectionString(connectionString)
+
+  if (parsed.authentication !== 'sql-password') {
+    return
+  }
+
+  const pool = await connect(withDatabase(connectionString, 'master'))
+
+  try {
+    const databaseIdentifier = quoteSqlIdentifier(parsed.database)
+
+    await pool.request().batch(`
+      IF DB_ID(N'${parsed.database.replaceAll("'", "''")}') IS NULL
+      BEGIN
+        EXEC(N'CREATE DATABASE ${databaseIdentifier}');
+      END
+    `)
+  } finally {
+    await pool.close()
+  }
+}
+
 function quoteSqlIdentifier(value: string): string {
   return `[${value.replaceAll(']', ']]')}]`
 }
@@ -210,6 +245,7 @@ function withDatabase(connectionString: string, database: string): string {
 export {
   buildPoolConfig,
   connectToSql,
+  ensureDatabaseExists,
   parseSqlConnectionString,
   quoteSqlIdentifier,
   withDatabase

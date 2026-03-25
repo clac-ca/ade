@@ -114,14 +114,6 @@ jobs:
       - name: Start acceptance dependencies
         run: docker compose -p ade-acceptance up -d --wait azurite sqlserver
 
-      - name: Bootstrap acceptance database
-        run: >
-          docker run --rm
-          --network ade-acceptance_default
-          --env AZURE_SQL_CONNECTIONSTRING
-          "${{ needs.commit_stage.outputs.image }}"
-          node dist/ensure-dev-db.js
-
       - name: Run acceptance migrations
         run: >
           docker run --rm

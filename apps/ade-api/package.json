@@ -7,10 +7,9 @@
     "migrations"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "rimraf dist && tsc",
     "clean": "rimraf dist .package coverage",
     "dev": "tsx watch src/server.ts",
-    "ensure-dev-db": "tsx src/ensure-dev-db.ts",
     "migrate": "tsx src/migrate.ts",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",

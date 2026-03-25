@@ -131,10 +131,6 @@ async function main() {
         env: composeEnv,
       },
     );
-    await runCommand(pnpmCommand, ["--filter", "@ade/api", "ensure-dev-db"], {
-      cwd: rootDir,
-      env: apiEnv,
-    });
     await runCommand(pnpmCommand, ["--filter", "@ade/api", "migrate"], {
       cwd: rootDir,
       env: apiEnv,
