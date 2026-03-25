@@ -1,7 +1,7 @@
 param serverName string
 param databaseName string
 param deploymentManagedIdentityName string
-param deploymentManagedIdentityPrincipalId string
+param deploymentManagedIdentityClientId string
 param privateEndpointSubnetId string
 param privateDnsZoneId string
 param location string
@@ -18,10 +18,10 @@ resource sqlServer 'Microsoft.Sql/servers@2024-05-01-preview' = {
   properties: {
     administrators: {
       administratorType: 'ActiveDirectory'
-      azureADOnlyAuthentication: false
+      azureADOnlyAuthentication: true
       login: deploymentManagedIdentityName
       principalType: 'Application'
-      sid: deploymentManagedIdentityPrincipalId
+      sid: deploymentManagedIdentityClientId
       tenantId: tenant().tenantId
     }
     minimalTlsVersion: '1.2'

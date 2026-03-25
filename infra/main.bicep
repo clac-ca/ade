@@ -93,7 +93,7 @@ var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 )
-var sqlPrivateDnsZoneName = 'privatelink.${environment().suffixes.sqlServerHostname}'
+var sqlPrivateDnsZoneName = 'privatelink${environment().suffixes.sqlServerHostname}'
 
 resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: deploymentManagedIdentityName
@@ -149,7 +149,7 @@ module sql 'modules/sql-database.bicep' = {
   params: {
     databaseName: sqlDatabaseName
     deploymentManagedIdentityName: deploymentManagedIdentity.name
-    deploymentManagedIdentityPrincipalId: deploymentManagedIdentity.properties.principalId
+    deploymentManagedIdentityClientId: deploymentManagedIdentity.properties.clientId
     location: location
     privateDnsZoneId: network.outputs.sqlPrivateDnsZoneId
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId

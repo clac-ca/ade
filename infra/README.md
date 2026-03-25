@@ -36,7 +36,7 @@ These are the production names used by [`infra/environments/main.prod.bicepparam
 - Log Analytics workspace: `log-ade-prod-canadacentral-002`
 - Container Apps environment: `cae-ade-prod-canadacentral-002`
 - Container App: `ca-ade-prod-canadacentral-002`
-- Migration job: `job-ade-migrate-prod-canadacentral-002`
+- Migration job: `job-ade-migrate-prod-cc-002`
 - Virtual network: `vnet-ade-prod-canadacentral-002`
 - Azure SQL logical server: `sql-ade-prod-cc-002`
 - Azure SQL database: `ade`
@@ -136,8 +136,16 @@ az deployment group create \
 The deployment identity needs three Azure RBAC grants:
 
 - `Contributor` on the production resource group
-- `User Access Administrator` on the production resource group
+- `Role Based Access Control Administrator` on the production resource group
 - `Managed Identity Operator` on its own user-assigned identity resource so it can attach that identity to the migration job resource during future deployments
+
+The current template creates one Azure RBAC resource for the running app:
+
+- `Storage Blob Data Contributor` on the storage account for the Container App system-assigned identity
+
+That Bicep resource is created with `Microsoft.Authorization/roleAssignments`, so the deployment identity must have permission for `Microsoft.Authorization/roleAssignments/write`.
+
+`Role Based Access Control Administrator` is the intended grant for that. `Owner` is not required and should not be used.
 
 Resolve the reusable values first:
 
@@ -176,13 +184,13 @@ az role assignment create \
   --scope "${ADE_RG_ID}"
 ```
 
-Grant `User Access Administrator` on the resource group:
+Grant `Role Based Access Control Administrator` on the resource group:
 
 ```sh
 az role assignment create \
   --assignee-object-id "${ADE_DEPLOYMENT_IDENTITY_PRINCIPAL_ID}" \
   --assignee-principal-type ServicePrincipal \
-  --role "User Access Administrator" \
+  --role "Role Based Access Control Administrator" \
   --scope "${ADE_RG_ID}"
 ```
 
@@ -196,7 +204,84 @@ az role assignment create \
   --scope "${ADE_DEPLOYMENT_IDENTITY_ID}"
 ```
 
-### 8. Grant the SQL logical server identity Microsoft Entra query permissions
+Allow several minutes for Azure RBAC propagation before validating the bootstrap or re-running the deployment pipeline.
+
+### 8. Validate the bootstrap RBAC and manual deployment
+
+List the deployment identity role assignments on the production resource group:
+
+```sh
+az role assignment list \
+  --assignee-object-id "${ADE_DEPLOYMENT_IDENTITY_PRINCIPAL_ID}" \
+  --scope "${ADE_RG_ID}" \
+  --output table
+```
+
+Confirm the output includes:
+
+- `Contributor`
+- `Role Based Access Control Administrator`
+
+List the deployment identity role assignments on the deployment identity resource itself:
+
+```sh
+az role assignment list \
+  --assignee-object-id "${ADE_DEPLOYMENT_IDENTITY_PRINCIPAL_ID}" \
+  --scope "${ADE_DEPLOYMENT_IDENTITY_ID}" \
+  --output table
+```
+
+Confirm the output includes:
+
+- `Managed Identity Operator`
+
+Re-run the manual deployment after the RBAC grants have propagated:
+
+```sh
+export ADE_IMAGE=<image-ref>
+
+az deployment group create \
+  --name ade-prod-rbac-validate \
+  --resource-group rg-ade-prod-canadacentral-002 \
+  --parameters infra/environments/main.prod.bicepparam
+```
+
+Resolve the running app principal ID and the storage account ID:
+
+```sh
+export ADE_APP_PRINCIPAL_ID="$(
+  az containerapp show \
+    --name ca-ade-prod-canadacentral-002 \
+    --resource-group rg-ade-prod-canadacentral-002 \
+    --query identity.principalId \
+    --output tsv
+)"
+
+export ADE_STORAGE_ACCOUNT_ID="$(
+  az storage account show \
+    --name stadeprodcc002 \
+    --resource-group rg-ade-prod-canadacentral-002 \
+    --query id \
+    --output tsv
+)"
+```
+
+Confirm the Bicep-created storage RBAC assignment exists:
+
+```sh
+az role assignment list \
+  --assignee-object-id "${ADE_APP_PRINCIPAL_ID}" \
+  --scope "${ADE_STORAGE_ACCOUNT_ID}" \
+  --output table
+```
+
+Confirm the output includes:
+
+- `Storage Blob Data Contributor`
+
+After the manual validation succeeds, re-run the GitHub deployment pipeline and confirm `Release Stage` proceeds past `Deploy accepted release candidate`.
+
+### 9. Grant the SQL logical server identity Microsoft Entra query permissions
 
 The Azure SQL logical server uses a **system-assigned managed identity**.
 
@@ -245,7 +330,7 @@ if ($null -eq $isMember) {
 }
 ```
 
-### 9. Set the GitHub `production` environment variables
+### 10. Set the GitHub `production` environment variables
 
 Set the deployment identity client ID:
 
@@ -295,7 +380,7 @@ List the environment variables to confirm:
 gh variable list --env production --repo clac-ca/ade
 ```
 
-### 10. Run the initial migration job manually
+### 11. Run the initial migration job manually
 
 The first manual deployment defines the migration job, but it does not execute it.
 
@@ -303,7 +388,7 @@ Run it once manually after the SQL server identity has Directory Readers:
 
 ```sh
 az containerapp job start \
-  --name job-ade-migrate-prod-canadacentral-002 \
+  --name job-ade-migrate-prod-cc-002 \
   --resource-group rg-ade-prod-canadacentral-002
 ```
 
@@ -311,7 +396,7 @@ Inspect recent executions:
 
 ```sh
 az containerapp job execution list \
-  --name job-ade-migrate-prod-canadacentral-002 \
+  --name job-ade-migrate-prod-cc-002 \
   --resource-group rg-ade-prod-canadacentral-002 \
   --output table
 ```
