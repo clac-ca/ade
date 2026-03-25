@@ -84,6 +84,7 @@ jobs:
       contents: read
     env:
       ADE_BASE_URL: http://127.0.0.1:4100
+      ADE_SQL_SA_PASSWORD: "AdeAcceptance1!"
       AZURE_SQL_CONNECTIONSTRING: >-
         Server=sqlserver,1433;Database=ade;User Id=sa;Password=AdeAcceptance1!;Encrypt=false;TrustServerCertificate=true
       AZURE_STORAGEBLOB_CONNECTIONSTRING: >-
