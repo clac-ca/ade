@@ -46,6 +46,8 @@ Shared runtime variable names and usage are documented in [docs/environment-vari
 
 | Command                | Use it for                                                                      |
 | ---------------------- | ------------------------------------------------------------------------------- |
+| `pnpm deps:up`         | Start only the local SQL Server and Azurite dependency stack                    |
+| `pnpm deps:down`       | Stop the local SQL Server and Azurite dependency stack                          |
 | `pnpm dev`             | Run the full watch-mode development environment                                 |
 | `pnpm lint`            | Run ESLint across the repo                                                      |
 | `pnpm format:check`    | Check the pipeline-owned repo files with Prettier                               |
@@ -62,5 +64,6 @@ Shared runtime variable names and usage are documented in [docs/environment-vari
 
 - [docs/environment-variables.md](docs/environment-variables.md) - shared runtime environment variables
 - [infra/README.md](infra/README.md) - Azure bootstrap and production infrastructure
+- [infra/local/compose.yaml](infra/local/compose.yaml) - local SQL Server and Azurite dependency stack
 - [packages/ade-config/README.md](packages/ade-config/README.md) - `ade-config` package and `ade` CLI
 - [packages/ade-engine/README.md](packages/ade-engine/README.md) - `ade-engine` runtime package

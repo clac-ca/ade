@@ -2,22 +2,21 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  createLocalDependencyContext,
+  downLocalDependencies,
+  upLocalDependencies,
+} from "./local-deps.mjs";
+import {
   createAzuriteBlobConnectionString,
-  createDevPorts,
-  createDevProjectName,
   createLocalSqlConnectionString,
-  createLocalSqlPassword,
-  ensureDocker,
   openBrowser,
   parseArgs,
   registerShutdown,
   runCommand,
   spawnCommand,
-  waitForDockerServiceHealth,
   waitForReady,
 } from "./shared.mjs";
 
-const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const databaseName = "ade";
@@ -65,16 +64,8 @@ async function main() {
     allowNoOpen: true,
   });
 
-  const projectName = createDevProjectName(rootDir);
-  const ports = createDevPorts(port);
-  const sqlPassword = createLocalSqlPassword(projectName);
-  const composeEnv = {
-    ADE_AZURITE_BLOB_PORT: String(ports.azuriteBlob),
-    ADE_AZURITE_QUEUE_PORT: String(ports.azuriteQueue),
-    ADE_AZURITE_TABLE_PORT: String(ports.azuriteTable),
-    ADE_SQL_PORT: String(ports.sql),
-    ADE_SQL_SA_PASSWORD: sqlPassword,
-  };
+  const { ports, projectName, sqlPassword } =
+    createLocalDependencyContext(port);
   const apiEnv = {
     AZURE_SQL_CONNECTIONSTRING: createLocalSqlConnectionString({
       database: databaseName,
@@ -94,43 +85,11 @@ async function main() {
   const shutdown = registerShutdown(async () => {
     shuttingDown = true;
     await terminateChildren(children);
-    await runCommand(
-      dockerCommand,
-      ["compose", "-p", projectName, "down", "-v", "--remove-orphans"],
-      {
-        cwd: rootDir,
-        env: composeEnv,
-      },
-    ).catch(() => undefined);
+    await downLocalDependencies(port).catch(() => undefined);
   });
 
   try {
-    await ensureDocker(dockerCommand);
-    await runCommand(
-      dockerCommand,
-      ["compose", "-p", projectName, "down", "-v", "--remove-orphans"],
-      {
-        cwd: rootDir,
-        env: composeEnv,
-      },
-    ).catch(() => undefined);
-    await runCommand(
-      dockerCommand,
-      ["compose", "-p", projectName, "up", "-d"],
-      {
-        cwd: rootDir,
-        env: composeEnv,
-      },
-    );
-    await waitForDockerServiceHealth(
-      dockerCommand,
-      projectName,
-      ["azurite", "sqlserver"],
-      {
-        cwd: rootDir,
-        env: composeEnv,
-      },
-    );
+    await upLocalDependencies(port);
     await runCommand(pnpmCommand, ["--filter", "@ade/api", "migrate"], {
       cwd: rootDir,
       env: apiEnv,

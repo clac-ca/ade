@@ -1,6 +1,7 @@
 # ADE Infrastructure
 
 ADE uses one Azure template: [`main.bicep`](main.bicep).
+Local laptop and CI dependency services live separately in [`local/compose.yaml`](local/compose.yaml); that file is not part of the Azure deployment model.
 
 That template deploys the production resource group shape ADE runs on:
 

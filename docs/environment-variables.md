@@ -24,6 +24,8 @@ cp .env.example .env
 
 `pnpm dev` does not read `.env`; it bootstraps local SQL, Azurite, and runtime values itself.
 
+`pnpm deps:up` and `pnpm deps:down` are available when you want to manage only the local dependency stack.
+
 For `pnpm start`, shell environment variables and `--port` override values from `.env`.
 
 ## Production Usage

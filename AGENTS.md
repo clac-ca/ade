@@ -2,11 +2,12 @@
 
 ```text
 .
-├── compose.yaml
 ├── Dockerfile
 ├── README.md
 ├── PRINCIPLES.md
 ├── infra/
+│   ├── local/
+│   │   └── compose.yaml
 │   ├── main.bicep
 │   ├── environments/
 │   └── modules/
@@ -15,6 +16,7 @@
 │   ├── build.mjs
 │   ├── clean.mjs
 │   ├── dev.mjs
+│   ├── local-deps.mjs
 │   ├── start.mjs
 │   └── shared.mjs
 ├── apps/
@@ -27,6 +29,8 @@
 
 ```sh
 pnpm install
+pnpm deps:up
+pnpm deps:down
 pnpm dev
 pnpm build
 pnpm start
