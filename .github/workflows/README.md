@@ -10,23 +10,9 @@ It follows a strict three-stage shape:
 
 The workflow lives at `.github/workflows/deployment_pipeline.yml`.
 
-## Why this pipeline looks the way it does
-
-This pipeline stays intentionally direct:
-
-- one workflow file
-- one commit-stage job
-- one acceptance-stage job
-- one release-stage job
-- the release candidate is built once in commit stage
-- pull requests stop after commit stage
-- pushes to `main` continue through acceptance and release
-
-The goal is to make the delivery logic obvious from the YAML itself.
-
 ## Operating model for ADE
 
-### 1. `main` is the authoritative integration branch
+`main` is the authoritative integration branch.
 
 Both pull requests to `main` and pushes to `main` run the **Commit Stage**.
 
@@ -38,8 +24,6 @@ That means:
 - `main` remains the authoritative path to release
 - release candidates are only published from real commits on `main`
 
-### 2. The release candidate is the built container image
-
 The commit stage creates the local release candidate with `pnpm build`.
 
 On pushes to `main`, that same built candidate is tagged and pushed to public GHCR as:
@@ -50,24 +34,19 @@ ghcr.io/<owner>/ade:sha-<commit-sha>
 
 Those image refs are then reused in acceptance and release.
 
-### 3. Acceptance tests the running release candidate
-
 Acceptance does not rebuild the app.
 
 It:
 
 - pulls the published release-candidate image onto the GitHub runner
-- starts it with `docker run`
+- starts Azurite and SQL Server with the root `compose.yaml`
+- runs the accepted image once to create the local `ade` database
+- runs the accepted image again to apply migrations
+- starts the accepted image as the running app with `docker run`
 - waits for the API readiness endpoint
 - runs `pnpm test:acceptance` against the running candidate
 
-### 4. Release deploys the accepted candidate
-
-Release deploys the same accepted image ref to production with direct Azure CLI deployment.
-
-There is no extra rebuild, no tag resolution step, and no separate emergency-redeploy workflow in this simplified model.
-
-## What each stage does
+Compose owns only the local dependencies in this stage. The accepted image stays separate so the workflow makes it explicit which container is the system under test.
 
 ## Commit Stage
 
@@ -100,12 +79,22 @@ Current ADE acceptance stage:
 - depends on the commit stage outputs
 - checks out the repo
 - installs dependencies
+- starts Azurite and SQL Server with `docker compose`
+- runs `node dist/ensure-dev-db.js` inside the accepted image on the Compose network
+- runs `node dist/migrate.js` inside the accepted image on the Compose network
 - starts the published release candidate on the GitHub runner with `docker run`
 - waits for `http://127.0.0.1:4100/api/readyz`
 - runs `ADE_BASE_URL=http://127.0.0.1:4100 pnpm test:acceptance`
-- always stops the container afterward
+- always stops the app container and tears down the Compose project afterward
 
 The acceptance environment is the GitHub runner itself. It is not a separate Azure staging deployment.
+
+The app still receives the same standard env names it uses everywhere else:
+
+- `AZURE_SQL_CONNECTIONSTRING`
+- `AZURE_STORAGEBLOB_CONNECTIONSTRING`
+
+There are no acceptance-specific application env names in the runtime contract.
 
 ## Release Stage
 
@@ -117,13 +106,20 @@ Current ADE release stage:
 - depends on the acceptance stage
 - logs into Azure with OIDC
 - sets `ADE_IMAGE` to the accepted release-candidate image ref
-- deploys Azure Container Apps production with `az deployment group create --parameters infra/environments/main.prod.bicepparam`
+- deploys Azure infrastructure, the public Container App, and the manual migration job with `az deployment group create --parameters infra/environments/main.prod.bicepparam`
+- starts the manual migration job with `az containerapp job start`
+- polls the job execution and fails the release if migrations fail
 
 Because the GHCR image is public, the release deployment does not configure registry credentials.
 
-## GitHub repository setup required
+The split is intentional:
 
-Create `.github/workflows/deployment_pipeline.yml` from the file in this directory.
+- Bicep owns resource creation
+- the workflow owns the imperative "run migrations now" step
+
+That keeps the infrastructure definition declarative and keeps migration execution visible in `release_stage`.
+
+## GitHub repository setup required
 
 Then configure the repo like this:
 
@@ -155,16 +151,6 @@ For the one-time Azure setup and first manual deployment, follow [infra/README.m
 The commit stage pushes the release-candidate image to `ghcr.io` using `GITHUB_TOKEN`.
 
 Set the `ade` package to public visibility in GitHub Packages.
-
-### 4. Branching discipline
-
-Use `main` as the authoritative integration branch.
-
-If you keep pull requests:
-
-- keep them short-lived
-- keep them small
-- treat them as collaboration support, not as a separate delivery path
 
 ## Local equivalents
 

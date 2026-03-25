@@ -1,7 +1,5 @@
 # ADE
 
-Automatic Data Extractor.
-
 ADE is a document operations platform for messy spreadsheets.
 
 ## Repository Layout
@@ -10,32 +8,15 @@ ADE is a document operations platform for messy spreadsheets.
 - `apps/ade-api` - Fastify API and production web host
 - `packages/ade-config` - installed product package and `ade` CLI
 - `packages/ade-engine` - extraction runtime library used by `ade-config`
-- `infra/` - infrastructure definitions
-- `infra/README.md` - Azure infrastructure setup and first deployment guide
+- `infra/` - Azure infrastructure definitions
 - `scripts/` - root development, build, acceptance, and deployment entrypoints
-
-## Python Product Shape
-
-The Python side is intentionally split into:
-
-- `ade-config` - the installed product package users run with `ade`
-- `ade-engine` - the runtime library that `ade-config` calls into
-
-The public processing shape is:
-
-```sh
-pip install ade-config
-ade process <input-path> --output-dir <dir>
-```
-
-`<input-path>` can be either a single file or a directory.
 
 ## Requirements
 
 - Node.js 22+
 - pnpm 10+
 - Python 3.12
-- Docker running locally for `pnpm test`, `pnpm build`, and `pnpm start`
+- Docker
 
 ## Quickstart
 
@@ -46,6 +27,10 @@ pnpm dev
 ```
 
 ADE opens at `http://localhost:8000`.
+
+`pnpm dev` starts local Azurite and SQL Server dependencies, bootstraps the local `ade` database, runs migrations, and then starts the API and web on the host.
+
+Use `pnpm dev -- --port 8100` to run a second worktree on the same machine.
 
 ## Root Commands
 
@@ -59,17 +44,12 @@ ADE opens at `http://localhost:8000`.
 | `pnpm test:unit`       | Run the API unit tests                                                  |
 | `pnpm test:acceptance` | Run the acceptance checks for a deployed environment via `ADE_BASE_URL` |
 | `pnpm package:python`  | Build the Python packages                                               |
-| `pnpm build`           | Build the single local release-candidate image `ade:local`              |
+| `pnpm build`           | Build the local release-candidate image `ade:local`                     |
 | `pnpm start`           | Run the built local image                                               |
-| `pnpm clean`           | Remove generated local output and local images                          |
+| `pnpm clean`           | Remove generated local output, local images, and local Compose state    |
 
-## Azure Production Bootstrap
+## Docs
 
-The Azure production setup is intentionally direct and documented in [infra/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/infra/README.md).
-
-Keep these values out of tracked files:
-
-- tenant ID
-- subscription ID
-
-Store them only in the GitHub `production` environment variables used by the deployment pipeline.
+- [infra/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/infra/README.md) - Azure bootstrap and production infrastructure
+- [packages/ade-config/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/packages/ade-config/README.md) - `ade-config` package and `ade` CLI
+- [packages/ade-engine/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/packages/ade-engine/README.md) - `ade-engine` runtime package

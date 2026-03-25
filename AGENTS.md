@@ -2,6 +2,7 @@
 
 ```text
 .
+├── compose.yaml
 ├── Dockerfile
 ├── README.md
 ├── PRINCIPLES.md
@@ -30,6 +31,7 @@ pnpm dev
 pnpm build
 pnpm start
 pnpm lint
+pnpm format:check
 pnpm test
 pnpm test:unit
 pnpm test:acceptance

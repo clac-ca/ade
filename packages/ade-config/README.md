@@ -5,8 +5,8 @@
 It exposes the `ade` command, depends on a pinned `ade-engine`, and owns the
 business-side configuration that gets passed into the engine runtime.
 
-This scaffold intentionally stops before parsing logic. The CLI proves the
-handoff into `ade-engine`, then exits at a clear not-yet-implemented boundary.
+This scaffold intentionally stops before parsing logic and exits at a clear
+not-yet-implemented boundary after handing off into `ade-engine`.
 
 ## Local Usage
 
@@ -35,8 +35,6 @@ Run with `python -m`:
 uv run --directory packages/ade-config --no-sync python -m ade_config version
 ```
 
-## Local Development
-
 For published installs, `ade-config` depends on the pinned `ade-engine`
 package version declared in `pyproject.toml`.
 
@@ -58,9 +56,6 @@ ade process data/samples/CaressantWRH_251130__ORIGINAL.xls \
 ade process data/samples \
   --output-dir output/batch
 ```
-
-The CLI accepts either a single file or a directory as the input path and
-passes that through to `ade-engine`.
 
 ## Build
 
