@@ -5,6 +5,16 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 
+const devPortOffsets = {
+  api: 1,
+  azuriteBlob: 10,
+  azuriteQueue: 11,
+  azuriteTable: 12,
+  sql: 13,
+  web: 0,
+};
+const maxDevPortOffset = Math.max(...Object.values(devPortOffsets));
+
 export function parseArgs(argv, options = {}) {
   const { defaultPort, allowNoOpen = false } = options;
 
@@ -199,13 +209,23 @@ export function createDevProjectName(rootDir) {
 }
 
 export function createDevPorts(basePort) {
+  if (!Number.isInteger(basePort) || basePort < 1) {
+    throw new Error(`Invalid port: ${basePort}`);
+  }
+
+  if (basePort > 65_535 - maxDevPortOffset) {
+    throw new Error(
+      `Invalid port: ${basePort}. ADE dev requires --port ${65_535 - maxDevPortOffset} or lower.`,
+    );
+  }
+
   return {
-    api: basePort + 1,
-    azuriteBlob: basePort + 10,
-    azuriteQueue: basePort + 11,
-    azuriteTable: basePort + 12,
-    sql: basePort + 13,
-    web: basePort,
+    api: basePort + devPortOffsets.api,
+    azuriteBlob: basePort + devPortOffsets.azuriteBlob,
+    azuriteQueue: basePort + devPortOffsets.azuriteQueue,
+    azuriteTable: basePort + devPortOffsets.azuriteTable,
+    sql: basePort + devPortOffsets.sql,
+    web: basePort + devPortOffsets.web,
   };
 }
 

@@ -12,7 +12,7 @@
     "typecheck": "pnpm --filter @ade/api typecheck && pnpm --filter @ade/web typecheck",
     "test:unit": "pnpm --filter @ade/api test",
     "package:python": "uv build --directory packages/ade-engine && uv build --directory packages/ade-config",
-    "test": "pnpm lint && pnpm test:unit && pnpm build",
+    "test": "pnpm lint && pnpm test:unit && pnpm package:python && pnpm build",
     "test:acceptance": "node scripts/acceptance.mjs",
     "build": "node scripts/build.mjs",
     "start": "node scripts/start.mjs",

@@ -1,6 +1,6 @@
 # ADE Infrastructure
 
-ADE uses one Azure template: [`infra/main.bicep`](/Users/justinkropp/.codex/worktrees/4552/ade/infra/main.bicep).
+ADE uses one Azure template: [`main.bicep`](main.bicep).
 
 That template deploys the production resource group shape ADE runs on:
 
@@ -28,7 +28,7 @@ That split is intentional:
 
 ## Production names
 
-These are the production names used by [`infra/environments/main.prod.bicepparam`](/Users/justinkropp/.codex/worktrees/4552/ade/infra/environments/main.prod.bicepparam):
+These are the production names used by [`environments/main.prod.bicepparam`](environments/main.prod.bicepparam):
 
 - Resource group: `rg-ade-prod-canadacentral-002`
 - Deployment managed identity: `id-ade-deploy-prod-canadacentral-002`
