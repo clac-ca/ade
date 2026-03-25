@@ -301,6 +301,7 @@ export async function waitForDockerServiceHealth(
     ...process.env,
     ...options.env,
   };
+  const composeArgs = options.composeArgs ?? [];
 
   while (Date.now() - startedAt < timeoutMs) {
     const statuses = [];
@@ -308,7 +309,7 @@ export async function waitForDockerServiceHealth(
     for (const service of services) {
       const { stdout: containerId } = await runCommandCapture(
         dockerCommand,
-        ["compose", "-p", projectName, "ps", "-q", service],
+        ["compose", ...composeArgs, "-p", projectName, "ps", "-q", service],
         {
           cwd: options.cwd,
           env,

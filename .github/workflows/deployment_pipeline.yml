@@ -111,7 +111,7 @@ jobs:
         run: docker pull "${{ needs.commit_stage.outputs.image }}"
 
       - name: Start acceptance dependencies
-        run: docker compose -p ade-acceptance up -d --wait azurite sqlserver
+        run: docker compose -f infra/local/compose.yaml -p ade-acceptance up -d --wait azurite sqlserver
 
       - name: Run acceptance migrations
         run: >
@@ -143,13 +143,13 @@ jobs:
         if: failure()
         run: |
           docker logs ade-acceptance-app || true
-          docker compose -p ade-acceptance logs --no-color azurite sqlserver || true
+          docker compose -f infra/local/compose.yaml -p ade-acceptance logs --no-color azurite sqlserver || true
 
       - name: Stop acceptance environment
         if: always()
         run: |
           docker rm --force ade-acceptance-app || true
-          docker compose -p ade-acceptance down -v --remove-orphans || true
+          docker compose -f infra/local/compose.yaml -p ade-acceptance down -v --remove-orphans || true
 
   release_stage:
     name: Release Stage

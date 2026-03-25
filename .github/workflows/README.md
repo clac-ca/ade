@@ -39,7 +39,7 @@ Acceptance does not rebuild the app.
 It:
 
 - pulls the published release-candidate image onto the GitHub runner
-- starts Azurite and SQL Server with the root `compose.yaml`
+- starts Azurite and SQL Server with `infra/local/compose.yaml`
 - runs the accepted image once to apply migrations, creating the local `ade` database if needed
 - starts the accepted image as the running app with `docker run`
 - waits for the API readiness endpoint
@@ -76,7 +76,7 @@ Current ADE acceptance stage:
 - depends on the commit stage outputs
 - checks out the repo
 - installs dependencies
-- starts Azurite and SQL Server with `docker compose`
+- starts Azurite and SQL Server with `docker compose -f infra/local/compose.yaml`
 - runs `node dist/migrate.js` inside the accepted image on the Compose network
 - starts the published release candidate on the GitHub runner with `docker run`
 - waits for `http://127.0.0.1:4100/api/readyz`
