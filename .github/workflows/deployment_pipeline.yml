@@ -82,6 +82,12 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      ADE_BASE_URL: http://127.0.0.1:4100
+      AZURE_SQL_CONNECTIONSTRING: >-
+        Server=sqlserver,1433;Database=ade;User Id=sa;Password=AdeAcceptance1!;Encrypt=false;TrustServerCertificate=true
+      AZURE_STORAGEBLOB_CONNECTIONSTRING: >-
+        DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFeqCnf2fV4i+7VQ8Jtq/K1SZFPTOtr/KBHBeksoGMGwP/IQ+J4MJBxRcQ6vL6gE0Gv6hA==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -104,23 +110,54 @@ jobs:
       - name: Pull release candidate
         run: docker pull "${{ needs.commit_stage.outputs.image }}"
 
+      - name: Start acceptance dependencies
+        run: docker compose -p ade-acceptance up -d --wait azurite sqlserver
+
+      - name: Bootstrap acceptance database
+        run: >
+          docker run --rm
+          --network ade-acceptance_default
+          --env AZURE_SQL_CONNECTIONSTRING
+          "${{ needs.commit_stage.outputs.image }}"
+          node dist/ensure-dev-db.js
+
+      - name: Run acceptance migrations
+        run: >
+          docker run --rm
+          --network ade-acceptance_default
+          --env AZURE_SQL_CONNECTIONSTRING
+          "${{ needs.commit_stage.outputs.image }}"
+          node dist/migrate.js
+
       - name: Start release candidate
         run: |
-          docker rm --force ade-acceptance 2>/dev/null || true
-          docker run --detach --rm --name ade-acceptance --publish 4100:8000 "${{ needs.commit_stage.outputs.image }}"
+          docker rm --force ade-acceptance-app 2>/dev/null || true
+          docker run --detach --rm \
+            --name ade-acceptance-app \
+            --network ade-acceptance_default \
+            --publish 4100:8000 \
+            --env AZURE_SQL_CONNECTIONSTRING \
+            --env AZURE_STORAGEBLOB_CONNECTIONSTRING \
+            "${{ needs.commit_stage.outputs.image }}"
 
       - name: Wait for release candidate
         run: |
           timeout 120 bash -c 'until curl -fsS http://127.0.0.1:4100/api/readyz; do sleep 1; done'
 
       - name: Run acceptance tests
-        env:
-          ADE_BASE_URL: http://127.0.0.1:4100
         run: pnpm test:acceptance
 
-      - name: Stop release candidate
+      - name: Dump acceptance container logs
+        if: failure()
+        run: |
+          docker logs ade-acceptance-app || true
+          docker compose -p ade-acceptance logs --no-color azurite sqlserver || true
+
+      - name: Stop acceptance environment
         if: always()
-        run: docker rm --force ade-acceptance || true
+        run: |
+          docker rm --force ade-acceptance-app || true
+          docker compose -p ade-acceptance down -v --remove-orphans || true
 
   release_stage:
     name: Release Stage
@@ -129,7 +166,7 @@ jobs:
       - commit_stage
       - acceptance_stage
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment:
       name: production
     permissions:
@@ -152,10 +189,61 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
 
       - name: Deploy accepted release candidate
+        id: deploy_release_candidate
         env:
           ADE_IMAGE: ${{ needs.commit_stage.outputs.image }}
-        run: >
-          az deployment group create
-          --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
-          --parameters infra/environments/main.prod.bicepparam
+        run: |
+          migration_job_name="$(
+            az deployment group create \
+              --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --parameters infra/environments/main.prod.bicepparam \
+              --query properties.outputs.migrationJobName.value \
+              --output tsv
+          )"
+
+          echo "migration_job_name=${migration_job_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run database migrations
+        env:
+          ADE_MIGRATION_JOB_NAME: ${{ steps.deploy_release_candidate.outputs.migration_job_name }}
+        run: |
+          execution_name="$(
+            az containerapp job start \
+              --name "${ADE_MIGRATION_JOB_NAME}" \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --query name \
+              --output tsv
+          )"
+
+          echo "Started migration job execution: ${execution_name}"
+
+          for attempt in $(seq 1 90); do
+            status="$(
+              az containerapp job execution list \
+                --name "${ADE_MIGRATION_JOB_NAME}" \
+                --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+                --query "[?name=='${execution_name}'] | [0].properties.status" \
+                --output tsv
+            )"
+
+            if [ "${status}" = "Succeeded" ]; then
+              echo "Migration job succeeded."
+              exit 0
+            fi
+
+            if [ "${status}" = "Failed" ]; then
+              echo "Migration job failed."
+              az containerapp job execution list \
+                --name "${ADE_MIGRATION_JOB_NAME}" \
+                --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+                --query "[?name=='${execution_name}'] | [0]" \
+                --output json
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for migration job execution ${execution_name}."
+          exit 1

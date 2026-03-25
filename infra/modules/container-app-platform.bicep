@@ -1,5 +1,6 @@
 param logAnalyticsWorkspaceName string
 param containerAppsEnvironmentName string
+param infrastructureSubnetId string
 param location string
 param tags object = {}
 
@@ -36,6 +37,16 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
         sharedKey: workspace.listKeys().primarySharedKey
       }
     }
+    vnetConfiguration: {
+      infrastructureSubnetId: infrastructureSubnetId
+      internal: false
+    }
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
   }
 }
 

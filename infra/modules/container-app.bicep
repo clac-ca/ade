@@ -17,19 +17,13 @@ param memory string = '0.5Gi'
 param minReplicas int = 1
 param maxReplicas int = 1
 param tags object = {}
-@description('User-assigned managed identity resource ID attached to the container app for runtime access.')
-param runtimeManagedIdentityResourceId string = ''
-var usesRuntimeManagedIdentity = runtimeManagedIdentityResourceId != ''
 
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
   location: location
-  identity: usesRuntimeManagedIdentity ? {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${runtimeManagedIdentityResourceId}': {}
-    }
-  } : null
+  identity: {
+    type: 'SystemAssigned'
+  }
   tags: tags
   properties: {
     managedEnvironmentId: managedEnvironmentId
@@ -70,4 +64,5 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 
 output id string = containerApp.id
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
+output principalId string = containerApp.identity.principalId
 output url string = '${externalIngress ? 'https' : 'http'}://${containerApp.properties.configuration.ingress.fqdn}'
