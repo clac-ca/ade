@@ -54,11 +54,9 @@ Purpose: reject bad changes quickly and create the release candidate.
 Current ADE commit stage:
 
 - checks out the repo
-- sets up pnpm, Node, and Docker Buildx
+- sets up pnpm, Node, uv, and Docker Buildx
 - installs dependencies with `pnpm install --frozen-lockfile`
-- runs `pnpm lint`
-- runs `pnpm test:unit`
-- runs `pnpm build`
+- runs `pnpm test`
 - on `push` to `main`, logs into GHCR and publishes the release-candidate image
 
 This stage runs for:
@@ -142,7 +140,7 @@ The workflow uses `azure/login` with OIDC.
 
 Configure Azure federated credentials for the `production` GitHub environment instead of storing long-lived cloud secrets in the repository.
 
-For the one-time Azure setup and first manual deployment, follow [infra/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/infra/README.md).
+For the one-time Azure setup and first manual deployment, follow [infra/README.md](../../infra/README.md).
 
 ### 3. GitHub Container Registry
 
@@ -155,9 +153,7 @@ Set the `ade` package to public visibility in GitHub Packages.
 These commands line up with the workflow:
 
 ```sh
-pnpm lint
-pnpm test:unit
-pnpm build
+pnpm test
 pnpm start
 ADE_BASE_URL=http://localhost:8000 pnpm test:acceptance
 ```

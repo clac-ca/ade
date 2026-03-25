@@ -11,6 +11,9 @@ export type CreateAppOptions = RootRouteOptions & {
 
 function createApp({ logger = true, webRoot, ...options }: CreateAppOptions): FastifyInstance {
   const server = Fastify({
+    routerOptions: {
+      ignoreTrailingSlash: true
+    },
     logger
   })
 

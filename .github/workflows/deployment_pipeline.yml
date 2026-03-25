@@ -40,20 +40,19 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           node-version: ${{ env.ADE_NODE_VERSION }}
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          python-version: "3.12"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Unit tests
-        run: pnpm test:unit
-
-      - name: Build release candidate
-        run: pnpm build
+      - name: Run commit-stage gate
+        run: pnpm test
 
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push'

@@ -16,6 +16,7 @@ ADE is a document operations platform for messy spreadsheets.
 - Node.js 22+
 - pnpm 10+
 - Python 3.12
+- uv
 - Docker
 
 ## Quickstart
@@ -40,7 +41,7 @@ Use `pnpm dev -- --port 8100` to run a second worktree on the same machine.
 | `pnpm lint`            | Run ESLint across the repo                                              |
 | `pnpm format:check`    | Check the pipeline-owned repo files with Prettier                       |
 | `pnpm typecheck`       | Run the TypeScript typechecks                                           |
-| `pnpm test`            | Run the local commit-stage gate: lint, unit tests, then build           |
+| `pnpm test`            | Run the local commit-stage gate: lint, unit tests, Python packaging, then build |
 | `pnpm test:unit`       | Run the API unit tests                                                  |
 | `pnpm test:acceptance` | Run the acceptance checks for a deployed environment via `ADE_BASE_URL` |
 | `pnpm package:python`  | Build the Python packages                                               |
@@ -50,6 +51,6 @@ Use `pnpm dev -- --port 8100` to run a second worktree on the same machine.
 
 ## Docs
 
-- [infra/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/infra/README.md) - Azure bootstrap and production infrastructure
-- [packages/ade-config/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/packages/ade-config/README.md) - `ade-config` package and `ade` CLI
-- [packages/ade-engine/README.md](/Users/justinkropp/.codex/worktrees/4552/ade/packages/ade-engine/README.md) - `ade-engine` runtime package
+- [infra/README.md](infra/README.md) - Azure bootstrap and production infrastructure
+- [packages/ade-config/README.md](packages/ade-config/README.md) - `ade-config` package and `ade` CLI
+- [packages/ade-engine/README.md](packages/ade-engine/README.md) - `ade-engine` runtime package

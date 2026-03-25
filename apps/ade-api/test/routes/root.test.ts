@@ -26,6 +26,21 @@ test('health route', async (t) => {
   })
 })
 
+test('api root works without a trailing slash', async (t) => {
+  const { app } = await build(t)
+
+  const res = await app.inject({
+    url: '/api'
+  })
+
+  assert.equal(res.statusCode, 200)
+  assert.deepStrictEqual(JSON.parse(res.payload), {
+    service: 'ade',
+    status: 'ok',
+    version: 'test-version'
+  })
+})
+
 test('ready route reflects readiness state', async (t) => {
   const { app, readiness } = await build(t, {
     ready: false
