@@ -1,63 +1,75 @@
-import js from '@eslint/js'
-import { fileURLToPath } from 'node:url'
-import globals from 'globals'
-import tseslint from 'typescript-eslint'
+import js from "@eslint/js";
+import { fileURLToPath } from "node:url";
+import globals from "globals";
+import tseslint from "typescript-eslint";
 
-const rootDir = fileURLToPath(new URL('.', import.meta.url))
+const rootDir = fileURLToPath(new URL(".", import.meta.url));
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', 'apps/ade-api/.package/**', '.buildx-cache/**']
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      "apps/ade-api/.package/**",
+      "apps/ade-api/target/**",
+      ".buildx-cache/**",
+      "var/**",
+    ],
   },
   {
-    files: ['**/*.{js,mjs,cjs}'],
+    files: ["**/*.{js,mjs,cjs}"],
     extends: [js.configs.recommended],
     languageOptions: {
       globals: {
-        ...globals.node
-      }
-    }
+        ...globals.node,
+      },
+    },
   },
   {
-    files: ['**/*.{ts,tsx}'],
+    files: ["**/*.{ts,tsx}"],
     extends: [
       js.configs.recommended,
       ...tseslint.configs.recommendedTypeChecked,
-      ...tseslint.configs.strictTypeChecked
+      ...tseslint.configs.strictTypeChecked,
     ],
     languageOptions: {
       parserOptions: {
         projectService: true,
-        tsconfigRootDir: rootDir
+        tsconfigRootDir: rootDir,
       },
       globals: {
-        ...globals.node
-      }
+        ...globals.node,
+      },
     },
     rules: {
-      '@typescript-eslint/no-unsafe-argument': 'error',
-      '@typescript-eslint/no-unsafe-assignment': 'error',
-      '@typescript-eslint/no-unsafe-call': 'error',
-      '@typescript-eslint/no-unsafe-member-access': 'error',
-      '@typescript-eslint/no-unsafe-return': 'error'
-    }
+      "@typescript-eslint/no-unsafe-argument": "error",
+      "@typescript-eslint/no-unsafe-assignment": "error",
+      "@typescript-eslint/no-unsafe-call": "error",
+      "@typescript-eslint/no-unsafe-member-access": "error",
+      "@typescript-eslint/no-unsafe-return": "error",
+    },
   },
   {
-    files: ['apps/ade-web/src/**/*.{ts,tsx}', 'apps/ade-web/vite.config.ts'],
+    files: ["apps/ade-web/src/**/*.{ts,tsx}", "apps/ade-web/vite.config.ts"],
     languageOptions: {
       globals: {
         ...globals.browser,
-        ...globals.node
-      }
-    }
+        ...globals.node,
+      },
+    },
   },
   {
-    files: ['apps/ade-api/test/**/*.ts', 'scripts/test/**/*.ts'],
+    files: [
+      "apps/ade-api/test/**/*.ts",
+      "apps/ade-web/src/**/*.test.{ts,tsx}",
+      "scripts/test/**/*.ts",
+    ],
     rules: {
-      '@typescript-eslint/no-floating-promises': 'off',
-      '@typescript-eslint/no-unnecessary-type-parameters': 'off',
-      '@typescript-eslint/require-await': 'off',
-      '@typescript-eslint/restrict-template-expressions': 'off'
-    }
-  }
-)
+      "@typescript-eslint/no-floating-promises": "off",
+      "@typescript-eslint/no-unnecessary-type-parameters": "off",
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/require-await": "off",
+      "@typescript-eslint/restrict-template-expressions": "off",
+    },
+  },
+);

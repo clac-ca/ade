@@ -50,6 +50,20 @@ async function assertAppShell(baseUrl: string): Promise<void> {
   }
 }
 
+async function assertSpaDeepLink(baseUrl: string): Promise<void> {
+  const response = await expectOk(
+    `${baseUrl}/documents/example`,
+    "SPA deep-link fallback",
+  );
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (!contentType.includes("text/html")) {
+    throw new Error(
+      `Expected SPA deep-link fallback to return HTML, received ${contentType || "unknown content type"}.`,
+    );
+  }
+}
+
 async function assertHealth(baseUrl: string): Promise<void> {
   const payload = (await readJson(
     `${baseUrl}/api/healthz`,
@@ -89,7 +103,7 @@ async function assertVersion(baseUrl: string): Promise<void> {
   )) as {
     builtAt?: unknown;
     gitSha?: unknown;
-    nodeVersion?: unknown;
+    runtimeVersion?: unknown;
     service?: unknown;
     version?: unknown;
   };
@@ -98,7 +112,7 @@ async function assertVersion(baseUrl: string): Promise<void> {
   assertString(payload.version, "version payload version");
   assertString(payload.gitSha, "version payload gitSha");
   assertString(payload.builtAt, "version payload builtAt");
-  assertString(payload.nodeVersion, "version payload nodeVersion");
+  assertString(payload.runtimeVersion, "version payload runtimeVersion");
 
   if (payload.service !== "ade") {
     throw new Error('Expected /api/version to report service "ade".');
@@ -122,6 +136,7 @@ async function assertApiRoot(baseUrl: string): Promise<void> {
 async function runAcceptanceChecks(baseUrl: string): Promise<void> {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   await assertAppShell(normalizedBaseUrl);
+  await assertSpaDeepLink(normalizedBaseUrl);
   await assertHealth(normalizedBaseUrl);
   await assertReady(normalizedBaseUrl);
   await assertVersion(normalizedBaseUrl);

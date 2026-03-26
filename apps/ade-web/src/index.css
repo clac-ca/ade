@@ -1,67 +1,207 @@
 :root {
-  color: #13202b;
-  background: #f3f6f8;
+  color: #1b2933;
+  background:
+    radial-gradient(circle at top, rgba(142, 173, 208, 0.18), transparent 42%),
+    linear-gradient(180deg, #f6f8fb 0%, #edf2f6 100%);
   font-family: "Avenir Next", "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+  --surface: rgba(255, 255, 255, 0.84);
+  --surface-strong: #ffffff;
+  --text-muted: #506473;
+  --line: rgba(73, 98, 118, 0.18);
+  --accent: #1f6b7e;
+  --accent-soft: rgba(31, 107, 126, 0.12);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
+  min-height: 100vh;
 }
 
 #root {
   min-height: 100vh;
 }
 
-.shell {
+.app-shell {
   min-height: 100vh;
+  padding: 32px 24px 48px;
+}
+
+.app-shell__header {
+  width: min(960px, 100%);
+  margin: 0 auto 28px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 24px;
+}
+
+.app-shell__brand {
   display: grid;
-  place-items: center;
-  padding: 24px;
+  gap: 6px;
+}
+
+.app-shell__badge {
+  display: inline-flex;
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.app-shell__title {
+  margin: 0;
+  font-size: clamp(2.1rem, 5vw, 3.6rem);
+  line-height: 0.92;
+  letter-spacing: -0.045em;
+}
+
+.app-shell__summary {
+  margin: 0;
+  max-width: 30rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.app-shell__main {
+  width: min(960px, 100%);
+  margin: 0 auto;
 }
 
 .panel {
-  width: min(720px, 100%);
-  padding: 48px;
-  border: 1px solid #d7dfe5;
-  border-radius: 20px;
-  background: #ffffff;
-  box-shadow: 0 18px 40px rgba(19, 32, 43, 0.08);
+  display: grid;
+  gap: 28px;
+  padding: clamp(24px, 4vw, 42px);
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: var(--surface);
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 26px 56px rgba(18, 30, 40, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 
 .eyebrow {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #456077;
+  color: var(--accent);
 }
 
-h1 {
-  margin: 16px 0 12px;
-  font-size: clamp(2.25rem, 6vw, 4rem);
-  line-height: 0.95;
+.hero {
+  display: grid;
+  gap: 14px;
+}
+
+.hero__title {
+  margin: 0;
+  font-size: clamp(1.9rem, 4.5vw, 3rem);
+  line-height: 0.98;
   letter-spacing: -0.04em;
 }
 
-.summary {
+.hero__summary {
   margin: 0;
-  max-width: 34rem;
-  font-size: 1.05rem;
-  line-height: 1.6;
-  color: #3a5266;
+  max-width: 40rem;
+  color: var(--text-muted);
+  font-size: 1.02rem;
+  line-height: 1.65;
 }
 
-@media (max-width: 640px) {
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.status-card {
+  padding: 18px 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-strong);
+}
+
+.status-card__label {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status-card__value {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.status-card__value--mono {
+  font-family: "SFMono-Regular", "Menlo", monospace;
+  font-size: 0.95rem;
+}
+
+.status-note {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.status-note--error {
+  color: #8f3c35;
+}
+
+.not-found {
+  display: grid;
+  gap: 14px;
+  place-items: start;
+}
+
+.not-found__title {
+  margin: 0;
+  font-size: clamp(1.75rem, 4vw, 2.4rem);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.not-found__summary {
+  margin: 0;
+  max-width: 32rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding-inline: 16px;
+  }
+
+  .app-shell__header {
+    margin-bottom: 20px;
+  }
+
   .panel {
-    padding: 32px 24px;
+    padding: 24px;
+    border-radius: 22px;
   }
 }
