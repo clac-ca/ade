@@ -40,6 +40,8 @@ Use `pnpm dev -- --port 8100` to run a second worktree on the same machine.
 
 When you want to run the built app with explicit runtime configuration, copy `.env.example` to `.env` and adjust the values you need.
 
+`pnpm start` is production-like: it expects a reachable SQL dependency and fails fast if `AZURE_SQL_CONNECTIONSTRING` is missing or the database cannot be reached.
+
 Shared runtime variable names and usage are documented in [docs/environment-variables.md](docs/environment-variables.md).
 
 ## Root Commands
@@ -57,7 +59,7 @@ Shared runtime variable names and usage are documented in [docs/environment-vari
 | `pnpm test:acceptance` | Run the acceptance checks for a deployed environment via `ADE_BASE_URL`         |
 | `pnpm package:python`  | Build the Python packages                                                       |
 | `pnpm build`           | Build the local release-candidate image `ade:local`                             |
-| `pnpm start`           | Run the built local image                                                       |
+| `pnpm start`           | Run the built local image against an already reachable SQL dependency           |
 | `pnpm clean`           | Remove generated local output, local images, and local Compose state            |
 
 ## Docs

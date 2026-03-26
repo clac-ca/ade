@@ -158,4 +158,6 @@ pnpm start
 ADE_BASE_URL=http://localhost:8000 pnpm test:acceptance
 ```
 
+`pnpm start` uses the shared runtime contract from [docs/environment-variables.md](../../docs/environment-variables.md) and now expects reachable SQL rather than bootstrapping local dependencies.
+
 Runtime env reference: [docs/environment-variables.md](../../docs/environment-variables.md)

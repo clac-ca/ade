@@ -100,6 +100,8 @@ async function main() {
       "--rm",
       "--name",
       containerName,
+      "--add-host",
+      "host.docker.internal:host-gateway",
       "--publish",
       `${port}:${runtimePort}`,
       ...runtimeEnvArgs,

@@ -1,12 +1,11 @@
 import process from 'node:process'
 import { FastifyPluginAsync } from 'fastify'
 import { BundledBuildInfo } from '../config'
+import { isApplicationReady, ReadinessState } from '../readiness'
 
 export type RootRouteOptions = {
   buildInfo: BundledBuildInfo,
-  readiness: {
-    isReady: boolean
-  }
+  readiness: ReadinessState
 }
 
 const root: FastifyPluginAsync<RootRouteOptions> = async (fastify, options): Promise<void> => {
@@ -26,7 +25,7 @@ const root: FastifyPluginAsync<RootRouteOptions> = async (fastify, options): Pro
   })
 
   fastify.get('/readyz', async (_, reply) => {
-    if (!options.readiness.isReady) {
+    if (!isApplicationReady(options.readiness)) {
       reply.status(503)
       return {
         service: 'ade',

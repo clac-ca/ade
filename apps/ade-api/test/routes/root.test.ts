@@ -43,7 +43,9 @@ test('api root works without a trailing slash', async (t) => {
 
 test('ready route reflects readiness state', async (t) => {
   const { app, readiness } = await build(t, {
-    ready: false
+    databaseOk: false,
+    isStarted: false,
+    lastCheckedAt: null
   })
 
   const notReady = await app.inject({
@@ -55,7 +57,9 @@ test('ready route reflects readiness state', async (t) => {
     status: 'not-ready'
   })
 
-  readiness.isReady = true
+  readiness.isStarted = true
+  readiness.database.ok = true
+  readiness.database.lastCheckedAt = Date.now()
 
   const ready = await app.inject({
     url: '/api/readyz'
@@ -64,6 +68,25 @@ test('ready route reflects readiness state', async (t) => {
   assert.deepStrictEqual(JSON.parse(ready.payload), {
     service: 'ade',
     status: 'ready'
+  })
+})
+
+test('ready route returns not-ready when SQL readiness is stale', async (t) => {
+  const { app } = await build(t, {
+    databaseOk: true,
+    isStarted: true,
+    lastCheckedAt: Date.now() - 20_000,
+    staleAfterMs: 15_000
+  })
+
+  const res = await app.inject({
+    url: '/api/readyz'
+  })
+
+  assert.equal(res.statusCode, 503)
+  assert.deepStrictEqual(JSON.parse(res.payload), {
+    service: 'ade',
+    status: 'not-ready'
   })
 })
 
