@@ -9,9 +9,18 @@ type StartArgs = BrowserArgs & {
   image: string;
 };
 
-type AcceptanceArgs = {
+type ManagedAcceptanceArgs = {
+  mode: "managed";
+  image: string;
+  port: number;
+};
+
+type AttachedAcceptanceArgs = {
+  mode: "attach";
   url: URL;
 };
+
+type AcceptanceArgs = AttachedAcceptanceArgs | ManagedAcceptanceArgs;
 
 function parsePort(value: string, name: string): number {
   if (!/^[1-9]\d*$/.test(value)) {
@@ -86,6 +95,12 @@ function parseAcceptanceArgs(argv: readonly string[]): AcceptanceArgs {
     allowPositionals: false,
     args: argv,
     options: {
+      image: {
+        type: "string",
+      },
+      port: {
+        type: "string",
+      },
       url: {
         type: "string",
       },
@@ -94,19 +109,28 @@ function parseAcceptanceArgs(argv: readonly string[]): AcceptanceArgs {
   });
   const value = values.url?.trim();
 
-  if (!value) {
-    throw new Error("Missing required --url");
+  if (value) {
+    if (values.image !== undefined || values.port !== undefined) {
+      throw new Error("--url cannot be combined with --image or --port.");
+    }
+
+    try {
+      return {
+        mode: "attach",
+        url: new URL(value),
+      };
+    } catch (error) {
+      throw new Error(`Invalid --url: ${value}`, {
+        cause: error,
+      });
+    }
   }
 
-  try {
-    return {
-      url: new URL(value),
-    };
-  } catch (error) {
-    throw new Error(`Invalid --url: ${value}`, {
-      cause: error,
-    });
-  }
+  return {
+    image: values.image?.trim() ? values.image : "ade:local",
+    mode: "managed",
+    port: values.port === undefined ? 4100 : parsePort(values.port, "port"),
+  };
 }
 
 export { parseAcceptanceArgs, parseDevArgs, parsePort, parseStartArgs };

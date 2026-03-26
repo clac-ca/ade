@@ -16,7 +16,19 @@ function createLocalSqlConnectionString(): string {
   ].join(";");
 }
 
+function createLocalContainerSqlConnectionString(): string {
+  return [
+    `Server=host.docker.internal,${String(localSqlPort)}`,
+    "Database=ade",
+    "User Id=sa",
+    `Password=${localSqlPassword}`,
+    "Encrypt=false",
+    "TrustServerCertificate=true",
+  ].join(";");
+}
+
 export {
+  createLocalContainerSqlConnectionString,
   createLocalSqlConnectionString,
   localApiHost,
   localApiPort,

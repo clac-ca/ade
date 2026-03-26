@@ -19,6 +19,8 @@ The running Container App uses a system-assigned managed identity.
 The manual migration job reuses the deployment managed identity.
 
 `infra/main.bicep` defines the migration job resource, but it does not run migrations by itself.
+The public Container App uses the image's default startup command and never runs schema migrations on startup.
+The migration job is the only Azure resource that overrides its command, and it does so with `./bin/ade-migrate`.
 
 ## Production names
 

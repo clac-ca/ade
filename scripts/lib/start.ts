@@ -18,4 +18,17 @@ function createContainerRunArgs(options: {
   ];
 }
 
-export { createContainerRunArgs };
+function createMigrationRunArgs(options: { image: string }): string[] {
+  return [
+    "run",
+    "--rm",
+    "--add-host",
+    "host.docker.internal:host-gateway",
+    "--env",
+    "AZURE_SQL_CONNECTIONSTRING",
+    options.image,
+    "./bin/ade-migrate",
+  ];
+}
+
+export { createContainerRunArgs, createMigrationRunArgs };

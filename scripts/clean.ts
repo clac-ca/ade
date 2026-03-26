@@ -21,23 +21,32 @@ async function tryRun(command: string, args: readonly string[]): Promise<void> {
 }
 
 function readAdeContainers(): string[] {
-  try {
-    const output = execFileSync(
-      dockerCommand,
-      ["ps", "-a", "--filter", "name=^ade-local-", "--format", "{{.Names}}"],
-      {
-        cwd: rootDir,
-        encoding: "utf8",
-      },
-    );
+  const names = new Set<string>();
 
-    return output
-      .split("\n")
-      .map((value) => value.trim())
-      .filter(Boolean);
-  } catch {
-    return [];
+  for (const filter of ["name=^ade-local-", "name=^ade-acceptance-"]) {
+    try {
+      const output = execFileSync(
+        dockerCommand,
+        ["ps", "-a", "--filter", filter, "--format", "{{.Names}}"],
+        {
+          cwd: rootDir,
+          encoding: "utf8",
+        },
+      );
+
+      for (const value of output.split("\n")) {
+        const trimmed = value.trim();
+
+        if (trimmed !== "") {
+          names.add(trimmed);
+        }
+      }
+    } catch {
+      continue;
+    }
   }
+
+  return [...names];
 }
 
 async function main(): Promise<void> {

@@ -2,7 +2,7 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { localComposeProjectName } from "./lib/dev-config";
 import { createConsoleLogger, runMain } from "./lib/runtime";
-import { ensureDocker, runCommand } from "./lib/shell";
+import { ensureDocker, runCommand, runCommandCapture } from "./lib/shell";
 
 const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
@@ -44,6 +44,29 @@ async function downLocalDependencies(
   await runCompose(["down", "-v", "--remove-orphans"], options);
 }
 
+async function readLocalDependencyLogs(
+  services: readonly string[] = ["sqlserver"],
+): Promise<string> {
+  const { stdout } = await runCommandCapture(
+    dockerCommand,
+    [
+      "compose",
+      "-f",
+      composeFile,
+      "-p",
+      localComposeProjectName,
+      "logs",
+      "--no-color",
+      ...services,
+    ],
+    {
+      cwd: rootDir,
+    },
+  );
+
+  return stdout.trim();
+}
+
 async function main(logger = createConsoleLogger()): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
 
@@ -65,7 +88,7 @@ async function main(logger = createConsoleLogger()): Promise<void> {
   logger.info("ADE local SQL is stopped");
 }
 
-export { downLocalDependencies, upLocalDependencies };
+export { downLocalDependencies, readLocalDependencyLogs, upLocalDependencies };
 
 if (
   process.argv[1] &&

@@ -2,99 +2,37 @@ import process from "node:process";
 import { parseStartArgs } from "./lib/args";
 import { openBrowser } from "./lib/browser";
 import { loadOptionalEnvFile } from "./lib/env-files";
-import { createConsoleLogger, formatError, readOptionalTrimmedString, runMain } from "./lib/runtime";
-import { createContainerRunArgs } from "./lib/start";
 import {
-  ensureDocker,
-  registerShutdown,
-  runCommand,
-  runCommandCapture,
-  spawnCommand,
-  waitForReady,
-} from "./lib/shell";
+  createConsoleLogger,
+  formatError,
+  readOptionalTrimmedString,
+  runMain,
+} from "./lib/runtime";
+import { startLocalRuntime } from "./lib/local-runtime";
+import { registerShutdown, waitForReady } from "./lib/shell";
 
-const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
 const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
-
-async function removeContainer(name: string): Promise<void> {
-  try {
-    await runCommand(dockerCommand, ["container", "rm", "--force", name], {
-      stdio: "ignore",
-    });
-  } catch {
-    return;
-  }
-}
-
-async function isContainerRunning(name: string): Promise<boolean> {
-  try {
-    const { stdout } = await runCommandCapture(dockerCommand, [
-      "container",
-      "inspect",
-      "--format",
-      "{{.State.Running}}",
-      name,
-    ]);
-
-    return stdout.trim() === "true";
-  } catch {
-    return false;
-  }
-}
 
 async function main(logger = createConsoleLogger()): Promise<void> {
   loadOptionalEnvFile();
-
-  const sqlConnectionString = readOptionalTrimmedString(
-    process.env,
-    sqlConnectionStringName,
-  );
-
-  if (!sqlConnectionString) {
-    throw new Error(
-      `Missing required environment variable: ${sqlConnectionStringName}`,
-    );
-  }
-
   const { image, noOpen, port } = parseStartArgs(process.argv.slice(2));
-  const containerName = `ade-local-${String(port)}`;
-  const appUrl = `http://127.0.0.1:${String(port)}`;
-
-  await ensureDocker(dockerCommand, "`pnpm start`");
-
-  await runCommand(dockerCommand, ["image", "inspect", image], {
-    stdio: "ignore",
-  }).catch(() => {
-    throw new Error(
-      image === "ade:local"
-        ? "Run `pnpm build` first."
-        : `The configured image is not available locally: ${image}. Run \`docker pull ${image}\` or choose a local image.`,
-    );
+  const sqlConnectionString = readOptionalTrimmedString(process.env, sqlConnectionStringName);
+  const runtime = await startLocalRuntime({
+    containerName: `ade-local-${String(port)}`,
+    hostPort: port,
+    image,
+    logger,
+    sqlConnectionString,
+    usage: "`pnpm start`",
   });
-
-  await removeContainer(containerName);
-
-  const container = spawnCommand(
-    dockerCommand,
-    createContainerRunArgs({
-      containerName,
-      hostPort: port,
-      image,
-    }),
-    {
-      env: {
-        [sqlConnectionStringName]: sqlConnectionString,
-      },
-    },
-  );
   let shuttingDown = false;
 
   const shutdown = registerShutdown(async () => {
     shuttingDown = true;
-    await removeContainer(containerName);
+    await runtime.stop();
   });
 
-  container.on("exit", (code, signal) => {
+  runtime.container.on("exit", (code, signal) => {
     if (
       shuttingDown ||
       signal === "SIGINT" ||
@@ -111,29 +49,17 @@ async function main(logger = createConsoleLogger()): Promise<void> {
   });
 
   try {
-    await waitForReady([`${appUrl}/`, `${appUrl}/api/readyz`], {
+    await waitForReady([`${runtime.appUrl}/`, `${runtime.appUrl}/api/readyz`], {
       isAlive: () =>
-        container.exitCode === null &&
-        container.signalCode === null &&
-        !shuttingDown,
+        runtime.isAlive() && !shuttingDown,
       timeoutMs: 60_000,
     });
   } catch (error) {
     logger.error(formatError(error));
+    const logs = await runtime.dumpLogs();
 
-    if (await isContainerRunning(containerName)) {
-      try {
-        const { stdout } = await runCommandCapture(dockerCommand, [
-          "logs",
-          containerName,
-        ]);
-
-        if (stdout.trim() !== "") {
-          logger.error(stdout.trim());
-        }
-      } catch {
-        return;
-      }
+    if (logs !== "") {
+      logger.error(logs);
     }
 
     await shutdown(1);
@@ -141,10 +67,14 @@ async function main(logger = createConsoleLogger()): Promise<void> {
   }
 
   if (!noOpen) {
-    openBrowser(appUrl);
+    openBrowser(runtime.appUrl);
   }
 
-  logger.info(`ADE is running at ${appUrl}`);
+  logger.info(
+    sqlConnectionString
+      ? `ADE is running at ${runtime.appUrl}`
+      : `ADE is running at ${runtime.appUrl} using managed local SQL`,
+  );
   await new Promise(() => undefined);
 }
 

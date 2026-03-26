@@ -27,17 +27,34 @@ test("parseStartArgs accepts an image override", () => {
   );
 });
 
-test("parseAcceptanceArgs requires a valid url", () => {
-  assert.equal(
-    parseAcceptanceArgs([
-      "--url",
-      "https://ade.example.com/base/",
-    ]).url.toString(),
+test("parseAcceptanceArgs defaults to a managed local environment", () => {
+  assert.deepEqual(parseAcceptanceArgs([]), {
+    image: "ade:local",
+    mode: "managed",
+    port: 4100,
+  });
+});
+
+test("parseAcceptanceArgs requires a valid url in attach mode", () => {
+  const config = parseAcceptanceArgs([
+    "--url",
     "https://ade.example.com/base/",
-  );
-  assert.throws(() => parseAcceptanceArgs([]), /Missing required --url/);
+  ]);
+
+  assert.equal(config.mode, "attach");
+  assert.equal(config.url.toString(), "https://ade.example.com/base/");
   assert.throws(
     () => parseAcceptanceArgs(["--url", "not-a-url"]),
     /Invalid --url/,
+  );
+  assert.throws(
+    () =>
+      parseAcceptanceArgs([
+        "--url",
+        "https://ade.example.com",
+        "--port",
+        "4101",
+      ]),
+    /cannot be combined/,
   );
 });
