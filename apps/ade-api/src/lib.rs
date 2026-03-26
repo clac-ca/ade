@@ -25,7 +25,7 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    config::{BuildInfo, DEFAULT_READINESS_STALE_AFTER_MS},
+    config::DEFAULT_READINESS_STALE_AFTER_MS,
     db::{DatabaseConnector, DatabaseProbe, LiveDatabaseConnector},
     error::AppError,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
@@ -40,7 +40,6 @@ pub mod embedded_migrations {
 }
 
 pub struct ServerOptions {
-    pub build_info: BuildInfo,
     pub host: String,
     pub port: u16,
     pub probe_interval_ms: u64,
@@ -71,7 +70,6 @@ impl ServerInstance {
             ..CreateReadinessControllerOptions::default()
         });
         let app = create_app(AppState {
-            build_info: options.build_info,
             readiness: readiness.clone(),
             web_root: options.web_root,
         });
@@ -305,8 +303,6 @@ mod tests {
     use tokio::time::sleep;
 
     use super::*;
-    use crate::config::BuildInfo;
-
     #[derive(Debug, Default)]
     struct FakeDatabase {
         outcomes: Mutex<Vec<Result<(), String>>>,
@@ -360,21 +356,11 @@ mod tests {
         }
     }
 
-    fn build_info() -> BuildInfo {
-        BuildInfo {
-            built_at: "2026-03-26T00:00:00.000Z".to_string(),
-            git_sha: "test-git-sha".to_string(),
-            service: "ade".to_string(),
-            version: "test-version".to_string(),
-        }
-    }
-
     #[tokio::test]
     async fn startup_fails_when_initial_probe_fails() {
         let database: Arc<dyn DatabaseProbe> =
             Arc::new(FakeDatabase::new(vec![Err("sql unavailable".to_string())]));
         let mut server = ServerInstance::new(ServerOptions {
-            build_info: build_info(),
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
@@ -401,7 +387,6 @@ mod tests {
             Ok(()),
         ]));
         let mut server = ServerInstance::new(ServerOptions {
-            build_info: build_info(),
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,

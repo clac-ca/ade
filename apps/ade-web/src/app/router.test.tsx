@@ -30,9 +30,6 @@ describe("AppRouter", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          builtAt: "2026-03-26T00:00:00.000Z",
-          gitSha: "abc123",
-          runtimeVersion: "rustc 1.94.1",
           service: "ade",
           version: "0.1.0",
         }),
@@ -52,6 +49,6 @@ describe("AppRouter", () => {
         name: "The frontend stays deliberately small and same-origin.",
       }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("rustc 1.94.1")).toBeInTheDocument();
+    expect(await screen.findByText("0.1.0")).toBeInTheDocument();
   });
 });

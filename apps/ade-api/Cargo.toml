@@ -6,13 +6,13 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1.89"
 axum = "0.8.7"
+axum-prometheus = "0.10.0"
 azure_core = { version = "0.33.0", default-features = false, features = ["tokio"] }
 azure_identity = { version = "0.33.0", default-features = false, features = ["tokio"] }
 bb8 = "0.9.0"
 bb8-tiberius = { version = "0.16.0", default-features = false, features = ["tds73", "tls", "with-tokio"] }
 clap = { version = "4.5.48", features = ["derive"] }
 refinery = { version = "0.9.0", features = ["int8-versions", "tiberius"] }
-rustc_version_runtime = "0.3.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 thiserror = "2.0.17"

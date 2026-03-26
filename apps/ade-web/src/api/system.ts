@@ -1,9 +1,6 @@
 import { apiFetch } from "./client";
 
 export type ApiVersion = {
-  builtAt: string;
-  gitSha: string;
-  runtimeVersion: string;
   service: string;
   version: string;
 };

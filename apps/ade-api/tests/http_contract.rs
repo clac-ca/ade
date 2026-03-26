@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use ade_api::{
-    config::BuildInfo,
+    config::SERVICE_VERSION,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{create_app, normalize_app},
     state::AppState,
@@ -14,15 +14,6 @@ use axum::{
 };
 use pretty_assertions::assert_eq;
 use tower::util::ServiceExt;
-
-fn build_info() -> BuildInfo {
-    BuildInfo {
-        built_at: "2026-03-26T00:00:00.000Z".to_string(),
-        git_sha: "test-git-sha".to_string(),
-        service: "ade".to_string(),
-        version: "test-version".to_string(),
-    }
-}
 
 fn fixture_web_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/fixtures/web-dist")
@@ -47,7 +38,6 @@ fn request_with_method(uri: &str, method: Method) -> Request<Body> {
 #[tokio::test]
 async fn health_route_reports_ok() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions {
             database_ok: Some(true),
             last_checked_at: Some(unix_time_ms()),
@@ -72,7 +62,6 @@ async fn health_route_reports_ok() {
 #[tokio::test]
 async fn api_root_works_without_trailing_slash() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
         web_root: Some(fixture_web_root()),
     }));
@@ -85,7 +74,7 @@ async fn api_root_works_without_trailing_slash() {
         serde_json::json!({
             "service": "ade",
             "status": "ok",
-            "version": "test-version"
+            "version": SERVICE_VERSION
         })
     );
 }
@@ -93,7 +82,6 @@ async fn api_root_works_without_trailing_slash() {
 #[tokio::test]
 async fn api_root_works_with_trailing_slash() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
         web_root: Some(fixture_web_root()),
     }));
@@ -106,7 +94,7 @@ async fn api_root_works_with_trailing_slash() {
         serde_json::json!({
             "service": "ade",
             "status": "ok",
-            "version": "test-version"
+            "version": SERVICE_VERSION
         })
     );
 }
@@ -118,7 +106,6 @@ async fn ready_route_reflects_readiness_state() {
         ..CreateReadinessControllerOptions::default()
     });
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: readiness.clone(),
         web_root: Some(fixture_web_root()),
     }));
@@ -148,9 +135,8 @@ async fn ready_route_reflects_readiness_state() {
 }
 
 #[tokio::test]
-async fn version_route_exposes_build_metadata() {
+async fn version_route_exposes_minimal_runtime_metadata() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
         web_root: Some(fixture_web_root()),
     }));
@@ -159,21 +145,42 @@ async fn version_route_exposes_build_metadata() {
     let payload = json_body(response).await;
 
     assert_eq!(payload["service"], "ade");
-    assert_eq!(payload["version"], "test-version");
-    assert_eq!(payload["gitSha"], "test-git-sha");
-    assert_eq!(payload["builtAt"], "2026-03-26T00:00:00.000Z");
-    assert!(
-        payload["runtimeVersion"]
-            .as_str()
+    assert_eq!(payload["version"], SERVICE_VERSION);
+    assert_eq!(payload.as_object().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn metrics_route_exposes_prometheus_text() {
+    let app = normalize_app(create_app(AppState {
+        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        web_root: Some(fixture_web_root()),
+    }));
+
+    let _ = app.clone().oneshot(request("/api/healthz")).await.unwrap();
+    let response = app.oneshot(request("/metrics")).await.unwrap();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
             .unwrap()
-            .starts_with("rustc ")
-    );
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert_eq!(content_type, "text/plain; version=0.0.4; charset=utf-8");
+    assert!(body.contains("axum_http_requests_total"));
+    assert!(body.contains("axum_http_requests_duration_seconds"));
 }
 
 #[tokio::test]
 async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
         web_root: Some(fixture_web_root()),
     }));
@@ -193,7 +200,6 @@ async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
 #[tokio::test]
 async fn head_requests_to_frontend_routes_preserve_head_semantics() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
         web_root: Some(fixture_web_root()),
     }));
@@ -210,7 +216,6 @@ async fn head_requests_to_frontend_routes_preserve_head_semantics() {
 #[tokio::test]
 async fn unknown_api_routes_return_json_404() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
         web_root: Some(fixture_web_root()),
     }));
@@ -231,7 +236,6 @@ async fn unknown_api_routes_return_json_404() {
 #[tokio::test]
 async fn missing_assets_stay_not_found() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
         web_root: Some(fixture_web_root()),
     }));
@@ -244,7 +248,6 @@ async fn missing_assets_stay_not_found() {
 #[tokio::test]
 async fn head_requests_to_missing_assets_stay_not_found() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
         web_root: Some(fixture_web_root()),
     }));
@@ -260,7 +263,6 @@ async fn head_requests_to_missing_assets_stay_not_found() {
 #[tokio::test]
 async fn root_serves_application_shell_when_web_root_exists() {
     let app = normalize_app(create_app(AppState {
-        build_info: build_info(),
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
         web_root: Some(fixture_web_root()),
     }));

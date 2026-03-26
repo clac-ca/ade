@@ -37,16 +37,12 @@ async fn run() -> Result<(), ade_api::error::AppError> {
     let env = current_env();
     let config = read_config(
         &env,
-        ReadConfigOptions {
-            require_sql: true,
-            ..ReadConfigOptions::default()
-        },
+        ReadConfigOptions { require_sql: true },
     )?;
     let args = ServerArgs::parse();
     let runtime_paths = default_runtime_paths();
 
     let AppConfig {
-        build_info,
         sql_connection_string,
     } = config;
     let sql_connection_string =
@@ -57,7 +53,6 @@ async fn run() -> Result<(), ade_api::error::AppError> {
         .then_some(runtime_paths.web_root);
 
     run_server_until_shutdown(ServerOptions {
-        build_info,
         host: args.host.unwrap_or_else(|| {
             if is_production(&env) {
                 DEFAULT_RUNTIME_HOST.to_string()

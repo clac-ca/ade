@@ -21,3 +21,10 @@ ADE supports one fixed local stack per machine.
 - `pnpm test:acceptance --image ghcr.io/example/ade:test --port 4101`: run the self-managed acceptance harness against a specific image and host port
 
 `pnpm dev` does not read `.env`. `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local SQL themselves.
+
+The standard runtime endpoints are:
+
+- `/api/healthz`
+- `/api/readyz`
+- `/api/version`
+- `/metrics`

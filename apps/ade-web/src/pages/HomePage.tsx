@@ -16,21 +16,21 @@ export function HomePage() {
         </h2>
         <p className="hero__summary">
           Routing is handled by React Router, server data by TanStack Query, and
-          API access by a thin client layer. This page intentionally proves that
-          stack against the backend contract instead of scaffolding future
-          product structure.
+          API access by a thin client layer. Runtime health stays on explicit
+          API endpoints, and operational metrics are exposed separately at
+          `/metrics`.
         </p>
       </div>
 
       {versionQuery.isPending ? (
         <p className="status-note">
-          Loading runtime metadata from `/api/version`…
+          Loading service metadata from `/api/version`…
         </p>
       ) : null}
 
       {versionQuery.isError ? (
         <p className="status-note status-note--error">
-          Unable to load runtime metadata. {versionQuery.error.message}
+          Unable to load service metadata. {versionQuery.error.message}
         </p>
       ) : null}
 
@@ -45,28 +45,12 @@ export function HomePage() {
               <p className="status-card__label">Version</p>
               <p className="status-card__value">{versionQuery.data.version}</p>
             </section>
-            <section className="status-card">
-              <p className="status-card__label">Runtime</p>
-              <p className="status-card__value">
-                {versionQuery.data.runtimeVersion}
-              </p>
-            </section>
-            <section className="status-card">
-              <p className="status-card__label">Built At</p>
-              <p className="status-card__value">{versionQuery.data.builtAt}</p>
-            </section>
-            <section className="status-card">
-              <p className="status-card__label">Git SHA</p>
-              <p className="status-card__value status-card__value--mono">
-                {versionQuery.data.gitSha}
-              </p>
-            </section>
           </div>
 
           <p className="status-note">
-            This is the first parity slice: a Vite SPA with declarative routing,
-            a first-class query client, and no extra feature framework wrapped
-            around it.
+            This first slice keeps the client contract intentionally small: a
+            minimal version endpoint for application identity and a standard
+            Prometheus metrics endpoint for observability.
           </p>
         </>
       ) : null}

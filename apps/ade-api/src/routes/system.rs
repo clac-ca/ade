@@ -1,7 +1,11 @@
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde::Serialize;
 
-use crate::{config::VersionInfo, readiness::is_application_ready, state::AppState};
+use crate::{
+    config::{SERVICE_NAME, SERVICE_VERSION},
+    readiness::is_application_ready,
+    state::AppState,
+};
 
 #[derive(Debug, Serialize)]
 pub struct ServiceStatusResponse {
@@ -13,20 +17,26 @@ pub struct ServiceStatusResponse {
 pub struct RootResponse {
     pub service: &'static str,
     pub status: &'static str,
-    pub version: String,
+    pub version: &'static str,
 }
 
-pub async fn api_root(State(state): State<AppState>) -> Json<RootResponse> {
+#[derive(Debug, Serialize)]
+pub struct VersionResponse {
+    pub service: &'static str,
+    pub version: &'static str,
+}
+
+pub async fn api_root() -> Json<RootResponse> {
     Json(RootResponse {
-        service: "ade",
+        service: SERVICE_NAME,
         status: "ok",
-        version: state.build_info.version,
+        version: SERVICE_VERSION,
     })
 }
 
 pub async fn healthz() -> Json<ServiceStatusResponse> {
     Json(ServiceStatusResponse {
-        service: "ade",
+        service: SERVICE_NAME,
         status: "ok",
     })
 }
@@ -39,7 +49,7 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ServiceStatusResponse {
-                service: "ade",
+                service: SERVICE_NAME,
                 status: "not-ready",
             }),
         );
@@ -48,15 +58,15 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(ServiceStatusResponse {
-            service: "ade",
+            service: SERVICE_NAME,
             status: "ready",
         }),
     )
 }
 
-pub async fn version(State(state): State<AppState>) -> Json<VersionInfo> {
-    Json(VersionInfo {
-        build_info: state.build_info,
-        runtime_version: format!("rustc {}", rustc_version_runtime::version()),
+pub async fn version() -> Json<VersionResponse> {
+    Json(VersionResponse {
+        service: SERVICE_NAME,
+        version: SERVICE_VERSION,
     })
 }
