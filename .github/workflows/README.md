@@ -2,162 +2,37 @@
 
 This is the canonical deployment pipeline for `clac-ca/ade`.
 
-It follows a strict three-stage shape:
+The workflow lives at `.github/workflows/deployment_pipeline.yml` and has three stages:
 
-1. **Commit Stage**
-2. **Acceptance Stage**
-3. **Release Stage**
+1. Commit stage
+2. Acceptance stage
+3. Release stage
 
-The workflow lives at `.github/workflows/deployment_pipeline.yml`.
+## Operating model
 
-## Operating model for ADE
+- Pull requests to `main` run only the commit stage.
+- Pushes to `main` run all three stages.
+- The commit stage builds `ade:local`, then tags and publishes the accepted image on push.
+- Acceptance reuses that image. It starts local SQL, runs migrations, starts the accepted image, waits for `/api/readyz`, and runs `pnpm test:acceptance -- --url http://127.0.0.1:4100`.
+- Release reuses the same image and passes it to Bicep as an explicit `image=` parameter override.
 
-`main` is the authoritative integration branch.
+## Required GitHub environment variables
 
-Both pull requests to `main` and pushes to `main` run the **Commit Stage**.
-
-Only pushes to `main` continue beyond commit stage.
-
-That means:
-
-- pull requests get fast technical feedback
-- `main` remains the authoritative path to release
-- release candidates are only published from real commits on `main`
-
-The commit stage creates the local release candidate with `pnpm build`.
-
-On pushes to `main`, that same built candidate is tagged and pushed to public GHCR as:
-
-```text
-ghcr.io/<owner>/ade:sha-<commit-sha>
-```
-
-Those image refs are then reused in acceptance and release.
-
-Acceptance does not rebuild the app.
-
-It:
-
-- pulls the published release-candidate image onto the GitHub runner
-- starts Azurite and SQL Server with `infra/local/compose.yaml`
-- runs the accepted image once to apply migrations, creating the local `ade` database if needed
-- starts the accepted image as the running app with `docker run`
-- waits for the API readiness endpoint
-- runs `pnpm test:acceptance` against the running candidate
-
-Compose owns only the local dependencies in this stage. The accepted image stays separate so the workflow makes it explicit which container is the system under test.
-
-## Commit Stage
-
-Purpose: reject bad changes quickly and create the release candidate.
-
-Current ADE commit stage:
-
-- checks out the repo
-- sets up pnpm, Node, uv, and Docker Buildx
-- installs dependencies with `pnpm install --frozen-lockfile`
-- runs `pnpm test`
-- on `push` to `main`, logs into GHCR and publishes the release-candidate image
-
-This stage runs for:
-
-- `pull_request` to `main`
-- `push` to `main`
-
-On pull requests, the publish step is skipped.
-
-## Acceptance Stage
-
-Purpose: prove the published release candidate works as a running system.
-
-Current ADE acceptance stage:
-
-- runs only on `push` to `main`
-- depends on the commit stage outputs
-- checks out the repo
-- installs dependencies
-- starts Azurite and SQL Server with `docker compose -f infra/local/compose.yaml`
-- runs `node dist/migrate.js` inside the accepted image on the Compose network
-- starts the published release candidate on the GitHub runner with `docker run`
-- waits for `http://127.0.0.1:4100/api/readyz`
-- runs `ADE_BASE_URL=http://127.0.0.1:4100 pnpm test:acceptance`
-- always stops the app container and tears down the Compose project afterward
-
-The acceptance environment is the GitHub runner itself. It is not a separate Azure staging deployment.
-
-The app still receives the same runtime env names documented in [docs/environment-variables.md](../../docs/environment-variables.md).
-
-There are no acceptance-specific application env names in the runtime contract.
-
-## Release Stage
-
-Purpose: deploy the accepted release candidate to production.
-
-Current ADE release stage:
-
-- runs only on `push` to `main`
-- depends on the acceptance stage
-- logs into Azure with OIDC
-- sets `ADE_IMAGE` to the accepted release-candidate image ref
-- deploys Azure infrastructure, the public Container App, and the manual migration job with `az deployment group create --parameters infra/environments/main.prod.bicepparam`
-- starts the manual migration job with `az containerapp job start`
-- polls the job execution and fails the release if migrations fail
-
-Because the GHCR image is public, the release deployment does not configure registry credentials.
-
-The split is intentional:
-
-- Bicep owns resource creation
-- the workflow owns the imperative "run migrations now" step
-
-That keeps the infrastructure definition declarative and keeps migration execution visible in `release_stage`.
-
-## GitHub repository setup required
-
-Shared runtime variable names are documented in [docs/environment-variables.md](../../docs/environment-variables.md).
-This document only covers workflow-specific variables and deployment wiring.
-
-Then configure the repo like this:
-
-### 1. Production environment
-
-Create a GitHub environment named:
-
-```text
-production
-```
-
-Set these variables on that environment:
+Create a `production` environment and set:
 
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
 
-### 2. Azure authentication
-
-The workflow uses `azure/login` with OIDC.
-
-Configure Azure federated credentials for the `production` GitHub environment instead of storing long-lived cloud secrets in the repository.
-
-For the one-time Azure setup and first manual deployment, follow [infra/README.md](../../infra/README.md).
-
-### 3. GitHub Container Registry
-
-The commit stage pushes the release-candidate image to `ghcr.io` using `GITHUB_TOKEN`.
-
-Set the `ade` package to public visibility in GitHub Packages.
+For the one-time Azure bootstrap and first manual deployment, follow [infra/README.md](../../infra/README.md).
 
 ## Local equivalents
-
-These commands line up with the workflow:
 
 ```sh
 pnpm test
 pnpm start
-ADE_BASE_URL=http://localhost:8000 pnpm test:acceptance
+pnpm test:acceptance -- --url http://localhost:8000
 ```
 
-`pnpm start` uses the shared runtime contract from [docs/environment-variables.md](../../docs/environment-variables.md) and now expects reachable SQL rather than bootstrapping local dependencies.
-
-Runtime env reference: [docs/environment-variables.md](../../docs/environment-variables.md)
+Runtime config reference: [docs/runtime-config.md](../../docs/runtime-config.md)

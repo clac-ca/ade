@@ -1,61 +1,73 @@
-import * as assert from 'node:assert'
-import { test } from 'node:test'
-import { runServer } from '../src/server'
+import * as assert from "node:assert";
+import { test } from "node:test";
+import { runServer } from "../src/server";
 
-test('runServer exits non-zero when shutdown fails', async (t) => {
-  let signalHandler: (() => void) | undefined
-  const exitCodes: number[] = []
-  const originalConsoleError = console.error
+function createLogger() {
+  const errors: string[] = [];
+
+  return {
+    errors,
+    logger: {
+      error(message: string) {
+        errors.push(message);
+      },
+      info() {},
+    },
+  };
+}
+
+test("runServer exits non-zero when shutdown fails", async () => {
+  let signalHandler: (() => void) | undefined;
+  const exitCodes: number[] = [];
+  const { errors, logger } = createLogger();
   const processHandle = {
     exit(code: number) {
-      exitCodes.push(code)
+      exitCodes.push(code);
     },
     on(event: string, handler: () => void) {
-      if (event === 'SIGTERM') {
-        signalHandler = handler
+      if (event === "SIGTERM") {
+        signalHandler = handler;
       }
-    }
-  }
-  console.error = () => {}
-  t.after(() => {
-    console.error = originalConsoleError
-  })
+    },
+  };
 
   const runtime = {
     start: async () => {},
     stop: async () => {
-      throw new Error('close failed')
-    }
-  }
+      throw new Error("close failed");
+    },
+  };
 
-  await runServer(processHandle, runtime)
-  assert.ok(signalHandler)
+  await runServer(processHandle, runtime, logger);
+  const stopServer = signalHandler;
+  assert.ok(stopServer);
 
-  await signalHandler?.()
-  assert.deepStrictEqual(exitCodes, [1])
-})
+  stopServer();
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+  assert.deepStrictEqual(exitCodes, [1]);
+  assert.equal(errors.length, 1);
+});
 
-test('runServer exits non-zero when startup fails', async (t) => {
-  const exitCodes: number[] = []
-  const originalConsoleError = console.error
+test("runServer exits non-zero when startup fails", async () => {
+  const exitCodes: number[] = [];
+  const { errors, logger } = createLogger();
   const processHandle = {
     exit(code: number) {
-      exitCodes.push(code)
+      exitCodes.push(code);
     },
-    on() {}
-  }
-  console.error = () => {}
-  t.after(() => {
-    console.error = originalConsoleError
-  })
+    on() {},
+  };
 
   const runtime = {
     start: async () => {
-      throw new Error('sql unavailable')
+      throw new Error("sql unavailable");
     },
-    stop: async () => {}
-  }
+    stop: async () => {},
+  };
 
-  await runServer(processHandle, runtime)
-  assert.deepStrictEqual(exitCodes, [1])
-})
+  await runServer(processHandle, runtime, logger);
+  assert.deepStrictEqual(exitCodes, [1]);
+  assert.equal(errors.length, 1);
+});

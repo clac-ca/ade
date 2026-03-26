@@ -1,168 +1,202 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import sql from 'mssql'
-import { connectToSql, ensureDatabaseExists, quoteSqlIdentifier } from './connection'
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import sql from "mssql";
+import { connectToDatabase, ensureDatabaseExists } from "./connection";
+import { AppError, ConfigError, DatabaseError } from "../errors";
 
 export type MigrationResult = {
-  applied: string[],
-  skipped: string[]
-}
+  applied: string[];
+  skipped: string[];
+};
 
 export type RunMigrationsOptions = {
-  connectionString: string,
-  migrationsDir?: string,
-  runtimePrincipalName?: string
-}
+  connectionString: string;
+  migrationsDir?: string;
+};
 
-const schemaMigrationsTable = '[dbo].[schema_migrations]'
+type MigrationQueryResultLike<T> = {
+  recordset: readonly T[];
+};
+
+type MigrationRequestLike = {
+  batch(statement: string): Promise<unknown>;
+  input(name: string, type: unknown, value: unknown): MigrationRequestLike;
+  query<T>(statement: string): Promise<MigrationQueryResultLike<T>>;
+};
+
+type MigrationTransactionLike = {
+  begin(): Promise<unknown>;
+  commit(): Promise<void>;
+  request(): MigrationRequestLike;
+  rollback(): Promise<void>;
+};
+
+type MigrationPoolLike = {
+  close(): Promise<void>;
+  request(): MigrationRequestLike;
+  transaction(): MigrationTransactionLike;
+};
+
+type RunMigrationsDependencies = {
+  connect?: (connectionString: string) => Promise<MigrationPoolLike>;
+  ensureDatabaseExists?: (connectionString: string) => Promise<void>;
+  readMigrationText?: (migrationPath: string) => string;
+};
+
+const schemaMigrationsTable = "[dbo].[schema_migrations]";
+
+function throwMigrationError(message: string, error: unknown): never {
+  if (error instanceof AppError) {
+    throw error;
+  }
+
+  throw new DatabaseError(message, error);
+}
 
 function readMigrationFiles(migrationsDir: string): string[] {
   if (!existsSync(migrationsDir)) {
-    return []
+    return [];
   }
 
   return readdirSync(migrationsDir)
-    .filter((entry) => entry.endsWith('.sql'))
-    .sort((left, right) => left.localeCompare(right))
+    .filter((entry) => entry.endsWith(".sql"))
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function splitSqlBatches(sqlText: string): string[] {
   return sqlText
     .split(/^\s*GO\s*$/gim)
     .map((batch) => batch.trim())
-    .filter((batch) => batch !== '')
+    .filter((batch) => batch !== "");
 }
 
-async function ensureSchemaMigrationsTable(pool: sql.ConnectionPool) {
-  await pool.request().batch(`
-    IF OBJECT_ID(N'dbo.schema_migrations', N'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.schema_migrations (
-        migration_name NVARCHAR(255) NOT NULL PRIMARY KEY,
-        applied_at_utc DATETIME2(7) NOT NULL CONSTRAINT DF_schema_migrations_applied_at_utc DEFAULT SYSUTCDATETIME()
-      );
-    END
-  `)
-}
-
-async function ensureRuntimePrincipal(pool: sql.ConnectionPool, runtimePrincipalName: string) {
-  const principalIdentifier = quoteSqlIdentifier(runtimePrincipalName)
-
-  await pool.request().batch(`
-    IF NOT EXISTS (
-      SELECT 1
-      FROM sys.database_principals
-      WHERE name = N'${runtimePrincipalName.replaceAll("'", "''")}'
-    )
-    BEGIN
-      EXEC(N'CREATE USER ${principalIdentifier} FROM EXTERNAL PROVIDER');
-    END
-
-    IF NOT EXISTS (
-      SELECT 1
-      FROM sys.database_role_members AS role_members
-      INNER JOIN sys.database_principals AS role_principals ON role_principals.principal_id = role_members.role_principal_id
-      INNER JOIN sys.database_principals AS member_principals ON member_principals.principal_id = role_members.member_principal_id
-      WHERE role_principals.name = N'db_datareader'
-        AND member_principals.name = N'${runtimePrincipalName.replaceAll("'", "''")}'
-    )
-    BEGIN
-      EXEC(N'ALTER ROLE [db_datareader] ADD MEMBER ${principalIdentifier}');
-    END
-
-    IF NOT EXISTS (
-      SELECT 1
-      FROM sys.database_role_members AS role_members
-      INNER JOIN sys.database_principals AS role_principals ON role_principals.principal_id = role_members.role_principal_id
-      INNER JOIN sys.database_principals AS member_principals ON member_principals.principal_id = role_members.member_principal_id
-      WHERE role_principals.name = N'db_datawriter'
-        AND member_principals.name = N'${runtimePrincipalName.replaceAll("'", "''")}'
-    )
-    BEGIN
-      EXEC(N'ALTER ROLE [db_datawriter] ADD MEMBER ${principalIdentifier}');
-    END
-  `)
-}
-
-async function readAppliedMigrations(pool: sql.ConnectionPool): Promise<Set<string>> {
-  const result = await pool.request().query<{ migration_name: string }>(`
-    SELECT migration_name
-    FROM ${schemaMigrationsTable}
-  `)
-
-  return new Set(result.recordset.map((row: { migration_name: string }) => row.migration_name))
-}
-
-async function applyMigration(pool: sql.ConnectionPool, migrationName: string, sqlText: string) {
-  const transaction = new sql.Transaction(pool)
-  await transaction.begin()
-
+async function ensureSchemaMigrationsTable(pool: MigrationPoolLike) {
   try {
-    for (const batch of splitSqlBatches(sqlText)) {
-      await new sql.Request(transaction).batch(batch)
-    }
-
-    await new sql.Request(transaction)
-      .input('migrationName', sql.NVarChar(255), migrationName)
-      .query(`
-        INSERT INTO ${schemaMigrationsTable} (migration_name)
-        VALUES (@migrationName)
-      `)
-
-    await transaction.commit()
+    await pool.request().batch(`
+      IF OBJECT_ID(N'dbo.schema_migrations', N'U') IS NULL
+      BEGIN
+        CREATE TABLE dbo.schema_migrations (
+          migration_name NVARCHAR(255) NOT NULL PRIMARY KEY,
+          applied_at_utc DATETIME2(7) NOT NULL CONSTRAINT DF_schema_migrations_applied_at_utc DEFAULT SYSUTCDATETIME()
+        );
+      END
+    `);
   } catch (error) {
-    await transaction.rollback().catch(() => undefined)
-    throw error
+    throwMigrationError("Failed to ensure the schema migrations table.", error);
   }
 }
 
-async function runMigrations({
-  connectionString,
-  migrationsDir = join(process.cwd(), 'migrations'),
-  runtimePrincipalName
-}: RunMigrationsOptions): Promise<MigrationResult> {
-  await ensureDatabaseExists(connectionString)
-
-  const pool = await connectToSql(connectionString)
+async function readAppliedMigrations(
+  pool: MigrationPoolLike,
+): Promise<Set<string>> {
+  let result: MigrationQueryResultLike<{ migration_name: string }>;
 
   try {
-    await ensureSchemaMigrationsTable(pool)
+    result = await pool.request().query<{ migration_name: string }>(`
+      SELECT migration_name
+      FROM ${schemaMigrationsTable}
+    `);
+  } catch (error) {
+    throwMigrationError("Failed to read applied SQL migrations.", error);
+  }
 
-    if (runtimePrincipalName) {
-      await ensureRuntimePrincipal(pool, runtimePrincipalName)
+  return new Set(result.recordset.map((row) => row.migration_name));
+}
+
+async function applyMigration(
+  pool: MigrationPoolLike,
+  migrationName: string,
+  sqlText: string,
+) {
+  const transaction = pool.transaction();
+
+  try {
+    await transaction.begin();
+
+    for (const batch of splitSqlBatches(sqlText)) {
+      await transaction.request().batch(batch);
     }
 
-    const applied = await readAppliedMigrations(pool)
-    const migrationFiles = readMigrationFiles(migrationsDir)
+    await transaction
+      .request()
+      .input("migrationName", sql.NVarChar(255), migrationName).query(`
+        INSERT INTO ${schemaMigrationsTable} (migration_name)
+        VALUES (@migrationName)
+      `);
+
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback().catch(() => undefined);
+    throwMigrationError(
+      `Failed to apply SQL migration: ${migrationName}`,
+      error,
+    );
+  }
+}
+
+async function runMigrations(
+  {
+    connectionString,
+    migrationsDir = join(process.cwd(), "migrations"),
+  }: RunMigrationsOptions,
+  dependencies: RunMigrationsDependencies = {},
+): Promise<MigrationResult> {
+  const ensureDatabase =
+    dependencies.ensureDatabaseExists ?? ensureDatabaseExists;
+  const connect = dependencies.connect ?? connectToDatabase;
+  const readMigrationText =
+    dependencies.readMigrationText ??
+    ((migrationPath: string) => readFileSync(migrationPath, "utf8"));
+
+  await ensureDatabase(connectionString);
+
+  let pool: MigrationPoolLike;
+
+  try {
+    pool = await connect(connectionString);
+  } catch (error) {
+    throwMigrationError("Failed to connect to SQL for migrations.", error);
+  }
+
+  try {
+    await ensureSchemaMigrationsTable(pool);
+
+    const applied = await readAppliedMigrations(pool);
+    const migrationFiles = readMigrationFiles(migrationsDir);
     const result: MigrationResult = {
       applied: [],
-      skipped: []
-    }
+      skipped: [],
+    };
 
     for (const migrationName of migrationFiles) {
       if (applied.has(migrationName)) {
-        result.skipped.push(migrationName)
-        continue
+        result.skipped.push(migrationName);
+        continue;
       }
 
-      const sqlText = readFileSync(join(migrationsDir, migrationName), 'utf8').trim()
+      const sqlText = readMigrationText(
+        join(migrationsDir, migrationName),
+      ).trim();
 
-      if (sqlText === '') {
-        throw new Error(`Migration file is empty: ${migrationName}`)
+      if (sqlText === "") {
+        throw new ConfigError(`Migration file is empty: ${migrationName}`);
       }
 
-      await applyMigration(pool, migrationName, sqlText)
-      result.applied.push(migrationName)
+      await applyMigration(pool, migrationName, sqlText);
+      result.applied.push(migrationName);
     }
 
-    return result
+    return result;
   } finally {
-    await pool.close()
+    await pool.close();
   }
 }
 
-export {
-  readMigrationFiles,
-  runMigrations,
-  splitSqlBatches
-}
+export { readMigrationFiles, runMigrations, splitSqlBatches };
+
+export type {
+  MigrationPoolLike,
+  MigrationRequestLike,
+  MigrationTransactionLike,
+  RunMigrationsDependencies,
+};

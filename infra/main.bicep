@@ -82,10 +82,6 @@ var mergedTags = union({
   project: 'ade'
 }, tags)
 var githubOidcSubject = 'repo:${githubOrganization}/${githubRepository}:environment:${githubEnvironmentName}'
-var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions',
-  'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-)
 
 resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: deploymentManagedIdentityName
@@ -103,20 +99,6 @@ resource deploymentManagedIdentityFederatedCredential 'Microsoft.ManagedIdentity
     issuer: 'https://token.actions.githubusercontent.com'
     subject: githubOidcSubject
   }
-}
-
-resource storageAccount 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {
-  name: storageAccountName
-}
-
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2024-01-01' existing = {
-  parent: storageAccount
-  name: 'default'
-}
-
-resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2024-01-01' existing = {
-  parent: blobService
-  name: blobContainerName
 }
 
 module network 'modules/network.bicep' = {
@@ -179,18 +161,6 @@ module app 'modules/container-app.bicep' = {
         name: 'AZURE_SQL_CONNECTIONSTRING'
         value: appSqlConnectionString
       }
-      {
-        name: 'AZURE_STORAGEBLOB_RESOURCEENDPOINT'
-        value: storage.outputs.blobEndpoint
-      }
-      {
-        name: 'HOST'
-        value: '0.0.0.0'
-      }
-      {
-        name: 'PORT'
-        value: '8000'
-      }
     ]
     probes: [
       {
@@ -244,16 +214,6 @@ module app 'modules/container-app.bicep' = {
   }
 }
 
-resource blobDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(blobContainer.id, appName, storageBlobDataContributorRoleDefinitionId)
-  scope: blobContainer
-  properties: {
-    principalId: app.outputs.principalId
-    roleDefinitionId: storageBlobDataContributorRoleDefinitionId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 module migrationJob 'modules/container-app-job.bicep' = {
   name: 'migrationJob'
   params: {
@@ -264,10 +224,6 @@ module migrationJob 'modules/container-app-job.bicep' = {
     cpu: jobCpu
     deploymentManagedIdentityResourceId: deploymentManagedIdentity.id
     env: [
-      {
-        name: 'ADE_SQL_RUNTIME_PRINCIPAL_NAME'
-        value: appName
-      }
       {
         name: 'AZURE_SQL_CONNECTIONSTRING'
         value: migrationSqlConnectionString

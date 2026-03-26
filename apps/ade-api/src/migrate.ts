@@ -1,33 +1,41 @@
-import process from 'node:process'
-import { readConfig } from './config'
-import { runMigrations } from './db/migrate-runner'
+import process from "node:process";
+import { readMigrationConfig } from "./config";
+import { runMigrations } from "./db/migrate-runner";
+import { createConsoleLogger, runMain } from "./process";
 
-async function main() {
-  const config = readConfig()
+type MainDependencies = {
+  env?: NodeJS.ProcessEnv;
+  run?: typeof runMigrations;
+};
 
-  if (!config.sqlConnectionString) {
-    throw new Error('Missing required environment variable: AZURE_SQL_CONNECTIONSTRING')
-  }
+async function main(
+  logger = createConsoleLogger(),
+  dependencies: MainDependencies = {},
+) {
+  const config = readMigrationConfig(dependencies.env ?? process.env);
+  const run = dependencies.run ?? runMigrations;
 
-  const result = await runMigrations({
+  const result = await run({
     connectionString: config.sqlConnectionString,
-    runtimePrincipalName: process.env.ADE_SQL_RUNTIME_PRINCIPAL_NAME?.trim() || undefined
-  })
+  });
 
   for (const migrationName of result.applied) {
-    console.log(`Applied migration: ${migrationName}`)
+    logger.info(`Applied migration: ${migrationName}`);
   }
 
   for (const migrationName of result.skipped) {
-    console.log(`Skipped migration: ${migrationName}`)
+    logger.info(`Skipped migration: ${migrationName}`);
   }
 
-  console.log(
-    `Migration complete. Applied ${result.applied.length}, skipped ${result.skipped.length}.`
-  )
+  logger.info(
+    `Migration complete. Applied ${String(result.applied.length)}, skipped ${String(result.skipped.length)}.`,
+  );
 }
 
-void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error)
-  process.exit(1)
-})
+if (require.main === module) {
+  void runMain(async () => {
+    await main();
+  });
+}
+
+export { main };

@@ -8,10 +8,6 @@ on:
     branches:
       - main
 
-env:
-  ADE_NODE_VERSION: "24.14.1"
-  ADE_PNPM_VERSION: "10.30.1"
-
 permissions: {}
 
 jobs:
@@ -30,15 +26,13 @@ jobs:
 
       - name: Set up pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
-        with:
-          version: ${{ env.ADE_PNPM_VERSION }}
 
       - name: Set up Node
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-          node-version: ${{ env.ADE_NODE_VERSION }}
+          node-version-file: .node-version
 
       - name: Set up uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
@@ -82,27 +76,21 @@ jobs:
     permissions:
       contents: read
     env:
-      ADE_BASE_URL: http://127.0.0.1:4100
-      ADE_SQL_SA_PASSWORD: "AdeAcceptance1!"
       AZURE_SQL_CONNECTIONSTRING: >-
         Server=sqlserver,1433;Database=ade;User Id=sa;Password=AdeAcceptance1!;Encrypt=false;TrustServerCertificate=true
-      AZURE_STORAGEBLOB_CONNECTIONSTRING: >-
-        DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFeqCnf2fV4i+7VQ8Jtq/K1SZFPTOtr/KBHBeksoGMGwP/IQ+J4MJBxRcQ6vL6gE0Gv6hA==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
-        with:
-          version: ${{ env.ADE_PNPM_VERSION }}
 
       - name: Set up Node
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-          node-version: ${{ env.ADE_NODE_VERSION }}
+          node-version-file: .node-version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -111,7 +99,7 @@ jobs:
         run: docker pull "${{ needs.commit_stage.outputs.image }}"
 
       - name: Start acceptance dependencies
-        run: docker compose -f infra/local/compose.yaml -p ade-acceptance up -d --wait azurite sqlserver
+        run: docker compose -f infra/local/compose.yaml -p ade-acceptance up -d --wait sqlserver
 
       - name: Run acceptance migrations
         run: >
@@ -129,7 +117,6 @@ jobs:
             --network ade-acceptance_default \
             --publish 4100:8000 \
             --env AZURE_SQL_CONNECTIONSTRING \
-            --env AZURE_STORAGEBLOB_CONNECTIONSTRING \
             "${{ needs.commit_stage.outputs.image }}"
 
       - name: Wait for release candidate
@@ -137,13 +124,13 @@ jobs:
           timeout 120 bash -c 'until curl -fsS http://127.0.0.1:4100/api/readyz; do sleep 1; done'
 
       - name: Run acceptance tests
-        run: pnpm test:acceptance
+        run: pnpm test:acceptance -- --url http://127.0.0.1:4100
 
       - name: Dump acceptance container logs
         if: failure()
         run: |
           docker logs ade-acceptance-app || true
-          docker compose -f infra/local/compose.yaml -p ade-acceptance logs --no-color azurite sqlserver || true
+          docker compose -f infra/local/compose.yaml -p ade-acceptance logs --no-color sqlserver || true
 
       - name: Stop acceptance environment
         if: always()
@@ -171,7 +158,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: ${{ env.ADE_NODE_VERSION }}
+          node-version-file: .node-version
 
       - name: Log in to Azure
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
@@ -182,14 +169,13 @@ jobs:
 
       - name: Deploy accepted release candidate
         id: deploy_release_candidate
-        env:
-          ADE_IMAGE: ${{ needs.commit_stage.outputs.image }}
         run: |
           migration_job_name="$(
             az deployment group create \
               --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-              --parameters infra/environments/main.prod.bicepparam \
+              --template-file infra/main.bicep \
+              --parameters @infra/environments/main.prod.parameters.json image="${{ needs.commit_stage.outputs.image }}" \
               --query properties.outputs.migrationJobName.value \
               --output tsv
           )"

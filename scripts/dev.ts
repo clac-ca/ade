@@ -1,33 +1,34 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { parseDevArgs } from "./lib/args";
+import { openBrowser } from "./lib/browser";
 import {
-  createLocalDependencyContext,
-  downLocalDependencies,
-  upLocalDependencies,
-} from "./local-deps.mjs";
-import {
-  createAzuriteBlobConnectionString,
   createLocalSqlConnectionString,
-  openBrowser,
-  parseArgs,
+  localApiHost,
+  localApiPort,
+} from "./lib/dev-config";
+import { createConsoleLogger, formatError, runMain } from "./lib/runtime";
+import {
   registerShutdown,
   runCommand,
   spawnCommand,
   waitForReady,
-} from "./shared.mjs";
+  type ChildProcessWithAde,
+} from "./lib/shell";
+import { downLocalDependencies, upLocalDependencies } from "./local-deps";
 
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
-const databaseName = "ade";
+const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
 
-function signalChild(child, signal) {
+function signalChild(child: ChildProcessWithAde, signal: NodeJS.Signals) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
 
   try {
-    if (child.adeDetached && process.platform !== "win32") {
+    if (child.adeDetached && process.platform !== "win32" && child.pid) {
       process.kill(-child.pid, signal);
       return;
     }
@@ -40,7 +41,9 @@ function signalChild(child, signal) {
   }
 }
 
-async function terminateChildren(children) {
+async function terminateChildren(
+  children: readonly ChildProcessWithAde[],
+): Promise<void> {
   for (const child of children) {
     signalChild(child, "SIGINT");
   }
@@ -58,64 +61,70 @@ async function terminateChildren(children) {
   }
 }
 
-async function main() {
-  const { port, noOpen } = parseArgs(process.argv.slice(2), {
-    defaultPort: 8000,
-    allowNoOpen: true,
-  });
-
-  const { ports, projectName, sqlPassword } =
-    createLocalDependencyContext(port);
+async function main(logger = createConsoleLogger()): Promise<void> {
+  const { noOpen, port } = parseDevArgs(process.argv.slice(2));
   const apiEnv = {
-    AZURE_SQL_CONNECTIONSTRING: createLocalSqlConnectionString({
-      database: databaseName,
-      password: sqlPassword,
-      port: ports.sql,
-    }),
-    AZURE_STORAGEBLOB_CONNECTIONSTRING:
-      createAzuriteBlobConnectionString(ports),
-    HOST: "127.0.0.1",
-    PORT: String(ports.api),
+    [sqlConnectionStringName]: createLocalSqlConnectionString(),
   };
   const detached = process.platform !== "win32";
-  const children = [];
-  const appUrl = `http://localhost:${port}`;
+  const children: ChildProcessWithAde[] = [];
+  const appUrl = `http://127.0.0.1:${String(port)}`;
   let shuttingDown = false;
 
   const shutdown = registerShutdown(async () => {
     shuttingDown = true;
     await terminateChildren(children);
-    await downLocalDependencies(port).catch(() => undefined);
+    await downLocalDependencies().catch(() => undefined);
   });
 
   try {
-    await upLocalDependencies(port);
+    await upLocalDependencies();
     await runCommand(pnpmCommand, ["--filter", "@ade/api", "migrate"], {
       cwd: rootDir,
       env: apiEnv,
     });
 
-    const api = spawnCommand(pnpmCommand, ["--filter", "@ade/api", "dev"], {
-      detached,
-      env: apiEnv,
-    });
-    const web = spawnCommand(pnpmCommand, ["--filter", "@ade/web", "dev"], {
-      detached,
-      env: {
-        ADE_API_ORIGIN: `http://127.0.0.1:${ports.api}`,
-        ADE_WEB_PORT: String(port),
+    const api = spawnCommand(
+      pnpmCommand,
+      [
+        "--filter",
+        "@ade/api",
+        "dev",
+        "--",
+        "--host",
+        localApiHost,
+        "--port",
+        String(localApiPort),
+      ],
+      {
+        detached,
+        env: apiEnv,
       },
-    });
+    );
+    const web = spawnCommand(
+      pnpmCommand,
+      [
+        "--filter",
+        "@ade/web",
+        "dev",
+        "--",
+        "--host",
+        localApiHost,
+        "--port",
+        String(port),
+        "--strictPort",
+      ],
+      {
+        detached,
+      },
+    );
 
     children.push(api, web);
 
     for (const child of children) {
       child.on("exit", (code, signal) => {
-        if (shuttingDown) {
-          return;
-        }
-
         if (
+          shuttingDown ||
           signal === "SIGINT" ||
           signal === "SIGTERM" ||
           signal === "SIGKILL"
@@ -123,14 +132,14 @@ async function main() {
           return;
         }
 
-        console.error(
-          `Launcher child exited with code ${code ?? "unknown"}${signal ? ` and signal ${signal}` : ""}.`,
+        logger.error(
+          `Launcher child exited with code ${String(code ?? "unknown")}${signal ? ` and signal ${signal}` : ""}.`,
         );
         void shutdown(code ?? 1);
       });
     }
 
-    await waitForReady([`http://127.0.0.1:${ports.api}/api/readyz`], {
+    await waitForReady([`http://${localApiHost}:${String(localApiPort)}/api/readyz`], {
       isAlive: () =>
         children.every(
           (child) => child.exitCode === null && child.signalCode === null,
@@ -144,7 +153,7 @@ async function main() {
         ),
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : error);
+    logger.error(formatError(error));
     await shutdown(1);
     process.exit(1);
   }
@@ -153,10 +162,9 @@ async function main() {
     openBrowser(appUrl);
   }
 
-  console.log(`ADE dev is running at ${appUrl} (project ${projectName})`);
+  logger.info(`ADE dev is running at ${appUrl}`);
 }
 
-void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
+void runMain(async () => {
+  await main();
 });

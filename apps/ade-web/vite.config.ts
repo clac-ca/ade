@@ -1,19 +1,17 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-const apiOrigin = process.env.ADE_API_ORIGIN ?? 'http://127.0.0.1:8001'
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '127.0.0.1',
-    port: Number(process.env.ADE_WEB_PORT ?? 8000),
+    host: "127.0.0.1",
+    port: 5173,
     strictPort: true,
     proxy: {
-      '/api': {
-        target: apiOrigin,
-        changeOrigin: true
-      }
-    }
-  }
-})
+      "/api": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+      },
+    },
+  },
+});

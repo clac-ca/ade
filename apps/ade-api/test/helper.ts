@@ -1,53 +1,61 @@
-import { join } from 'node:path'
-import * as test from 'node:test'
-import { createApp } from '../src/app'
-import { BundledBuildInfo } from '../src/config'
-import { createReadinessState } from '../src/readiness'
+import { join } from "node:path";
+import * as test from "node:test";
+import { createApp } from "../src/app";
+import type { BundledBuildInfo } from "../src/config";
+import {
+  createReadinessController,
+  type ReadinessPhase,
+} from "../src/readiness";
 
 export type TestContext = {
-  after: typeof test.after
-}
+  after: typeof test.after;
+};
 
 export type BuildOptions = {
-  buildInfo?: BundledBuildInfo,
-  databaseOk?: boolean,
-  isStarted?: boolean,
-  lastCheckedAt?: number | null,
-  staleAfterMs?: number
-}
+  buildInfo?: BundledBuildInfo;
+  databaseError?: string | null;
+  databaseOk?: boolean;
+  lastCheckedAt?: number | null;
+  phase?: ReadinessPhase;
+  staleAfterMs?: number;
+};
 
 const defaultBuildInfo: BundledBuildInfo = {
-  service: 'ade',
-  version: 'test-version',
-  gitSha: 'test-git-sha',
-  builtAt: '2026-03-21T00:00:00.000Z'
-}
-const webRoot = join(__dirname, 'fixtures', 'web-dist')
+  service: "ade",
+  version: "test-version",
+  gitSha: "test-git-sha",
+  builtAt: "2026-03-21T00:00:00.000Z",
+};
+const webRoot = join(__dirname, "fixtures", "web-dist");
 
 async function build(t: TestContext, options: BuildOptions = {}) {
-  const readiness = createReadinessState({
+  const readiness = createReadinessController({
     databaseOk: options.databaseOk ?? true,
-    isStarted: options.isStarted ?? true,
     lastCheckedAt: options.lastCheckedAt ?? Date.now(),
-    staleAfterMs: options.staleAfterMs
-  })
+    lastError: options.databaseError ?? null,
+    phase: options.phase ?? "ready",
+    ...(options.staleAfterMs !== undefined
+      ? {
+          staleAfterMs: options.staleAfterMs,
+        }
+      : {}),
+  });
+
   const fastify = createApp({
     buildInfo: options.buildInfo ?? defaultBuildInfo,
+    getReadinessSnapshot: () => readiness.snapshot(),
     logger: false,
-    readiness,
-    webRoot
-  })
+    webRoot,
+  });
 
-  await fastify.ready()
+  await fastify.ready();
 
-  t.after(() => void fastify.close())
+  t.after(() => void fastify.close());
   return {
     app: fastify,
     buildInfo: options.buildInfo ?? defaultBuildInfo,
-    readiness
-  }
+    readiness,
+  };
 }
 
-export {
-  build
-}
+export { build };

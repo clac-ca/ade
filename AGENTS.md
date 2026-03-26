@@ -5,6 +5,8 @@
 ├── Dockerfile
 ├── README.md
 ├── PRINCIPLES.md
+├── tsconfig.base.json
+├── tsconfig.scripts.json
 ├── infra/
 │   ├── local/
 │   │   └── compose.yaml
@@ -12,13 +14,15 @@
 │   ├── environments/
 │   └── modules/
 ├── scripts/
-│   ├── acceptance.mjs
-│   ├── build.mjs
-│   ├── clean.mjs
-│   ├── dev.mjs
-│   ├── local-deps.mjs
-│   ├── start.mjs
-│   └── shared.mjs
+│   ├── acceptance.ts
+│   ├── build-artifacts.ts
+│   ├── build.ts
+│   ├── clean.ts
+│   ├── dev.ts
+│   ├── local-deps.ts
+│   ├── start.ts
+│   ├── lib/
+│   └── test/
 ├── apps/
 │   ├── ade-api/
 │   └── ade-web/
