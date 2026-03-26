@@ -26,7 +26,8 @@ export type ApiConfig = {
 }
 
 export type ReadConfigOptions = {
-  buildInfoPath?: string
+  buildInfoPath?: string,
+  requireSql?: boolean
 }
 
 const packagePath = join(__dirname, '..', 'package.json')
@@ -130,6 +131,16 @@ function readOptionalTrimmed(env: NodeJS.ProcessEnv, name: string): string | und
   return trimmed === '' ? undefined : trimmed
 }
 
+function readRequiredTrimmed(env: NodeJS.ProcessEnv, name: string): string {
+  const value = readOptionalTrimmed(env, name)
+
+  if (value === undefined) {
+    throw new Error(`Missing required environment variable: ${name}`)
+  }
+
+  return value
+}
+
 function readBlobStorage(env: NodeJS.ProcessEnv) {
   const connectionString = readOptionalTrimmed(env, 'AZURE_STORAGEBLOB_CONNECTIONSTRING')
   const resourceEndpoint = readOptionalTrimmed(env, 'AZURE_STORAGEBLOB_RESOURCEENDPOINT')
@@ -159,7 +170,9 @@ function readConfig(env: NodeJS.ProcessEnv = process.env, options: ReadConfigOpt
     host: env.HOST?.trim() || (env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
     port: readPort(env.PORT),
     buildInfo: readBuildInfo(env, options),
-    sqlConnectionString: readOptionalTrimmed(env, 'AZURE_SQL_CONNECTIONSTRING'),
+    sqlConnectionString: options.requireSql
+      ? readRequiredTrimmed(env, 'AZURE_SQL_CONNECTIONSTRING')
+      : readOptionalTrimmed(env, 'AZURE_SQL_CONNECTIONSTRING'),
     blobStorage: readBlobStorage(env)
   }
 }

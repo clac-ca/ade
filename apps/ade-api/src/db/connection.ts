@@ -1,3 +1,4 @@
+import { buildConnectionString, parseSqlConnectionString as parseTediousSqlConnectionString } from '@tediousjs/connection-string'
 import sql from 'mssql'
 
 export type ParsedSqlConnectionString = {
@@ -19,26 +20,9 @@ type SqlBatchConnection = {
 }
 
 type ConnectToSqlLike = (connectionString: string) => Promise<SqlBatchConnection>
+type ConnectionFields = Record<string, string | number | boolean | null | undefined>
 
 const DEFAULT_SQL_PORT = 1433
-
-function parseBoolean(value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined) {
-    return fallback
-  }
-
-  const normalized = value.trim().toLowerCase()
-
-  if (normalized === 'true' || normalized === 'yes') {
-    return true
-  }
-
-  if (normalized === 'false' || normalized === 'no') {
-    return false
-  }
-
-  throw new Error(`Invalid boolean value in SQL connection string: ${value}`)
-}
 
 function parseServer(value: string): {
   port: number,
@@ -60,8 +44,8 @@ function parseServer(value: string): {
     }
   }
 
-  const server = withoutProtocol.slice(0, lastComma)
-  const portValue = withoutProtocol.slice(lastComma + 1)
+  const server = withoutProtocol.slice(0, lastComma).trim()
+  const portValue = withoutProtocol.slice(lastComma + 1).trim()
 
   if (!/^[1-9]\d*$/.test(portValue)) {
     throw new Error(`Invalid SQL Server port: ${portValue}`)
@@ -75,69 +59,87 @@ function parseServer(value: string): {
   }
 }
 
-function readRequiredField(fields: Map<string, string>, keys: string[]): string {
-  for (const key of keys) {
-    const value = fields.get(key)
+function parseConnectionFields(connectionString: string): ConnectionFields {
+  return parseTediousSqlConnectionString(connectionString, true)
+}
 
-    if (value !== undefined && value.trim() !== '') {
-      return value.trim()
+function readOptionalStringField(fields: ConnectionFields, name: string): string | undefined {
+  const value = fields[name]
+
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (typeof value !== 'string') {
+    throw new Error(`SQL connection string field "${name}" must be a string.`)
+  }
+
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+function readRequiredField(fields: ConnectionFields, keys: string[]): string {
+  for (const key of keys) {
+    const value = readOptionalStringField(fields, key)
+
+    if (value !== undefined) {
+      return value
     }
   }
 
   throw new Error(`SQL connection string is missing one of: ${keys.join(', ')}`)
 }
 
-function parseFields(connectionString: string): Map<string, string> {
-  const fields = new Map<string, string>()
+function readBooleanField(fields: ConnectionFields, name: string, fallback: boolean): boolean {
+  const value = fields[name]
 
-  for (const segment of connectionString.split(';')) {
-    const trimmed = segment.trim()
-
-    if (trimmed === '') {
-      continue
-    }
-
-    const separatorIndex = trimmed.indexOf('=')
-
-    if (separatorIndex === -1) {
-      throw new Error(`Invalid SQL connection string segment: ${trimmed}`)
-    }
-
-    const key = trimmed.slice(0, separatorIndex).trim().toLowerCase()
-    const value = trimmed.slice(separatorIndex + 1).trim()
-    fields.set(key, value)
+  if (value === undefined) {
+    return fallback
   }
 
-  return fields
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  throw new Error(`Invalid boolean value in SQL connection string field "${name}": ${String(value)}`)
 }
 
-function parseAuthentication(fields: Map<string, string>) {
-  const authentication =
-    fields.get('authentication') ??
-    fields.get('authenticationtype')
+function parseAuthentication(fields: ConnectionFields) {
+  const authentication = readOptionalStringField(fields, 'authentication')
 
-  if (authentication === undefined || authentication.trim() === '') {
+  if (authentication === undefined) {
     return 'sql-password'
   }
 
   const normalized = authentication.trim().toLowerCase().replace(/\s+/g, '')
 
-  if (normalized === 'activedirectorymanagedidentity' || normalized === 'activedirectorydefault') {
+  if (
+    normalized === 'activedirectorymanagedidentity' ||
+    normalized === 'activedirectorydefault'
+  ) {
     return 'managed-identity'
+  }
+
+  if (normalized === 'sqlpassword') {
+    return 'sql-password'
   }
 
   throw new Error(`Unsupported SQL authentication mode: ${authentication}`)
 }
 
 function parseSqlConnectionString(connectionString: string): ParsedSqlConnectionString {
-  const fields = parseFields(connectionString)
-  const { port, server } = parseServer(readRequiredField(fields, ['data source', 'server', 'address', 'addr']))
+  const fields = parseConnectionFields(connectionString)
+  const { port, server } = parseServer(readRequiredField(fields, ['data source']))
   const database = readRequiredField(fields, ['initial catalog', 'database'])
   const authentication = parseAuthentication(fields)
-  const userId = fields.get('user id')?.trim() || fields.get('uid')?.trim() || undefined
-  const password = fields.get('password')?.trim() || fields.get('pwd')?.trim() || undefined
-  const encrypt = parseBoolean(fields.get('encrypt'), authentication === 'managed-identity')
-  const trustServerCertificate = parseBoolean(fields.get('trustservercertificate'), authentication !== 'managed-identity')
+  const userId = readOptionalStringField(fields, 'user id')
+  const password = readOptionalStringField(fields, 'password')
+  const encrypt = readBooleanField(fields, 'encrypt', authentication === 'managed-identity')
+  const trustServerCertificate = readBooleanField(
+    fields,
+    'trustservercertificate',
+    authentication !== 'managed-identity'
+  )
 
   if (authentication === 'sql-password' && (!userId || !password)) {
     throw new Error('SQL authentication requires both User ID and Password.')
@@ -191,8 +193,8 @@ function buildPoolConfig(connectionString: string): sql.config {
   }
 }
 
-async function connectToSql(connectionString: string): Promise<sql.ConnectionPool> {
-  const pool = new sql.ConnectionPool(buildPoolConfig(connectionString))
+async function connectWithConfig(config: sql.config): Promise<sql.ConnectionPool> {
+  const pool = new sql.ConnectionPool(config)
 
   try {
     return await pool.connect()
@@ -200,6 +202,14 @@ async function connectToSql(connectionString: string): Promise<sql.ConnectionPoo
     await pool.close().catch(() => undefined)
     throw error
   }
+}
+
+async function connectToSql(connectionString: string): Promise<sql.ConnectionPool> {
+  return connectWithConfig(buildPoolConfig(connectionString))
+}
+
+async function connectToRuntimeSql(connectionString: string): Promise<sql.ConnectionPool> {
+  return connectWithConfig(buildPoolConfig(connectionString))
 }
 
 async function ensureDatabaseExists(
@@ -233,18 +243,17 @@ function quoteSqlIdentifier(value: string): string {
 }
 
 function withDatabase(connectionString: string, database: string): string {
-  const fields = parseFields(connectionString)
-  fields.set('database', database)
-  fields.delete('initial catalog')
+  const fields = parseConnectionFields(connectionString)
+  fields['initial catalog'] = database
+  delete fields.database
 
-  return Array.from(fields.entries())
-    .map(([key, value]) => `${key}=${value}`)
-    .join(';')
+  return buildConnectionString(fields)
 }
 
 export {
   buildPoolConfig,
   connectToSql,
+  connectToRuntimeSql,
   ensureDatabaseExists,
   parseSqlConnectionString,
   quoteSqlIdentifier,

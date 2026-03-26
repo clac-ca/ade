@@ -2,20 +2,26 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import fastifyStatic from '@fastify/static'
 import Fastify, { FastifyInstance } from 'fastify'
+import databasePlugin, { DatabasePluginOptions } from './plugins/database'
 import rootRoute, { RootRouteOptions } from './routes/root'
 
 export type CreateAppOptions = RootRouteOptions & {
+  database?: DatabasePluginOptions,
   logger?: boolean,
   webRoot?: string
 }
 
-function createApp({ logger = true, webRoot, ...options }: CreateAppOptions): FastifyInstance {
+function createApp({ database, logger = true, webRoot, ...options }: CreateAppOptions): FastifyInstance {
   const server = Fastify({
     routerOptions: {
       ignoreTrailingSlash: true
     },
     logger
   })
+
+  if (database) {
+    server.register(databasePlugin, database)
+  }
 
   server.register(rootRoute, {
     ...options,

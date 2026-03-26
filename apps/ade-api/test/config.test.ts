@@ -32,6 +32,16 @@ test('readConfig rejects invalid ports', () => {
   }
 })
 
+test('readConfig rejects missing SQL when required', () => {
+  assert.throws(
+    () => readConfig({}, {
+      buildInfoPath: join(tmpdir(), 'missing-build-info.json'),
+      requireSql: true
+    }),
+    /AZURE_SQL_CONNECTIONSTRING/
+  )
+})
+
 test('readConfig ignores runtime provenance overrides when bundled build info exists', () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'ade-build-info-'))
   const buildInfoPath = join(tempDir, 'build-info.json')

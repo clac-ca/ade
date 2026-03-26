@@ -1,30 +1,50 @@
 import { FastifyInstance } from 'fastify'
 import { createApp } from './app'
+import { DatabaseServiceFactory } from './db/service'
 import { BundledBuildInfo } from './config'
+import { createReadinessState, ReadinessState } from './readiness'
 
 export type RuntimeOptions = {
   buildInfo: BundledBuildInfo,
   host: string,
   logger?: boolean,
   port: number,
+  probeIntervalMs?: number,
+  sqlConnectionString: string,
+  sqlServiceFactory?: DatabaseServiceFactory,
+  staleAfterMs?: number,
   webRoot?: string
 }
 
 export type Runtime = {
   app: FastifyInstance,
-  readiness: {
-    isReady: boolean
-  },
+  readiness: ReadinessState,
   start: () => Promise<void>,
   stop: () => Promise<void>
 }
 
-function createRuntime({ buildInfo, host, logger = true, port, webRoot }: RuntimeOptions): Runtime {
-  const readiness = {
-    isReady: false
-  }
+function createRuntime({
+  buildInfo,
+  host,
+  logger = true,
+  port,
+  probeIntervalMs,
+  sqlConnectionString,
+  sqlServiceFactory,
+  staleAfterMs,
+  webRoot
+}: RuntimeOptions): Runtime {
+  const readiness = createReadinessState({
+    staleAfterMs
+  })
   const app = createApp({
     buildInfo,
+    database: {
+      connectionString: sqlConnectionString,
+      createService: sqlServiceFactory,
+      probeIntervalMs,
+      readiness
+    },
     logger,
     readiness,
     webRoot
@@ -35,11 +55,11 @@ function createRuntime({ buildInfo, host, logger = true, port, webRoot }: Runtim
       host,
       port
     })
-    readiness.isReady = true
+    readiness.isStarted = true
   }
 
   async function stop() {
-    readiness.isReady = false
+    readiness.isStarted = false
     await app.close()
   }
 

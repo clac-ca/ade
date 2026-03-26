@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import * as test from 'node:test'
 import { createApp } from '../src/app'
 import { BundledBuildInfo } from '../src/config'
+import { createReadinessState } from '../src/readiness'
 
 export type TestContext = {
   after: typeof test.after
@@ -9,7 +10,10 @@ export type TestContext = {
 
 export type BuildOptions = {
   buildInfo?: BundledBuildInfo,
-  ready?: boolean
+  databaseOk?: boolean,
+  isStarted?: boolean,
+  lastCheckedAt?: number | null,
+  staleAfterMs?: number
 }
 
 const defaultBuildInfo: BundledBuildInfo = {
@@ -21,9 +25,12 @@ const defaultBuildInfo: BundledBuildInfo = {
 const webRoot = join(__dirname, 'fixtures', 'web-dist')
 
 async function build(t: TestContext, options: BuildOptions = {}) {
-  const readiness = {
-    isReady: options.ready ?? true
-  }
+  const readiness = createReadinessState({
+    databaseOk: options.databaseOk ?? true,
+    isStarted: options.isStarted ?? true,
+    lastCheckedAt: options.lastCheckedAt ?? Date.now(),
+    staleAfterMs: options.staleAfterMs
+  })
   const fastify = createApp({
     buildInfo: options.buildInfo ?? defaultBuildInfo,
     logger: false,

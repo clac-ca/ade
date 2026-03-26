@@ -10,12 +10,20 @@ type ProcessHandle = {
 type ServerRuntime = Pick<Runtime, 'start' | 'stop'>
 
 function createProductionRuntime(): Runtime {
-  const config = readConfig()
+  const config = readConfig(process.env, {
+    requireSql: true
+  })
+  const sqlConnectionString = config.sqlConnectionString
+
+  if (!sqlConnectionString) {
+    throw new Error('Missing required environment variable: AZURE_SQL_CONNECTIONSTRING')
+  }
 
   return createRuntime({
     buildInfo: config.buildInfo,
     host: config.host,
     port: config.port,
+    sqlConnectionString,
     webRoot: join(__dirname, '..', 'public')
   })
 }
@@ -63,5 +71,6 @@ if (require.main === module) {
 }
 
 export {
+  createProductionRuntime,
   runServer
 }
