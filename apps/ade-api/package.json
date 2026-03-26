@@ -2,29 +2,14 @@
   "name": "@ade/api",
   "private": true,
   "version": "0.1.0",
-  "files": [
-    "dist",
-    "migrations"
-  ],
   "scripts": {
-    "build": "rimraf dist && tsc",
-    "clean": "rimraf dist .package coverage",
-    "dev": "tsx watch src/server.ts",
-    "migrate": "tsx src/migrate.ts",
-    "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "test": "tsx --test test/*.test.ts test/db/*.test.ts test/routes/*.test.ts"
-  },
-  "dependencies": {
-    "@tediousjs/connection-string": "^0.6.0",
-    "@fastify/static": "^9.0.0",
-    "fastify": "^5.8.4",
-    "mssql": "^12.2.1"
-  },
-  "devDependencies": {
-    "@types/mssql": "^9.1.8",
-    "@types/node": "^24.0.8",
-    "tsx": "^4.20.6",
-    "typescript": "~5.9.2"
+    "clean": "rimraf target .package dist",
+    "dev": "cargo run --locked --bin ade-api --",
+    "typecheck": "cargo check --locked --all-targets",
+    "lint": "cargo clippy --locked --all-targets -- -D warnings",
+    "format:check": "cargo fmt --all --check",
+    "test": "cargo test --locked",
+    "build": "cargo build --locked --release",
+    "migrate": "cargo run --locked --bin ade-migrate --"
   }
 }

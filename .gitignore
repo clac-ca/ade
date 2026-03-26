@@ -9,6 +9,7 @@ npm-debug.log*
 pnpm-debug.log*
 *.local
 apps/ade-api/.package/
+apps/ade-api/target/
 .buildx-cache/
 infra/*.json
 infra/environments/*.json

@@ -218,8 +218,7 @@ module migrationJob 'modules/container-app-job.bicep' = {
   name: 'migrationJob'
   params: {
     command: [
-      'node'
-      'dist/migrate.js'
+      './bin/ade-migrate'
     ]
     cpu: jobCpu
     deploymentManagedIdentityResourceId: deploymentManagedIdentity.id

@@ -1,11 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  cpSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -63,37 +57,17 @@ async function buildArtifacts(
     );
   }
 
-  const packageRoot = join(rootDir, "apps", "ade-api", ".package");
-  const buildInfoPath = join(packageRoot, "dist", "build-info.json");
-  const publicPath = join(packageRoot, "public");
-  const webDistPath = join(rootDir, "apps", "ade-web", "dist");
+  const apiDistPath = join(rootDir, "apps", "ade-api", "dist");
+  const buildInfoPath = join(apiDistPath, "build-info.json");
 
   await runCommand(pnpmCommand, ["--filter", "@ade/web", "build"], {
     cwd: rootDir,
   });
-  await runCommand(pnpmCommand, ["--filter", "@ade/api", "build"], {
-    cwd: rootDir,
-  });
-  rmSync(packageRoot, {
+  rmSync(apiDistPath, {
     force: true,
     recursive: true,
   });
-  await runCommand(
-    pnpmCommand,
-    ["--filter", "@ade/api", "deploy", "--prod", "apps/ade-api/.package"],
-    {
-      cwd: rootDir,
-    },
-  );
-
   mkdirSync(dirname(buildInfoPath), {
-    recursive: true,
-  });
-  rmSync(publicPath, {
-    force: true,
-    recursive: true,
-  });
-  cpSync(webDistPath, publicPath, {
     recursive: true,
   });
   writeFileSync(

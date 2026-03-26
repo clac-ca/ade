@@ -1,0 +1,41 @@
+[package]
+name = "ade-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.89"
+axum = "0.8.7"
+azure_core = { version = "0.33.0", default-features = false, features = ["tokio"] }
+azure_identity = { version = "0.33.0", default-features = false, features = ["tokio"] }
+bb8 = "0.9.0"
+bb8-tiberius = { version = "0.16.0", default-features = false, features = ["tds73", "tls", "with-tokio"] }
+clap = { version = "4.5.48", features = ["derive"] }
+refinery = { version = "0.9.0", features = ["int8-versions", "tiberius"] }
+rustc_version_runtime = "0.3.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = "2.0.17"
+tiberius = { version = "0.12.3", default-features = false, features = ["rustls", "tds73", "tokio", "tokio-util"] }
+tokio = { version = "1.47.1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7.16", features = ["compat"] }
+tower = { version = "0.5.2", features = ["util"] }
+tower-http = { version = "0.6.6", features = ["fs", "normalize-path", "trace"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+pretty_assertions = "1"
+tempfile = "3"
+
+[lib]
+name = "ade_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ade-api"
+path = "src/main.rs"
+
+[[bin]]
+name = "ade-migrate"
+path = "src/bin/migrate.rs"
