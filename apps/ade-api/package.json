@@ -19,7 +19,6 @@
     "@tediousjs/connection-string": "^0.6.0",
     "@fastify/static": "^9.0.0",
     "fastify": "^5.8.4",
-    "fastify-plugin": "^5.1.0",
     "mssql": "^12.2.1"
   },
   "devDependencies": {

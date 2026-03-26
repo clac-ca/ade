@@ -3,36 +3,24 @@
 ADE uses one Azure template: [`main.bicep`](main.bicep).
 Local laptop and CI dependency services live separately in [`local/compose.yaml`](local/compose.yaml); that file is not part of the Azure deployment model.
 
-That template deploys the production resource group shape ADE runs on:
+The template deploys:
 
 - one deployment user-assigned managed identity
 - one GitHub OIDC federated credential on that deployment identity
-- one VNet with a delegated Container Apps subnet that enables same-region service endpoints for Azure SQL and Blob Storage
+- one VNet with a delegated Container Apps subnet
 - one Azure SQL logical server and database
-- one Blob Storage account and blob container
+- one Blob Storage account and blob container placeholder
 - one Log Analytics workspace
 - one VNet-integrated Azure Container Apps environment
 - one public Container App for the API/web host
 - one manual Azure Container Apps Job for schema migrations
 
-The running Container App uses a **system-assigned managed identity**.
-The manual migration job reuses the **deployment managed identity**.
+The running Container App uses a system-assigned managed identity.
+The manual migration job reuses the deployment managed identity.
 
-The resource group and first deployment are manual by design because the deployment identity and its OIDC trust must exist before GitHub can deploy, and the SQL logical server identity also needs a tenant-level Microsoft Entra bootstrap step.
-
-`infra/main.bicep` defines the migration job resource, but it does **not** run migrations by itself.
-
-That split is intentional:
-
-- Bicep owns declarative resource creation
-- the release workflow owns the imperative "run migrations now" step
-
-Shared runtime environment variable names are documented in [docs/environment-variables.md](../docs/environment-variables.md).
-This document stays focused on Azure resource shape, bootstrap, and deployment flow.
+`infra/main.bicep` defines the migration job resource, but it does not run migrations by itself.
 
 ## Production names
-
-These are the production names used by [`environments/main.prod.bicepparam`](environments/main.prod.bicepparam):
 
 - Resource group: `rg-ade-prod-canadacentral-002`
 - Deployment managed identity: `id-ade-deploy-prod-canadacentral-002`
@@ -51,26 +39,23 @@ These are the production names used by [`environments/main.prod.bicepparam`](env
 
 Lock these assumptions in:
 
-- the running app authenticates to Azure SQL with its **system-assigned managed identity**
-- the running app authenticates to Blob Storage with its **system-assigned managed identity**
-- the migration job authenticates to Azure SQL with the **deployment managed identity**
+- the running app authenticates to Azure SQL with its system-assigned managed identity
+- the migration job authenticates to Azure SQL with the deployment managed identity
 - the deployment managed identity is also the Azure SQL logical server's Microsoft Entra admin
-- the SQL logical server itself has a **system-assigned managed identity**
-- the Container Apps subnet uses **service endpoints** for `Microsoft.Sql` and same-region `Microsoft.Storage`
-- Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a **virtual network rule**
-- Blob Storage public network access stays enabled, but access is restricted to the Container Apps subnet with **storage firewall virtual network rules**
-- the Azure SQL database uses the **General Purpose serverless** compute tier with auto-pause enabled
-- runtime SQL passwords and Storage account keys are intentionally not part of the production design
-
-`Microsoft.Storage.Global` is intentionally not used today. Revisit it only if ADE later needs cross-region storage access from the Container Apps subnet.
+- the SQL logical server itself has a system-assigned managed identity
+- the Container Apps subnet uses service endpoints for `Microsoft.Sql` and same-region `Microsoft.Storage`
+- Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a virtual network rule
+- Blob Storage stays provisioned as a placeholder, but it is not an active application dependency today
+- the Azure SQL database uses the General Purpose serverless compute tier with auto-pause enabled
 
 ## Prerequisites
 
 - Azure CLI installed and authenticated
 - GitHub CLI installed and authenticated with admin access to `clac-ca/ade`
 - PowerShell 7+ for the Microsoft Graph bootstrap step
-- Permission to create resource groups, managed identities, federated credentials, role assignments, Container Apps resources, network resources, Azure SQL resources, and Storage resources in the target subscription
+- Permission to create resource groups, managed identities, federated credentials, Container Apps resources, network resources, Azure SQL resources, and Storage resources in the target subscription
 - Microsoft Entra `Privileged Role Administrator` or higher for the one-time SQL server identity bootstrap step
+- An Entra-aware SQL client for the one-time runtime-user bootstrap step
 
 ## First-time setup
 
@@ -121,10 +106,10 @@ The image format is:
 ghcr.io/clac-ca/ade:sha-<commit-sha>
 ```
 
-Set it in the environment for the Bicep parameter file:
+Keep it as a shell-local variable:
 
 ```sh
-export ADE_IMAGE=<image-ref>
+image=<image-ref>
 ```
 
 ### 6. Run the first manual deployment
@@ -133,26 +118,16 @@ export ADE_IMAGE=<image-ref>
 az deployment group create \
   --name ade-prod-initial \
   --resource-group rg-ade-prod-canadacentral-002 \
-  --parameters infra/environments/main.prod.bicepparam
+  --template-file infra/main.bicep \
+  --parameters @infra/environments/main.prod.parameters.json image="$image"
 ```
-
-`infra/environments/main.prod.bicepparam` reads `ADE_IMAGE` from the environment. Set it before running the deployment command.
 
 ### 7. Grant the deployment identity the minimum Azure RBAC it needs
 
-The deployment identity needs three Azure RBAC grants:
+The deployment identity needs two Azure RBAC grants:
 
 - `Contributor` on the production resource group
-- `Role Based Access Control Administrator` on the production resource group
 - `Managed Identity Operator` on its own user-assigned identity resource so it can attach that identity to the migration job resource during future deployments
-
-The current template creates one Azure RBAC resource for the running app:
-
-- `Storage Blob Data Contributor` on the `documents` blob container for the Container App system-assigned identity
-
-That Bicep resource is created with `Microsoft.Authorization/roleAssignments`, so the deployment identity must have permission for `Microsoft.Authorization/roleAssignments/write`.
-
-`Role Based Access Control Administrator` is the intended grant for that. `Owner` is not required and should not be used.
 
 Resolve the reusable values first:
 
@@ -191,16 +166,6 @@ az role assignment create \
   --scope "${ADE_RG_ID}"
 ```
 
-Grant `Role Based Access Control Administrator` on the resource group:
-
-```sh
-az role assignment create \
-  --assignee-object-id "${ADE_DEPLOYMENT_IDENTITY_PRINCIPAL_ID}" \
-  --assignee-principal-type ServicePrincipal \
-  --role "Role Based Access Control Administrator" \
-  --scope "${ADE_RG_ID}"
-```
-
 Grant `Managed Identity Operator` on the deployment identity resource itself:
 
 ```sh
@@ -211,9 +176,7 @@ az role assignment create \
   --scope "${ADE_DEPLOYMENT_IDENTITY_ID}"
 ```
 
-Allow several minutes for Azure RBAC propagation before validating the bootstrap or re-running the deployment pipeline.
-
-### 8. Validate the bootstrap RBAC and manual deployment
+### 8. Validate the deployment identity grants
 
 List the deployment identity role assignments on the production resource group:
 
@@ -227,7 +190,6 @@ az role assignment list \
 Confirm the output includes:
 
 - `Contributor`
-- `Role Based Access Control Administrator`
 
 List the deployment identity role assignments on the deployment identity resource itself:
 
@@ -242,66 +204,19 @@ Confirm the output includes:
 
 - `Managed Identity Operator`
 
-Re-run the manual deployment after the RBAC grants have propagated:
-
-```sh
-export ADE_IMAGE=<image-ref>
-
-az deployment group create \
-  --name ade-prod-rbac-validate \
-  --resource-group rg-ade-prod-canadacentral-002 \
-  --parameters infra/environments/main.prod.bicepparam
-```
-
-Resolve the running app principal ID and the blob container ID:
-
-```sh
-export ADE_APP_PRINCIPAL_ID="$(
-  az containerapp show \
-    --name ca-ade-prod-canadacentral-002 \
-    --resource-group rg-ade-prod-canadacentral-002 \
-    --query identity.principalId \
-    --output tsv
-)"
-
-export ADE_BLOB_CONTAINER_ID="$(
-  az storage container show \
-    --name documents \
-    --account-name stadeprodcc002 \
-    --auth-mode login \
-    --query id \
-    --output tsv
-)"
-```
-
-Confirm the Bicep-created storage RBAC assignment exists:
-
-```sh
-az role assignment list \
-  --assignee-object-id "${ADE_APP_PRINCIPAL_ID}" \
-  --scope "${ADE_BLOB_CONTAINER_ID}" \
-  --output table
-```
-
-Confirm the output includes:
-
-- `Storage Blob Data Contributor`
-
-After the manual validation succeeds, re-run the GitHub deployment pipeline and confirm `Release Stage` proceeds past `Deploy accepted release candidate`.
-
 ### 9. Grant the SQL logical server identity Microsoft Entra query permissions
 
-The Azure SQL logical server uses a **system-assigned managed identity**.
+The Azure SQL logical server uses a system-assigned managed identity.
 
 That identity must be able to resolve Microsoft Entra principals for `CREATE USER ... FROM EXTERNAL PROVIDER` to work.
 
-Grant it the **Directory Readers** role, or the documented lower-level Microsoft Graph permissions:
+Grant it the Directory Readers role, or the documented lower-level Microsoft Graph permissions:
 
 - `User.Read.All`
 - `GroupMember.Read.All`
 - `Application.Read.All`
 
-This is a **tenant-level** bootstrap step. It is not handled by Bicep.
+This is a tenant-level bootstrap step. It is not handled by Bicep.
 
 The most direct first-time path is the Microsoft Graph PowerShell flow from the Azure SQL documentation. Run it as a Microsoft Entra `Privileged Role Administrator` or higher:
 
@@ -338,7 +253,83 @@ if ($null -eq $isMember) {
 }
 ```
 
-### 10. Set the GitHub `production` environment variables
+### 10. Bootstrap runtime SQL access once
+
+Resolve the app managed identity object ID:
+
+```sh
+export ADE_APP_PRINCIPAL_ID="$(
+  az containerapp show \
+    --name ca-ade-prod-canadacentral-002 \
+    --resource-group rg-ade-prod-canadacentral-002 \
+    --query identity.principalId \
+    --output tsv
+)"
+```
+
+Connect to `sqldb-ade-prod-cc-002` as the deployment identity with your normal Entra-aware SQL client, then run:
+
+```sql
+IF NOT EXISTS (
+  SELECT 1
+  FROM sys.database_principals
+  WHERE name = N'ca-ade-prod-canadacentral-002'
+)
+BEGIN
+  CREATE USER [ca-ade-prod-canadacentral-002]
+  FROM EXTERNAL PROVIDER
+  WITH OBJECT_ID = 'REPLACE_WITH_ADE_APP_PRINCIPAL_ID';
+END;
+
+IF NOT EXISTS (
+  SELECT 1
+  FROM sys.database_role_members AS role_members
+  INNER JOIN sys.database_principals AS role_principals ON role_principals.principal_id = role_members.role_principal_id
+  INNER JOIN sys.database_principals AS member_principals ON member_principals.principal_id = role_members.member_principal_id
+  WHERE role_principals.name = N'db_datareader'
+    AND member_principals.name = N'ca-ade-prod-canadacentral-002'
+)
+BEGIN
+  ALTER ROLE [db_datareader] ADD MEMBER [ca-ade-prod-canadacentral-002];
+END;
+
+IF NOT EXISTS (
+  SELECT 1
+  FROM sys.database_role_members AS role_members
+  INNER JOIN sys.database_principals AS role_principals ON role_principals.principal_id = role_members.role_principal_id
+  INNER JOIN sys.database_principals AS member_principals ON member_principals.principal_id = role_members.member_principal_id
+  WHERE role_principals.name = N'db_datawriter'
+    AND member_principals.name = N'ca-ade-prod-canadacentral-002'
+)
+BEGIN
+  ALTER ROLE [db_datawriter] ADD MEMBER [ca-ade-prod-canadacentral-002];
+END;
+```
+
+Verify the user exists:
+
+```sql
+SELECT name, type_desc
+FROM sys.database_principals
+WHERE name = N'ca-ade-prod-canadacentral-002';
+```
+
+Verify role membership:
+
+```sql
+SELECT role_principals.name AS role_name
+FROM sys.database_role_members AS role_members
+INNER JOIN sys.database_principals AS role_principals ON role_principals.principal_id = role_members.role_principal_id
+INNER JOIN sys.database_principals AS member_principals ON member_principals.principal_id = role_members.member_principal_id
+WHERE member_principals.name = N'ca-ade-prod-canadacentral-002';
+```
+
+Confirm the output includes:
+
+- `db_datareader`
+- `db_datawriter`
+
+### 11. Set the GitHub `production` environment variables
 
 Set the deployment identity client ID:
 
@@ -388,11 +379,11 @@ List the environment variables to confirm:
 gh variable list --env production --repo clac-ca/ade
 ```
 
-### 11. Run the initial migration job manually
+### 12. Run the initial migration job manually
 
 The first manual deployment defines the migration job, but it does not execute it.
 
-Run it once manually after the SQL server identity has Directory Readers:
+Run it once manually after the SQL runtime user exists:
 
 ```sh
 az containerapp job start \
@@ -409,7 +400,13 @@ az containerapp job execution list \
   --output table
 ```
 
-At steady state, that same start-and-poll sequence is handled by `release_stage` in the deployment pipeline.
+Verify the deployed app reaches readiness:
+
+```sh
+curl -fsS https://<app-fqdn>/api/readyz
+```
+
+At steady state, the same start-and-poll sequence is handled by `release_stage` in the deployment pipeline.
 
 ## Re-running the deployment
 
@@ -418,12 +415,13 @@ After the bootstrap is complete, future pushes to `main` should use the deployme
 If you need to reconcile production manually, re-run the template directly with a published image:
 
 ```sh
-export ADE_IMAGE=<image-ref>
+image=<image-ref>
 
 az deployment group create \
   --name ade-prod-reconcile \
   --resource-group rg-ade-prod-canadacentral-002 \
-  --parameters infra/environments/main.prod.bicepparam
+  --template-file infra/main.bicep \
+  --parameters @infra/environments/main.prod.parameters.json image="$image"
 ```
 
 If that deployment changes the migration job or the application image in a way that requires schema changes, start the migration job explicitly afterward.

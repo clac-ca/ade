@@ -4,7 +4,7 @@
 
 - `infra/main.bicep` owns the Azure resources ADE runs inside the target resource group.
 - `infra/README.md` owns the first manual deployment, the manual RBAC grants, the Microsoft Entra bootstrap steps, and the GitHub `production` environment setup.
-- Stable production values belong in `infra/environments/main.prod.bicepparam`.
+- Stable production values belong in `infra/environments/main.prod.parameters.json`.
 - Tenant IDs and subscription IDs never go in tracked files.
 
 ## In Practice

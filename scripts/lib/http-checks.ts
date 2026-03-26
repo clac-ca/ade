@@ -1,37 +1,37 @@
-function normalizeBaseUrl(value) {
+function normalizeBaseUrl(value: string): string {
   const trimmed = value.trim();
 
   if (trimmed === "") {
-    throw new Error("ADE_BASE_URL must not be empty.");
+    throw new Error("--url must not be empty.");
   }
 
   return trimmed.replace(/\/+$/, "");
 }
 
-function assertString(value, description) {
+function assertString(value: unknown, description: string) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`Expected ${description} to be a non-empty string.`);
   }
 }
 
-async function expectOk(url, description) {
+async function expectOk(url: string, description: string): Promise<Response> {
   const response = await fetch(url);
 
   if (!response.ok) {
     throw new Error(
-      `Expected ${description} at ${url} to return 200, received ${response.status}.`,
+      `Expected ${description} at ${url} to return 200, received ${String(response.status)}.`,
     );
   }
 
   return response;
 }
 
-async function readJson(url, description) {
+async function readJson(url: string, description: string): Promise<unknown> {
   const response = await expectOk(url, description);
-  return await response.json();
+  return response.json();
 }
 
-async function assertAppShell(baseUrl) {
+async function assertAppShell(baseUrl: string): Promise<void> {
   const response = await expectOk(`${baseUrl}/`, "web application shell");
   const contentType = response.headers.get("content-type") ?? "";
 
@@ -50,8 +50,14 @@ async function assertAppShell(baseUrl) {
   }
 }
 
-async function assertHealth(baseUrl) {
-  const payload = await readJson(`${baseUrl}/api/healthz`, "API health check");
+async function assertHealth(baseUrl: string): Promise<void> {
+  const payload = (await readJson(
+    `${baseUrl}/api/healthz`,
+    "API health check",
+  )) as {
+    service?: unknown;
+    status?: unknown;
+  };
 
   if (payload.service !== "ade" || payload.status !== "ok") {
     throw new Error(
@@ -60,11 +66,14 @@ async function assertHealth(baseUrl) {
   }
 }
 
-async function assertReady(baseUrl) {
-  const payload = await readJson(
+async function assertReady(baseUrl: string): Promise<void> {
+  const payload = (await readJson(
     `${baseUrl}/api/readyz`,
     "API readiness check",
-  );
+  )) as {
+    service?: unknown;
+    status?: unknown;
+  };
 
   if (payload.service !== "ade" || payload.status !== "ready") {
     throw new Error(
@@ -73,11 +82,17 @@ async function assertReady(baseUrl) {
   }
 }
 
-async function assertVersion(baseUrl) {
-  const payload = await readJson(
+async function assertVersion(baseUrl: string): Promise<void> {
+  const payload = (await readJson(
     `${baseUrl}/api/version`,
     "API version metadata",
-  );
+  )) as {
+    builtAt?: unknown;
+    gitSha?: unknown;
+    nodeVersion?: unknown;
+    service?: unknown;
+    version?: unknown;
+  };
 
   assertString(payload.service, "version payload service");
   assertString(payload.version, "version payload version");
@@ -90,8 +105,12 @@ async function assertVersion(baseUrl) {
   }
 }
 
-async function assertApiRoot(baseUrl) {
-  const payload = await readJson(`${baseUrl}/api/`, "API root endpoint");
+async function assertApiRoot(baseUrl: string): Promise<void> {
+  const payload = (await readJson(`${baseUrl}/api/`, "API root endpoint")) as {
+    service?: unknown;
+    status?: unknown;
+    version?: unknown;
+  };
 
   if (payload.service !== "ade" || payload.status !== "ok") {
     throw new Error('Expected /api/ to report service "ade" with status "ok".');
@@ -100,7 +119,7 @@ async function assertApiRoot(baseUrl) {
   assertString(payload.version, "API root version");
 }
 
-async function runAcceptanceChecks(baseUrl) {
+async function runAcceptanceChecks(baseUrl: string): Promise<void> {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   await assertAppShell(normalizedBaseUrl);
   await assertHealth(normalizedBaseUrl);
@@ -109,4 +128,4 @@ async function runAcceptanceChecks(baseUrl) {
   await assertApiRoot(normalizedBaseUrl);
 }
 
-export { runAcceptanceChecks };
+export { normalizeBaseUrl, runAcceptanceChecks };

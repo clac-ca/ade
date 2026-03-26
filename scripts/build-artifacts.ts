@@ -6,34 +6,16 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import process from "node:process";
-import { runCommand } from "./shared.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { runCommand } from "./lib/shell";
+import { readOptionalTrimmedString, runMain } from "./lib/runtime";
 
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
-const apiPackage = JSON.parse(
-  readFileSync(
-    new URL("../apps/ade-api/package.json", import.meta.url),
-    "utf8",
-  ),
-);
 
-function readGitMetadata() {
-  const gitSha =
-    process.env.GITHUB_SHA ?? readGitValue(["rev-parse", "HEAD"]) ?? "local";
-  const builtAt =
-    readGitValue(["show", "--no-patch", "--format=%cI", gitSha]) ??
-    new Date().toISOString();
-
-  return {
-    builtAt,
-    gitSha,
-  };
-}
-
-function readGitValue(args) {
+function readGitValue(args: readonly string[]): string | null {
   try {
     return execFileSync("git", args, {
       cwd: rootDir,
@@ -44,8 +26,43 @@ function readGitValue(args) {
   }
 }
 
-async function buildArtifacts() {
-  const { builtAt, gitSha } = readGitMetadata();
+function readGitMetadata(env: Record<string, string | undefined>) {
+  const gitSha =
+    readOptionalTrimmedString(env, "GITHUB_SHA") ??
+    readGitValue(["rev-parse", "HEAD"]) ??
+    "local";
+  const builtAt =
+    readGitValue(["show", "--no-patch", "--format=%cI", gitSha]) ??
+    new Date().toISOString();
+
+  return {
+    builtAt,
+    gitSha,
+  };
+}
+
+async function buildArtifacts(
+  env: Record<string, string | undefined> = process.env,
+): Promise<void> {
+  const { builtAt, gitSha } = readGitMetadata(env);
+  const apiPackage = JSON.parse(
+    readFileSync(
+      new URL("../apps/ade-api/package.json", import.meta.url),
+      "utf8",
+    ),
+  ) as {
+    version?: unknown;
+  };
+
+  if (
+    typeof apiPackage.version !== "string" ||
+    apiPackage.version.trim() === ""
+  ) {
+    throw new Error(
+      "apps/ade-api/package.json must contain a non-empty version string.",
+    );
+  }
+
   const packageRoot = join(rootDir, "apps", "ade-api", ".package");
   const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   const publicPath = join(packageRoot, "public");
@@ -100,8 +117,7 @@ if (
   process.argv[1] &&
   pathToFileURL(process.argv[1]).href === import.meta.url
 ) {
-  void buildArtifacts().catch((error) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exit(1);
+  void runMain(async () => {
+    await buildArtifacts();
   });
 }

@@ -1,23 +1,26 @@
 import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import process from "node:process";
-import { downLocalDependencies } from "./local-deps.mjs";
-import { runCommand } from "./shared.mjs";
+import { fileURLToPath } from "node:url";
+import { downLocalDependencies } from "./local-deps";
+import { runMain } from "./lib/runtime";
+import { runCommand } from "./lib/shell";
 
 const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 
-async function tryRun(command, args, options = {}) {
+async function tryRun(command: string, args: readonly string[]): Promise<void> {
   try {
-    await runCommand(command, args, options);
+    await runCommand(command, args, {
+      cwd: rootDir,
+    });
   } catch {
-    return undefined;
+    return;
   }
 }
 
-function readAdeContainers() {
+function readAdeContainers(): string[] {
   try {
     const output = execFileSync(
       dockerCommand,
@@ -37,10 +40,8 @@ function readAdeContainers() {
   }
 }
 
-async function main() {
-  await tryRun(pnpmCommand, ["-r", "--if-present", "run", "clean"], {
-    cwd: rootDir,
-  });
+async function main(): Promise<void> {
+  await tryRun(pnpmCommand, ["-r", "--if-present", "run", "clean"]);
   rmSync(
     fileURLToPath(new URL("../packages/ade-engine/dist", import.meta.url)),
     {
@@ -111,27 +112,15 @@ async function main() {
   });
 
   for (const containerName of readAdeContainers()) {
-    await tryRun(dockerCommand, ["container", "rm", "--force", containerName], {
-      cwd: rootDir,
-      stdio: "ignore",
-    });
+    await tryRun(dockerCommand, ["container", "rm", "--force", containerName]);
   }
 
-  try {
-    await downLocalDependencies(8000, {
-      stdio: "ignore",
-    });
-  } catch {
-    // Ignore missing local dependency stacks and Docker cleanup failures.
-  }
-
-  await tryRun(dockerCommand, ["image", "rm", "--force", "ade:local"], {
-    cwd: rootDir,
+  await downLocalDependencies({
     stdio: "ignore",
-  });
+  }).catch(() => undefined);
+  await tryRun(dockerCommand, ["image", "rm", "--force", "ade:local"]);
 }
 
-void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
+void runMain(async () => {
+  await main();
 });

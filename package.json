@@ -6,26 +6,31 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "deps:up": "node scripts/local-deps.mjs up",
-    "deps:down": "node scripts/local-deps.mjs down",
-    "dev": "node scripts/dev.mjs",
+    "deps:up": "tsx scripts/local-deps.ts up",
+    "deps:down": "tsx scripts/local-deps.ts down",
+    "dev": "tsx scripts/dev.ts",
     "lint": "pnpm exec eslint .",
-    "format:check": "pnpm exec prettier --check package.json README.md AGENTS.md PRINCIPLES.md docs/environment-variables.md infra/README.md infra/AGENTS.md infra/local/compose.yaml .github/workflows/deployment_pipeline.yml .github/workflows/README.md scripts/*.mjs apps/ade-api/package.json packages/ade-config/README.md packages/ade-engine/README.md",
-    "typecheck": "pnpm --filter @ade/api typecheck && pnpm --filter @ade/web typecheck",
-    "test:unit": "pnpm --filter @ade/api test",
+    "format:check": "pnpm exec prettier --check package.json pnpm-workspace.yaml tsconfig.base.json tsconfig.scripts.json README.md AGENTS.md PRINCIPLES.md docs/**/*.md infra/README.md infra/AGENTS.md infra/local/compose.yaml .github/workflows/deployment_pipeline.yml .github/workflows/README.md scripts/**/*.ts apps/ade-api/package.json apps/ade-api/src/**/*.ts apps/ade-api/test/**/*.ts apps/ade-web/package.json apps/ade-web/src/**/*.tsx apps/ade-web/vite.config.ts apps/ade-web/tsconfig*.json packages/ade-config/README.md packages/ade-engine/README.md",
+    "typecheck": "pnpm exec tsc --noEmit -p tsconfig.scripts.json && pnpm --filter @ade/api typecheck && pnpm --filter @ade/web typecheck",
+    "test:unit": "pnpm --filter @ade/api test && pnpm test:scripts",
+    "test:scripts": "tsx --test scripts/test/*.test.ts",
+    "test:python": "uv run --directory packages/ade-engine --with pytest pytest && uv run --directory packages/ade-config --with pytest pytest",
     "package:python": "uv build --directory packages/ade-engine && uv build --directory packages/ade-config",
-    "test": "pnpm lint && pnpm test:unit && pnpm package:python && pnpm build",
-    "test:acceptance": "node scripts/acceptance.mjs",
-    "build": "node scripts/build.mjs",
-    "start": "node scripts/start.mjs",
-    "clean": "node scripts/clean.mjs"
+    "test": "pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:python && pnpm package:python && pnpm build",
+    "test:acceptance": "tsx scripts/acceptance.ts",
+    "build": "tsx scripts/build.ts",
+    "start": "tsx scripts/start.ts",
+    "clean": "tsx scripts/clean.ts"
   },
   "devDependencies": {
+    "@types/node": "^24.12.0",
     "@eslint/js": "^10.0.1",
     "eslint": "^10.1.0",
     "globals": "^17.4.0",
     "prettier": "^3.6.2",
     "rimraf": "^6.1.3",
+    "tsx": "^4.21.0",
+    "typescript": "~5.9.3",
     "typescript-eslint": "^8.57.2"
   }
 }
