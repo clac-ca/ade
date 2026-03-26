@@ -4,3 +4,8 @@ name = "ade"
 
 [setup]
 script = "pnpm install"
+
+[[actions]]
+name = "pnpm dev"
+icon = "run"
+command = "pnpm dev"
