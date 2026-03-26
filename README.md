@@ -47,6 +47,8 @@ When you want to run the built app against an explicit SQL dependency, copy `.en
 
 `pnpm test:acceptance` follows the same model. By default it creates its own local acceptance environment, and `--url` switches it into attach mode for an already-running target.
 
+The runtime API keeps application identity deliberately small at `/api/version` and exposes Prometheus metrics separately at `/metrics`. Build provenance lives in OCI image metadata rather than the runtime API.
+
 The SQL connection string stays as a single config surface.
 
 - `SqlPassword` is supported for local SQL Server development.
@@ -68,7 +70,7 @@ The SQL connection string stays as a single config surface.
 | `pnpm test:acceptance`                          | Run the acceptance checks in a self-managed local production-like environment                     |
 | `pnpm test:acceptance --url <base-url>`         | Run the acceptance checks for a running environment                                               |
 | `pnpm package:python`                           | Build the Python packages                                                                         |
-| `pnpm build`                                    | Build the local release-candidate image `ade:local`                                               |
+| `pnpm build`                                    | Build the local release-candidate image `ade:local` from source via the Dockerfile                |
 | `pnpm start --image <image> --port <host-port>` | Run a built image in a local production-like environment                                          |
 | `pnpm clean`                                    | Remove generated local output, local images, and local Compose state                              |
 

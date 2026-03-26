@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions: {}
 
 jobs:
@@ -19,7 +23,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image: ${{ steps.publish_release_candidate.outputs.image }}
+      image: ${{ steps.build_metadata.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -50,26 +54,57 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run commit-stage gate
-        run: pnpm test
+      - name: Run typecheck
+        run: pnpm typecheck
 
-      - name: Log in to GitHub Container Registry
-        if: github.event_name == 'push'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Run lint
+        run: pnpm lint
 
-      - name: Publish release candidate
-        id: publish_release_candidate
-        if: github.event_name == 'push'
+      - name: Run unit tests
+        run: pnpm test:unit
+
+      - name: Run Python tests
+        run: pnpm test:python
+
+      - name: Package Python distributions
+        run: pnpm package:python
+
+      - name: Compute image ref and build metadata
+        id: build_metadata
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/ade:sha-${GITHUB_SHA}"
-
-          docker tag ade:local "${image}"
-          docker push "${image}"
+          built_at="$(git show --no-patch --format=%cI "${GITHUB_SHA}")"
+          service_version="$(
+            node --print "JSON.parse(require('node:fs').readFileSync('apps/ade-api/package.json', 'utf8')).version"
+          )"
 
           echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "built_at=${built_at}" >> "${GITHUB_OUTPUT}"
+          echo "git_sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "service_version=${service_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build accepted image
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.build_metadata.outputs.image }}
+          build-args: |
+            BUILT_AT=${{ steps.build_metadata.outputs.built_at }}
+            GIT_SHA=${{ steps.build_metadata.outputs.git_sha }}
+            SERVICE_VERSION=${{ steps.build_metadata.outputs.service_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   acceptance_stage:
     name: Acceptance Stage
@@ -119,11 +154,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up Node
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
-        with:
-          node-version-file: .node-version
 
       - name: Log in to Azure
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0

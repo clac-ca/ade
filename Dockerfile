@@ -1,3 +1,19 @@
+FROM node:24.14.1-alpine AS web-builder
+
+WORKDIR /build
+
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/ade-web/package.json ./apps/ade-web/package.json
+COPY apps/ade-api/package.json ./apps/ade-api/package.json
+
+RUN pnpm install --frozen-lockfile
+
+COPY apps/ade-web ./apps/ade-web
+
+RUN pnpm --filter @ade/web build
+
 FROM rust:1.94.0-alpine AS api-builder
 
 WORKDIR /build
@@ -19,8 +35,15 @@ RUN apk add --no-cache ca-certificates
 
 ENV NODE_ENV=production
 
-COPY apps/ade-web/dist ./public
-COPY apps/ade-api/dist ./dist
+ARG BUILT_AT
+ARG GIT_SHA
+ARG SERVICE_VERSION
+
+LABEL org.opencontainers.image.created=$BUILT_AT \
+      org.opencontainers.image.revision=$GIT_SHA \
+      org.opencontainers.image.version=$SERVICE_VERSION
+
+COPY --from=web-builder /build/apps/ade-web/dist ./public
 COPY --from=api-builder /build/apps/ade-api/target/release/ade-api ./bin/ade-api
 COPY --from=api-builder /build/apps/ade-api/target/release/ade-migrate ./bin/ade-migrate
 

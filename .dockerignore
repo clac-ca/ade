@@ -3,6 +3,7 @@
 .github
 node_modules
 python/*/dist
+apps/*/dist
 apps/*/node_modules
 apps/*/coverage
 apps/ade-api/target

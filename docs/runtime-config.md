@@ -16,6 +16,13 @@ ADE does not add any extra runtime environment variables of its own for that cha
 
 ADE does not support a migration-on-startup toggle. `ade-api` never runs migrations on startup, and `ade-migrate` is the only supported migration entrypoint.
 
+ADE keeps runtime HTTP metadata intentionally small:
+
+- `/api/version` returns only `{ service, version }`
+- `/metrics` exposes standard Prometheus text metrics for HTTP requests
+
+Build provenance such as image creation time and source revision is stored in OCI image metadata rather than the runtime API.
+
 The server listen address is not environment-driven.
 
 - Local development runs the API on `127.0.0.1:8000`.

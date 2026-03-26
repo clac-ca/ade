@@ -15,7 +15,6 @@
 │   └── modules/
 ├── scripts/
 │   ├── acceptance.ts
-│   ├── build-artifacts.ts
 │   ├── build.ts
 │   ├── clean.ts
 │   ├── dev.ts
