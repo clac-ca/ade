@@ -2,26 +2,6 @@
 
 ADE is a document operations platform for messy spreadsheets.
 
-## Repository Layout
-
-- `docs/` - runtime, developer-command, and release references
-- `apps/ade-web` - React web app
-- `apps/ade-api` - Axum API and production web host
-- `packages/ade-config` - installed product package and `ade` CLI
-- `packages/ade-engine` - extraction runtime library used by `ade-config`
-- `infra/` - Azure infrastructure definitions
-- `scripts/` - root development, build, acceptance, and deployment entrypoints
-
-## Requirements
-
-- Node.js 24+
-- pnpm 10+
-- Rust 1.94.0
-- Python 3.12
-- uv
-- Docker
-- Azure CLI 2.53+ with Bicep support
-
 ## Quickstart
 
 ```sh
@@ -32,57 +12,86 @@ pnpm dev
 
 ADE opens at `http://127.0.0.1:5173`.
 
-`pnpm dev` starts local SQL Server, runs the separate migration binary, then starts the Axum API and Vite web app on the host.
+`pnpm dev` starts local SQL Server, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host.
+
+## What Starts Locally
+
+- Web: `http://127.0.0.1:5173`
+- API: `http://127.0.0.1:8000`
+- SQL Server: `127.0.0.1:8013`
 
 Use `pnpm dev --port 8100` to change only the web port.
 
-## Configuration
+## Daily Repo Commands
 
-`pnpm dev` does not read `.env`.
+Use these for normal local development:
 
-When you want to run the built app against an explicit SQL dependency, copy `.env.example` to `.env` and adjust the SQL connection string.
+```sh
+pnpm dev
+pnpm dev --port 8100
+pnpm dev --no-open
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm test:unit
+pnpm clean
+```
 
-`pnpm start` is production-like: it runs the built image. If `AZURE_SQL_CONNECTIONSTRING` is configured, it uses that dependency directly. If it is not configured, it manages local SQL itself and runs the separate migration binary before starting the app container.
+`pnpm lint` and `pnpm test` require Azure CLI 2.53+ with Bicep support.
 
-`ade-api` never runs migrations on startup. The app container starts the app only, and `ade-migrate` is the only supported schema-mutation entrypoint.
+If you only need the local SQL dependency:
 
-`pnpm test:acceptance` follows the same model. By default it creates its own local acceptance environment, and `--url` switches it into attach mode for an already-running target.
+```sh
+pnpm deps:up
+pnpm deps:down
+```
 
-The runtime API keeps application identity deliberately small at `/api/version`. Build provenance lives in OCI image metadata rather than the runtime API.
+`pnpm clean` removes local build output, Python virtualenvs and locks, ADE local containers, Compose state, and the `ade:local` image.
 
-The SQL connection string stays as a single config surface.
+## Production-Like Local Runtime
 
-- `SqlPassword` is supported for local SQL Server development.
-- `ActiveDirectoryManagedIdentity` is the explicit production mode. `User ID` remains the optional user-assigned managed identity client ID.
-- `ActiveDirectoryDefault` is ADE's passwordless fallback chain. It tries workload identity, then managed identity, then developer tools. When present, `User ID` is used as the client ID for workload and managed identity resolution. ADE does not add any new ADE-specific environment variables.
+Use these when you want to run or test the built container locally:
 
-## Root Commands
+```sh
+pnpm build
+pnpm start
+pnpm start --no-open
+pnpm start --image ghcr.io/example/ade:test --port 9000
+pnpm test:acceptance
+pnpm test:acceptance --url http://127.0.0.1:4100
+pnpm test:acceptance --image ghcr.io/example/ade:test --port 4101
+```
 
-Use the root `pnpm` commands for repo workflows. Use native `cargo` or `az` commands directly for uncommon subsystem-specific work.
+`pnpm build` builds the local release image `ade:local` and accepts no extra arguments.
 
-| Command                                         | Use it for                                                                                                  |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `pnpm deps:up`                                  | Start only the local SQL Server dependency                                                                  |
-| `pnpm deps:down`                                | Stop the local SQL Server dependency                                                                        |
-| `pnpm dev`                                      | Run the full watch-mode development environment                                                             |
-| `pnpm lint`                                     | Run Rust lint, ESLint, and Bicep lint                                                                       |
-| `pnpm format:check`                             | Check the pipeline-owned repo files with Prettier                                                           |
-| `pnpm typecheck`                                | Run the TypeScript typechecks for the repo scripts and web app                                              |
-| `pnpm test`                                     | Run the local commit-stage gate: typecheck, lint, unit tests, Python tests, packaging, and infra validation |
-| `pnpm test:unit`                                | Run the Axum API tests, web tests, and root script unit tests                                               |
-| `pnpm test:acceptance`                          | Run the acceptance checks in a self-managed local production-like environment                               |
-| `pnpm test:acceptance --url <base-url>`         | Run the acceptance checks for a running environment                                                         |
-| `pnpm package:python`                           | Build the Python packages                                                                                   |
-| `pnpm build`                                    | Build the local release-candidate image `ade:local` from source via the Dockerfile                          |
-| `pnpm start --image <image> --port <host-port>` | Run a built image in a local production-like environment                                                    |
-| `pnpm clean`                                    | Remove generated local output, local images, and local Compose state                                        |
+`pnpm start` and managed `pnpm test:acceptance` use `ade:local` by default, so build first unless you pass `--image`.
 
-## Docs
+`pnpm dev` does not read `.env`. `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local SQL themselves. For connection string and authentication details, see [docs/runtime-config.md](docs/runtime-config.md).
 
-- [docs/runtime-config.md](docs/runtime-config.md) - application runtime configuration
+## Requirements
+
+- Node.js 24+
+- pnpm 10+
+- Rust 1.94.0
+- Python 3.12
+- uv
+- Docker
+- Azure CLI 2.53+ with Bicep support for `pnpm lint` and `pnpm test`
+
+## Repo Map
+
+- `apps/ade-web` - React web app
+- `apps/ade-api` - Axum API and production web host
+- `packages/ade-config` - installed product package and `ade` CLI
+- `packages/ade-engine` - extraction runtime library used by `ade-config`
+- `infra/` - Azure infrastructure definitions
+- `scripts/` - root development, build, acceptance, and deployment entrypoints
+
+## Further Docs
+
 - [docs/developer-commands.md](docs/developer-commands.md) - local development commands and defaults
+- [docs/runtime-config.md](docs/runtime-config.md) - application runtime configuration
 - [docs/release-deployment.md](docs/release-deployment.md) - release pipeline overview
 - [infra/README.md](infra/README.md) - Azure bootstrap and production infrastructure
-- [infra/local/compose.yaml](infra/local/compose.yaml) - local SQL Server dependency stack
 - [packages/ade-config/README.md](packages/ade-config/README.md) - `ade-config` package and `ade` CLI
 - [packages/ade-engine/README.md](packages/ade-engine/README.md) - `ade-engine` runtime package

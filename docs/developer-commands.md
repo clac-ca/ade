@@ -2,35 +2,78 @@
 
 ADE supports one fixed local stack per machine.
 
-Repo-wide workflows use the root `pnpm` commands. Specialist subsystem work stays on the native tools: use `cargo` directly for uncommon Rust tasks and `az` directly for uncommon Bicep or Azure deployment tasks.
+## Local Defaults
 
-## Local defaults
-
-- API: `http://127.0.0.1:8000`
 - Web: `http://127.0.0.1:5173`
+- API: `http://127.0.0.1:8000`
 - SQL Server: `127.0.0.1:8013`
 
-## Local requirements
+## Quickstart
 
-- Azure CLI 2.53+ with Bicep support is required for the normal root `pnpm lint` and `pnpm test` gates.
+```sh
+corepack enable
+pnpm install
+pnpm dev
+```
 
-## Commands
+ADE opens at `http://127.0.0.1:5173`.
 
-- `pnpm deps:up`: start local SQL Server only
-- `pnpm deps:down`: stop local SQL Server
-- `pnpm dev`: run SQL, execute the separate migration binary, start the Axum API, and start Vite
-- `pnpm dev --port 8100`: run the web dev server on a different port
-- `pnpm test`: run the repo validation gate: typecheck, lint, unit tests, Python tests, packaging, and infra validation
-- `pnpm build`: build the local release-candidate image `ade:local`
-- `pnpm start`: run the built image in a local production-like environment; when no SQL connection string is configured, it manages local SQL and runs the separate migration binary first
-- `pnpm start --image ghcr.io/example/ade:test --port 9000`: choose the image and published host port explicitly
-- `pnpm test:acceptance`: run the acceptance checks in a self-managed local production-like environment
-- `pnpm test:acceptance --url http://127.0.0.1:4100`: run the acceptance checks against an existing environment instead
-- `pnpm test:acceptance --image ghcr.io/example/ade:test --port 4101`: run the self-managed acceptance harness against a specific image and host port
+`pnpm dev` starts local SQL Server, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host. Use `pnpm dev --port 8100` to change only the web port, and use `pnpm dev --no-open` to skip opening the browser.
 
-`pnpm dev` does not read `.env`. `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local SQL themselves.
+## Daily Commands
 
-The standard runtime endpoints are:
+Normal local development:
+
+```sh
+pnpm dev
+pnpm dev --port 8100
+pnpm dev --no-open
+pnpm typecheck
+pnpm lint
+pnpm format:check
+pnpm test
+pnpm test:unit
+pnpm test:scripts
+pnpm package:python
+pnpm clean
+```
+
+`pnpm lint` and `pnpm test` require Azure CLI 2.53+ with Bicep support.
+
+Dependency-only commands:
+
+```sh
+pnpm deps:up
+pnpm deps:down
+```
+
+`pnpm clean` removes local build output, Python virtualenvs and locks, ADE local containers, Compose state, and the `ade:local` image.
+
+## Production-Like Runtime Commands
+
+```sh
+pnpm build
+pnpm start
+pnpm start --no-open
+pnpm start --image ghcr.io/example/ade:test --port 9000
+pnpm test:acceptance
+pnpm test:acceptance --url http://127.0.0.1:4100
+pnpm test:acceptance --image ghcr.io/example/ade:test --port 4101
+```
+
+`pnpm build` builds the local release image `ade:local` and accepts no extra arguments.
+
+`pnpm start` and managed `pnpm test:acceptance` use `ade:local` by default, so build first unless you pass `--image`.
+
+`pnpm test:acceptance --url <base-url>` attaches to an existing environment instead of starting a managed one.
+
+## Runtime Config Summary
+
+- `pnpm dev` is host-based and does not read `.env`.
+- `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local SQL automatically.
+- See [runtime-config.md](runtime-config.md) for the full connection string and authentication rules.
+
+## Standard Runtime Endpoints
 
 - `/api/healthz`
 - `/api/readyz`
