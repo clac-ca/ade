@@ -115,11 +115,6 @@ async function main(): Promise<void> {
       recursive: true,
     },
   );
-  rmSync(fileURLToPath(new URL("../.buildx-cache", import.meta.url)), {
-    force: true,
-    recursive: true,
-  });
-
   for (const containerName of readAdeContainers()) {
     await tryRun(dockerCommand, ["container", "rm", "--force", containerName]);
   }

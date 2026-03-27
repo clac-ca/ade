@@ -55,52 +55,19 @@ function readBuildMetadata(env: Record<string, string | undefined>) {
 async function buildImage(
   tag: string,
   contextPath: string,
-  cacheKey: string,
   buildArgs: Record<string, string>,
 ): Promise<void> {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const cacheRoot = path.join(rootDir, ".buildx-cache");
-  const currentCache = path.join(cacheRoot, cacheKey);
-  const nextCache = path.join(cacheRoot, `${cacheKey}-next`);
   const args = ["buildx", "build", "--load"];
-
-  fs.mkdirSync(cacheRoot, {
-    recursive: true,
-  });
-  fs.rmSync(nextCache, {
-    force: true,
-    recursive: true,
-  });
-
-  if (fs.existsSync(currentCache)) {
-    args.push("--cache-from", `type=local,src=${currentCache}`);
-  }
 
   for (const [name, value] of Object.entries(buildArgs)) {
     args.push("--build-arg", `${name}=${value}`);
   }
 
-  args.push(
-    "--cache-to",
-    `type=local,dest=${nextCache},mode=max`,
-    "-t",
-    tag,
-    contextPath,
-  );
+  args.push("-t", tag, contextPath);
 
   await runCommand(dockerCommand, args, {
     cwd: rootDir,
   });
-
-  fs.rmSync(currentCache, {
-    force: true,
-    recursive: true,
-  });
-
-  if (fs.existsSync(nextCache)) {
-    fs.renameSync(nextCache, currentCache);
-  }
 }
 
 async function main(): Promise<void> {
@@ -116,7 +83,7 @@ async function main(): Promise<void> {
   const metadata = readBuildMetadata(process.env);
 
   await ensureDocker(dockerCommand, "`pnpm build`");
-  await buildImage("ade:local", ".", "app", {
+  await buildImage("ade:local", ".", {
     BUILT_AT: metadata.builtAt,
     GIT_SHA: metadata.gitSha,
     SERVICE_VERSION: metadata.version,
