@@ -20,6 +20,7 @@ ADE is a document operations platform for messy spreadsheets.
 - Python 3.12
 - uv
 - Docker
+- Azure CLI 2.53+ with Bicep support
 
 ## Quickstart
 
@@ -57,22 +58,24 @@ The SQL connection string stays as a single config surface.
 
 ## Root Commands
 
-| Command                                         | Use it for                                                                                        |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `pnpm deps:up`                                  | Start only the local SQL Server dependency                                                        |
-| `pnpm deps:down`                                | Stop the local SQL Server dependency                                                              |
-| `pnpm dev`                                      | Run the full watch-mode development environment                                                   |
-| `pnpm lint`                                     | Run ESLint across the repo                                                                        |
-| `pnpm format:check`                             | Check the pipeline-owned repo files with Prettier                                                 |
-| `pnpm typecheck`                                | Run the TypeScript typechecks and Rust `cargo check`                                              |
-| `pnpm test`                                     | Run the local commit-stage gate: typecheck, lint, unit tests, Python tests, packaging, then build |
-| `pnpm test:unit`                                | Run the Axum API tests, web tests, and root script unit tests                                     |
-| `pnpm test:acceptance`                          | Run the acceptance checks in a self-managed local production-like environment                     |
-| `pnpm test:acceptance --url <base-url>`         | Run the acceptance checks for a running environment                                               |
-| `pnpm package:python`                           | Build the Python packages                                                                         |
-| `pnpm build`                                    | Build the local release-candidate image `ade:local` from source via the Dockerfile                |
-| `pnpm start --image <image> --port <host-port>` | Run a built image in a local production-like environment                                          |
-| `pnpm clean`                                    | Remove generated local output, local images, and local Compose state                              |
+Use the root `pnpm` commands for repo workflows. Use native `cargo` or `az` commands directly for uncommon subsystem-specific work.
+
+| Command                                         | Use it for                                                                                                          |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `pnpm deps:up`                                  | Start only the local SQL Server dependency                                                                          |
+| `pnpm deps:down`                                | Stop the local SQL Server dependency                                                                                |
+| `pnpm dev`                                      | Run the full watch-mode development environment                                                                     |
+| `pnpm lint`                                     | Run Rust lint, ESLint, and Bicep lint                                                                               |
+| `pnpm format:check`                             | Check the pipeline-owned repo files with Prettier                                                                   |
+| `pnpm typecheck`                                | Run the TypeScript typechecks and Rust `cargo check`                                                                |
+| `pnpm test`                                     | Run the local commit-stage gate: typecheck, lint, unit tests, Python tests, packaging, infra validation, then build |
+| `pnpm test:unit`                                | Run the Axum API tests, web tests, and root script unit tests                                                       |
+| `pnpm test:acceptance`                          | Run the acceptance checks in a self-managed local production-like environment                                       |
+| `pnpm test:acceptance --url <base-url>`         | Run the acceptance checks for a running environment                                                                 |
+| `pnpm package:python`                           | Build the Python packages                                                                                           |
+| `pnpm build`                                    | Build the local release-candidate image `ade:local` from source via the Dockerfile                                  |
+| `pnpm start --image <image> --port <host-port>` | Run a built image in a local production-like environment                                                            |
+| `pnpm clean`                                    | Remove generated local output, local images, and local Compose state                                                |
 
 ## Docs
 

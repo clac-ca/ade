@@ -2,11 +2,17 @@
 
 ADE supports one fixed local stack per machine.
 
+Repo-wide workflows use the root `pnpm` commands. Specialist subsystem work stays on the native tools: use `cargo` directly for uncommon Rust tasks and `az` directly for uncommon Bicep or Azure deployment tasks.
+
 ## Local defaults
 
 - API: `http://127.0.0.1:8000`
 - Web: `http://127.0.0.1:5173`
 - SQL Server: `127.0.0.1:8013`
+
+## Local requirements
+
+- Azure CLI 2.53+ with Bicep support is required for the normal root `pnpm lint` and `pnpm test` gates.
 
 ## Commands
 

@@ -117,11 +117,19 @@ image=<image-ref>
 ### 6. Run the first manual deployment
 
 ```sh
+az deployment group validate \
+  --name ade-prod-initial-validate \
+  --resource-group rg-ade-prod-canadacentral-002 \
+  --parameters infra/environments/main.prod.bicepparam \
+  --parameters image="$image"
+```
+
+```sh
 az deployment group create \
   --name ade-prod-initial \
   --resource-group rg-ade-prod-canadacentral-002 \
-  --template-file infra/main.bicep \
-  --parameters @infra/environments/main.prod.parameters.json image="$image"
+  --parameters infra/environments/main.prod.bicepparam \
+  --parameters image="$image"
 ```
 
 ### 7. Grant the deployment identity the minimum Azure RBAC it needs
@@ -419,11 +427,17 @@ If you need to reconcile production manually, re-run the template directly with 
 ```sh
 image=<image-ref>
 
+az deployment group validate \
+  --name ade-prod-reconcile-validate \
+  --resource-group rg-ade-prod-canadacentral-002 \
+  --parameters infra/environments/main.prod.bicepparam \
+  --parameters image="$image"
+
 az deployment group create \
   --name ade-prod-reconcile \
   --resource-group rg-ade-prod-canadacentral-002 \
-  --template-file infra/main.bicep \
-  --parameters @infra/environments/main.prod.parameters.json image="$image"
+  --parameters infra/environments/main.prod.bicepparam \
+  --parameters image="$image"
 ```
 
 If that deployment changes the migration job or the application image in a way that requires schema changes, start the migration job explicitly afterward.
@@ -431,5 +445,5 @@ If that deployment changes the migration job or the application image in a way t
 ## Operational notes
 
 - The Container Apps environment is VNet-integrated. Azure does not let you switch an environment from the default network mode to VNet integration in place, so treat the current environment shape as intentional.
-- The release workflow deploys the accepted image first and then starts the migration job. Keep schema changes backward-compatible and use expand/contract migrations by default.
+- The release workflow validates the deployment inputs, deploys the release candidate, and then starts the migration job. Keep schema changes backward-compatible and use expand/contract migrations by default.
 - The app readiness endpoint must remain process-level. Do not turn `/api/readyz` into a "latest schema is present" gate.

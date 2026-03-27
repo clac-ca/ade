@@ -35,10 +35,7 @@ async fn main() {
 
 async fn run() -> Result<(), ade_api::error::AppError> {
     let env = current_env();
-    let config = read_config(
-        &env,
-        ReadConfigOptions { require_sql: true },
-    )?;
+    let config = read_config(&env, ReadConfigOptions { require_sql: true })?;
     let args = ServerArgs::parse();
     let runtime_paths = default_runtime_paths();
 

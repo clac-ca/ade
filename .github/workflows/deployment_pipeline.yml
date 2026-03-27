@@ -23,7 +23,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image: ${{ steps.build_metadata.outputs.image }}
+      release_candidate_image: ${{ steps.build_metadata.outputs.release_candidate_image }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -69,7 +69,7 @@ jobs:
       - name: Package Python distributions
         run: pnpm package:python
 
-      - name: Compute image ref and build metadata
+      - name: Compute release candidate image ref and OCI metadata
         id: build_metadata
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
@@ -79,7 +79,7 @@ jobs:
             node --print "JSON.parse(require('node:fs').readFileSync('apps/ade-api/package.json', 'utf8')).version"
           )"
 
-          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "release_candidate_image=${image}" >> "${GITHUB_OUTPUT}"
           echo "built_at=${built_at}" >> "${GITHUB_OUTPUT}"
           echo "git_sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
           echo "service_version=${service_version}" >> "${GITHUB_OUTPUT}"
@@ -92,13 +92,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build accepted image
+      - name: Validate Bicep compilation
+        run: |
+          az bicep build --file infra/main.bicep --stdout >/dev/null
+          az bicep build-params --file infra/environments/main.prod.bicepparam --stdout >/dev/null
+
+      - name: Build release candidate image
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
         with:
           context: .
           file: ./Dockerfile
           push: ${{ github.event_name == 'push' }}
-          tags: ${{ steps.build_metadata.outputs.image }}
+          tags: ${{ steps.build_metadata.outputs.release_candidate_image }}
           build-args: |
             BUILT_AT=${{ steps.build_metadata.outputs.built_at }}
             GIT_SHA=${{ steps.build_metadata.outputs.git_sha }}
@@ -133,10 +138,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Pull release candidate
-        run: docker pull "${{ needs.commit_stage.outputs.image }}"
+        run: docker pull "${{ needs.commit_stage.outputs.release_candidate_image }}"
 
       - name: Run acceptance tests
-        run: pnpm test:acceptance --image "${{ needs.commit_stage.outputs.image }}"
+        run: pnpm test:acceptance --image "${{ needs.commit_stage.outputs.release_candidate_image }}"
 
   release_stage:
     name: Release Stage
@@ -162,15 +167,25 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
 
-      - name: Deploy accepted release candidate
+      - name: Validate release candidate deployment
+        run: |
+          az deployment group validate \
+            --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-validate" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --parameters infra/environments/main.prod.bicepparam \
+            --parameters image="${{ needs.commit_stage.outputs.release_candidate_image }}" \
+            --validation-level Provider \
+            --output none
+
+      - name: Deploy release candidate
         id: deploy_release_candidate
         run: |
           migration_job_name="$(
             az deployment group create \
               --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-              --template-file infra/main.bicep \
-              --parameters @infra/environments/main.prod.parameters.json image="${{ needs.commit_stage.outputs.image }}" \
+              --parameters infra/environments/main.prod.bicepparam \
+              --parameters image="${{ needs.commit_stage.outputs.release_candidate_image }}" \
               --query properties.outputs.migrationJobName.value \
               --output tsv
           )"
