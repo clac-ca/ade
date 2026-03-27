@@ -118,6 +118,11 @@ jobs:
           az bicep build --file infra/main.bicep --stdout >/dev/null
           az bicep build-params --file infra/environments/main.prod.bicepparam --stdout >/dev/null
 
+      - name: Clear Docker Hub credentials
+        run: |
+          docker logout docker.io || true
+          docker logout https://index.docker.io/v1/ || true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
