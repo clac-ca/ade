@@ -67,7 +67,7 @@ Use the root `pnpm` commands for repo workflows. Use native `cargo` or `az` comm
 | `pnpm dev`                                      | Run the full watch-mode development environment                                                             |
 | `pnpm lint`                                     | Run Rust lint, ESLint, and Bicep lint                                                                       |
 | `pnpm format:check`                             | Check the pipeline-owned repo files with Prettier                                                           |
-| `pnpm typecheck`                                | Run the TypeScript typechecks and Rust `cargo check`                                                        |
+| `pnpm typecheck`                                | Run the TypeScript typechecks for the repo scripts and web app                                              |
 | `pnpm test`                                     | Run the local commit-stage gate: typecheck, lint, unit tests, Python tests, packaging, and infra validation |
 | `pnpm test:unit`                                | Run the Axum API tests, web tests, and root script unit tests                                               |
 | `pnpm test:acceptance`                          | Run the acceptance checks in a self-managed local production-like environment                               |

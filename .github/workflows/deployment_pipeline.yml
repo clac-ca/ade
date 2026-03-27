@@ -64,7 +64,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run typecheck
+      - name: Run TypeScript typecheck
         run: pnpm typecheck
 
       - name: Run lint

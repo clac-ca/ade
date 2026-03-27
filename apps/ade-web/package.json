@@ -7,7 +7,7 @@
     "clean": "rimraf dist",
     "dev": "vite",
     "typecheck": "tsc -b --pretty false",
-    "build": "pnpm run typecheck && vite build",
+    "build": "vite build",
     "test": "vitest run"
   },
   "dependencies": {
