@@ -1,16 +1,12 @@
-use std::{path::Path, sync::OnceLock};
+use std::path::Path;
 
 use axum::{
     Router,
     body::Body,
     extract::{OriginalUri, Request as AxumRequest, State},
-    http::{HeaderMap, Method, Request as HttpRequest, StatusCode, Version, header},
+    http::{HeaderMap, Method, Request as HttpRequest, StatusCode, Version},
     response::Response,
     routing::get,
-};
-use axum_prometheus::{
-    PrometheusMetricLayer, PrometheusMetricLayerBuilder,
-    metrics_exporter_prometheus::PrometheusHandle,
 };
 use tower::Layer;
 use tower::util::ServiceExt;
@@ -29,42 +25,12 @@ pub fn create_app(state: AppState) -> Router {
         .route("/readyz", get(system::readyz))
         .route("/version", get(system::version))
         .fallback(api_not_found);
-    let (metrics_layer, metrics_handle) = metrics_pair();
-    let metrics_route_handle = metrics_handle.clone();
 
     Router::new()
-        .route(
-            "/metrics",
-            get(move || {
-                let metrics_route_handle = metrics_route_handle.clone();
-
-                async move {
-                    (
-                        [(
-                            header::CONTENT_TYPE,
-                            "text/plain; version=0.0.4; charset=utf-8",
-                        )],
-                        metrics_route_handle.render(),
-                    )
-                }
-            }),
-        )
         .nest("/api", api_router)
         .fallback(spa_or_not_found)
-        .layer(metrics_layer)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
-}
-
-fn metrics_pair() -> &'static (PrometheusMetricLayer<'static>, PrometheusHandle) {
-    static METRICS: OnceLock<(PrometheusMetricLayer<'static>, PrometheusHandle)> = OnceLock::new();
-
-    METRICS.get_or_init(|| {
-        PrometheusMetricLayerBuilder::new()
-            .with_ignore_pattern("/metrics")
-            .with_default_metrics()
-            .build_pair()
-    })
 }
 
 pub fn normalize_app(app: Router) -> NormalizePath<Router> {

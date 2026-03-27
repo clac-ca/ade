@@ -48,7 +48,7 @@ When you want to run the built app against an explicit SQL dependency, copy `.en
 
 `pnpm test:acceptance` follows the same model. By default it creates its own local acceptance environment, and `--url` switches it into attach mode for an already-running target.
 
-The runtime API keeps application identity deliberately small at `/api/version` and exposes Prometheus metrics separately at `/metrics`. Build provenance lives in OCI image metadata rather than the runtime API.
+The runtime API keeps application identity deliberately small at `/api/version`. Build provenance lives in OCI image metadata rather than the runtime API.
 
 The SQL connection string stays as a single config surface.
 

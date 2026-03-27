@@ -17,8 +17,7 @@ export function HomePage() {
         <p className="hero__summary">
           Routing is handled by React Router, server data by TanStack Query, and
           API access by a thin client layer. Runtime health stays on explicit
-          API endpoints, and operational metrics are exposed separately at
-          `/metrics`.
+          API endpoints, with no extra operational surface in the first slice.
         </p>
       </div>
 
@@ -49,8 +48,8 @@ export function HomePage() {
 
           <p className="status-note">
             This first slice keeps the client contract intentionally small: a
-            minimal version endpoint for application identity and a standard
-            Prometheus metrics endpoint for observability.
+            minimal version endpoint for application identity and explicit
+            health endpoints for runtime status.
           </p>
         </>
       ) : null}

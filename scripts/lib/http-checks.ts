@@ -31,10 +31,6 @@ async function readJson(url: string, description: string): Promise<unknown> {
   return response.json();
 }
 
-async function readText(url: string, description: string): Promise<Response> {
-  return expectOk(url, description);
-}
-
 async function assertAppShell(baseUrl: string): Promise<void> {
   const response = await expectOk(`${baseUrl}/`, "web application shell");
   const contentType = response.headers.get("content-type") ?? "";
@@ -117,31 +113,6 @@ async function assertVersion(baseUrl: string): Promise<void> {
   }
 }
 
-async function assertMetrics(baseUrl: string): Promise<void> {
-  const response = await readText(
-    `${baseUrl}/metrics`,
-    "Prometheus metrics endpoint",
-  );
-  const contentType = response.headers.get("content-type") ?? "";
-
-  if (!contentType.includes("text/plain")) {
-    throw new Error(
-      `Expected /metrics to return Prometheus text, received ${contentType || "unknown content type"}.`,
-    );
-  }
-
-  const body = await response.text();
-
-  if (
-    !body.includes("axum_http_requests_total") ||
-    !body.includes("axum_http_requests_duration_seconds")
-  ) {
-    throw new Error(
-      "Expected /metrics to expose the standard Axum Prometheus HTTP metrics.",
-    );
-  }
-}
-
 async function assertApiRoot(baseUrl: string): Promise<void> {
   const payload = (await readJson(`${baseUrl}/api/`, "API root endpoint")) as {
     service?: unknown;
@@ -164,7 +135,6 @@ async function runAcceptanceChecks(baseUrl: string): Promise<void> {
   await assertReady(normalizedBaseUrl);
   await assertVersion(normalizedBaseUrl);
   await assertApiRoot(normalizedBaseUrl);
-  await assertMetrics(normalizedBaseUrl);
 }
 
 export { normalizeBaseUrl, runAcceptanceChecks };

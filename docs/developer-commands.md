@@ -35,4 +35,3 @@ The standard runtime endpoints are:
 - `/api/healthz`
 - `/api/readyz`
 - `/api/version`
-- `/metrics`

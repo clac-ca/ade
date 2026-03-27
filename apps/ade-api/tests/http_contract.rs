@@ -150,35 +150,6 @@ async fn version_route_exposes_minimal_runtime_metadata() {
 }
 
 #[tokio::test]
-async fn metrics_route_exposes_prometheus_text() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        web_root: Some(fixture_web_root()),
-    }));
-
-    let _ = app.clone().oneshot(request("/api/healthz")).await.unwrap();
-    let response = app.oneshot(request("/metrics")).await.unwrap();
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
-    let body = String::from_utf8(
-        to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap();
-
-    assert_eq!(content_type, "text/plain; version=0.0.4; charset=utf-8");
-    assert!(body.contains("axum_http_requests_total"));
-    assert!(body.contains("axum_http_requests_duration_seconds"));
-}
-
-#[tokio::test]
 async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
