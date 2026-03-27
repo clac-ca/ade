@@ -29,7 +29,7 @@ ENV CARGO_TARGET_DIR=/cargo-target
 
 WORKDIR /build
 
-RUN apk add --no-cache build-base musl-dev pkgconfig ca-certificates
+RUN apk add --no-cache build-base musl-dev pkgconfig ca-certificates perl
 
 COPY rust-toolchain.toml ./
 COPY apps/ade-api/Cargo.toml apps/ade-api/Cargo.lock ./apps/ade-api/
