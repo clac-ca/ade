@@ -23,20 +23,6 @@ use tokio_util::compat::TokioAsyncWriteCompatExt;
 use crate::error::AppError;
 
 const SQL_TOKEN_SCOPE: &str = "https://database.windows.net/.default";
-const MIGRATION_TABLE_NAME: &str = "schema_migrations";
-const MIGRATION_TABLE_FQ_NAME: &str = "dbo.schema_migrations";
-const ENSURE_MIGRATION_TABLE_QUERY: &str = "
-IF OBJECT_ID(N'dbo.schema_migrations', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.schema_migrations(
-    version BIGINT NOT NULL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    applied_on VARCHAR(255) NOT NULL,
-    checksum VARCHAR(255) NOT NULL
-  );
-END
-";
-
 type SqlClient = bb8_tiberius::rt::Client;
 type SqlTokenCredential = dyn TokenCredential + Send + Sync;
 
@@ -119,10 +105,7 @@ pub async fn run_migrations(connection_string: &str) -> Result<Vec<String>, AppE
             error,
         )
     })?;
-    ensure_migration_table(&mut client).await?;
-
     let report = crate::embedded_migrations::migrations::runner()
-        .set_migration_table_name(MIGRATION_TABLE_NAME)
         .run_async(&mut client)
         .await
         .map_err(|error| {
@@ -134,28 +117,6 @@ pub async fn run_migrations(connection_string: &str) -> Result<Vec<String>, AppE
         .iter()
         .map(|migration| migration.name().to_string())
         .collect())
-}
-
-async fn ensure_migration_table(client: &mut SqlClient) -> Result<(), AppError> {
-    let stream = client
-        .simple_query(ENSURE_MIGRATION_TABLE_QUERY)
-        .await
-        .map_err(|error| {
-            AppError::database_with_source(
-                format!(
-                    "Failed to ensure the SQL migration history table at {MIGRATION_TABLE_FQ_NAME}."
-                ),
-                error,
-            )
-        })?;
-    drain_query_stream(stream).await.map_err(|error| {
-        AppError::database_with_source(
-            format!(
-                "Failed to initialize the SQL migration history table at {MIGRATION_TABLE_FQ_NAME}."
-            ),
-            error,
-        )
-    })
 }
 
 #[derive(Clone, Debug)]
