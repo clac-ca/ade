@@ -57,12 +57,9 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/git/db
             apps/ade-api/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'apps/ade-api/Cargo.lock') }}-${{ github.sha }}
+          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'apps/ade-api/Cargo.toml', 'apps/ade-api/Cargo.lock') }}
           restore-keys: |
-            rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'apps/ade-api/Cargo.lock') }}-
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+            rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -83,7 +80,7 @@ jobs:
         run: pnpm package:python
 
       - name: Save Rust cache
-        if: always()
+        if: always() && steps.rust_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
@@ -121,6 +118,9 @@ jobs:
           az bicep build --file infra/main.bicep --stdout >/dev/null
           az bicep build-params --file infra/environments/main.prod.bicepparam --stdout >/dev/null
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
       - name: Build release candidate image
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
         with:
@@ -132,8 +132,8 @@ jobs:
             BUILT_AT=${{ steps.build_metadata.outputs.built_at }}
             GIT_SHA=${{ steps.build_metadata.outputs.git_sha }}
             SERVICE_VERSION=${{ steps.build_metadata.outputs.service_version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=ade-release-candidate
+          cache-to: type=gha,scope=ade-release-candidate,mode=max
 
   acceptance_stage:
     name: Acceptance Stage
@@ -232,11 +232,12 @@ jobs:
 
           for attempt in $(seq 1 90); do
             status="$(
-              az containerapp job execution list \
+              az containerapp job execution show \
                 --name "${ADE_MIGRATION_JOB_NAME}" \
                 --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-                --query "[?name=='${execution_name}'] | [0].properties.status" \
-                --output tsv
+                --job-execution-name "${execution_name}" \
+                --query properties.status \
+                --output tsv 2>/dev/null || true
             )"
 
             if [ "${status}" = "Succeeded" ]; then
@@ -246,10 +247,10 @@ jobs:
 
             if [ "${status}" = "Failed" ]; then
               echo "Migration job failed."
-              az containerapp job execution list \
+              az containerapp job execution show \
                 --name "${ADE_MIGRATION_JOB_NAME}" \
                 --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-                --query "[?name=='${execution_name}'] | [0]" \
+                --job-execution-name "${execution_name}" \
                 --output json
               exit 1
             fi

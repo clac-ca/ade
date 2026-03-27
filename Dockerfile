@@ -23,25 +23,34 @@ COPY apps/ade-web ./apps/ade-web
 
 RUN pnpm --filter @ade/web build
 
-FROM rust:1.94.0-alpine AS api-builder
-
-ENV CARGO_TARGET_DIR=/cargo-target
+FROM rust:1.94.0-alpine AS chef
 
 WORKDIR /build
 
-RUN apk add --no-cache build-base musl-dev pkgconfig ca-certificates perl
+RUN apk add --no-cache build-base musl-dev pkgconfig ca-certificates perl \
+    && cargo install --locked cargo-chef
 
-COPY rust-toolchain.toml ./
-COPY apps/ade-api/Cargo.toml apps/ade-api/Cargo.lock ./apps/ade-api/
-COPY apps/ade-api/src ./apps/ade-api/src
-COPY apps/ade-api/migrations ./apps/ade-api/migrations
+FROM chef AS planner
 
-RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=cargo-git-db,target=/usr/local/cargo/git/db \
-    --mount=type=cache,id=ade-api-target,target=/cargo-target \
-    cargo build --manifest-path apps/ade-api/Cargo.toml --locked --release --bin ade-api --bin ade-migrate && \
-    install -Dm755 /cargo-target/release/ade-api /build/bin/ade-api && \
-    install -Dm755 /cargo-target/release/ade-migrate /build/bin/ade-migrate
+WORKDIR /build/apps/ade-api
+
+COPY apps/ade-api ./
+
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS api-builder
+
+WORKDIR /build/apps/ade-api
+
+COPY --from=planner /build/apps/ade-api/recipe.json recipe.json
+
+RUN cargo chef cook --release --recipe-path recipe.json
+
+COPY apps/ade-api ./
+
+RUN cargo build --locked --release --bin ade-api --bin ade-migrate \
+    && install -Dm755 /build/apps/ade-api/target/release/ade-api /build/bin/ade-api \
+    && install -Dm755 /build/apps/ade-api/target/release/ade-migrate /build/bin/ade-migrate
 
 FROM alpine:3.22
 
