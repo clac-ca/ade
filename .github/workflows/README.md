@@ -33,6 +33,7 @@ For the one-time Azure bootstrap and first manual deployment, follow [infra/READ
 
 ```sh
 pnpm test
+pnpm build
 pnpm start
 pnpm test:acceptance
 ```

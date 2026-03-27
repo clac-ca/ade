@@ -16,7 +16,7 @@
     "test:scripts": "tsx --test scripts/test/*.test.ts",
     "test:python": "uv run --directory packages/ade-engine --with pytest pytest && uv run --directory packages/ade-config --with pytest pytest",
     "package:python": "uv build --directory packages/ade-engine && uv build --directory packages/ade-config",
-    "test": "pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:python && pnpm package:python && az bicep build --file infra/main.bicep --stdout >/dev/null && az bicep build-params --file infra/environments/main.prod.bicepparam --stdout >/dev/null && pnpm build",
+    "test": "pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:python && pnpm package:python && az bicep build --file infra/main.bicep --stdout >/dev/null && az bicep build-params --file infra/environments/main.prod.bicepparam --stdout >/dev/null",
     "test:acceptance": "tsx scripts/acceptance.ts",
     "build": "tsx scripts/build.ts",
     "start": "tsx scripts/start.ts",

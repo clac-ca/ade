@@ -20,6 +20,8 @@ Repo-wide workflows use the root `pnpm` commands. Specialist subsystem work stay
 - `pnpm deps:down`: stop local SQL Server
 - `pnpm dev`: run SQL, execute the separate migration binary, start the Axum API, and start Vite
 - `pnpm dev --port 8100`: run the web dev server on a different port
+- `pnpm test`: run the repo validation gate: typecheck, lint, unit tests, Python tests, packaging, and infra validation
+- `pnpm build`: build the local release-candidate image `ade:local`
 - `pnpm start`: run the built image in a local production-like environment; when no SQL connection string is configured, it manages local SQL and runs the separate migration binary first
 - `pnpm start --image ghcr.io/example/ade:test --port 9000`: choose the image and published host port explicitly
 - `pnpm test:acceptance`: run the acceptance checks in a self-managed local production-like environment
