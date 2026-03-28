@@ -24,7 +24,7 @@ Operating model:
 - The commit stage runs platform-only checks first, including TypeScript typecheck, Rust/API lint, ESLint, and Bicep lint, then builds the ADE Platform release candidate image once with Buildx from source using the Dockerfile's multi-stage build and standard metadata-action tags and OCI labels.
 - On push, the workflow publishes that image to `ghcr.io/<org>/ade-platform` and records the pushed digest.
 - Acceptance reuses that exact immutable digest. It runs `pnpm test:acceptance --image <release-candidate-image>`, and the command manages local SQL, runs the separate migration binary, starts the same release candidate, waits for readiness, runs the checks, and tears the environment down.
-- Release reuses that exact immutable digest, validates the Bicep deployment inputs first, passes the image to Bicep as an explicit `image=` parameter override, starts the separate migration job explicitly after deployment, then tags the commit as `ade-platform-v...` and creates the GitHub Release.
+- Release reuses that exact immutable digest, validates the Bicep deployment inputs first, passes the image to Bicep as an explicit `image=` parameter override, starts the separate migration job explicitly after deployment, then creates the matching `ade-platform-v...` GHCR tag from that digest, tags the commit as `ade-platform-v...`, and creates the GitHub Release.
 - The app container never runs schema migrations on startup.
 
 ## Required GitHub environment variables

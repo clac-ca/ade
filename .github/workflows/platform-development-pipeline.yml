@@ -320,6 +320,28 @@ jobs:
             echo "exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
+      - name: Log in to GitHub Container Registry
+        if: steps.tag.outputs.exists == 'false'
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: steps.tag.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Create platform release image tag
+        if: steps.tag.outputs.exists == 'false'
+        env:
+          RELEASE_CANDIDATE_IMAGE: ${{ needs.commit_stage.outputs.release_candidate_image }}
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${RELEASE_CANDIDATE_IMAGE%@*}:${RELEASE_TAG}" \
+            "${RELEASE_CANDIDATE_IMAGE}"
+
       - name: Create and push platform release tag
         if: steps.tag.outputs.exists == 'false'
         env:

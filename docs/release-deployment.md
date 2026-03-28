@@ -15,6 +15,7 @@ Key rules:
 - Migrations run through the separate `ade-migrate` binary and Azure Container App Job.
 - Release order is explicit: validate the deployment inputs, deploy the release candidate, then start the migration job, then observe the job result.
 - The platform release creates a Git tag and GitHub Release only after deployment and migrations succeed.
+- After deployment and migrations succeed, release also attaches the matching `ade-platform-v...` tag to the already-published GHCR image digest.
 - Platform release versions use the qualifying commit timestamp converted to `America/Vancouver` for the `YYYY.M.D` calendar date and `github.run_number` for the suffix. Reruns reuse the same release version.
 - If multiple qualifying pushes land on `main` while a production release is already running, GitHub keeps the active release running and only the newest pending platform release. Intermediate pending platform releases are intentionally dropped.
 - The running app container never performs schema migrations on startup.
