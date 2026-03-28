@@ -64,7 +64,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip build uv_build
 COPY packages/ade-engine ./packages/ade-engine
 COPY packages/ade-config ./packages/ade-config
 
-RUN python -m build --wheel --outdir /dist /build/packages/ade-config
+RUN python -m build --wheel --outdir /dist /build/packages/ade-engine \
+    && python -m build --wheel --outdir /dist /build/packages/ade-config
 
 FROM alpine:3.22
 
@@ -79,6 +80,7 @@ ENV NODE_ENV=production
 COPY --from=web-builder --chown=ade:ade /build/apps/ade-web/dist ./public
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-api ./bin/ade-api
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-migrate ./bin/ade-migrate
+COPY --from=python-builder --chown=ade:ade /dist/ade_engine-*.whl ./python/
 COPY --from=python-builder --chown=ade:ade /dist/ade_config-*.whl ./python/
 
 USER ade:ade

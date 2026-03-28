@@ -89,6 +89,7 @@ var mergedTags = union({
   project: 'ade'
 }, tags)
 var githubOidcSubject = 'repo:${githubOrganization}/${githubRepository}:environment:${githubEnvironmentName}'
+var sessionExecutorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0fb8eba5-a2bb-4abe-b1c1-49dfad359bb0')
 
 resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: deploymentManagedIdentityName
@@ -162,6 +163,10 @@ module sessionPool 'modules/session-pool.bicep' = {
     name: sessionPoolName
     tags: mergedTags
   }
+}
+
+resource sessionPoolResource 'Microsoft.App/sessionPools@2025-10-02-preview' existing = {
+  name: sessionPoolName
 }
 
 var appSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
@@ -249,6 +254,16 @@ module app 'modules/container-app.bicep' = {
       }
     ]
     tags: mergedTags
+  }
+}
+
+resource appSessionPoolExecutorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(sessionPoolResource.id, appName, sessionExecutorRoleDefinitionId)
+  scope: sessionPoolResource
+  properties: {
+    principalId: app.outputs.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: sessionExecutorRoleDefinitionId
   }
 }
 

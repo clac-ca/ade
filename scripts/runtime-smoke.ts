@@ -108,22 +108,41 @@ async function main(logger = createConsoleLogger()): Promise<void> {
         properties: {
           codeInputType: "inline",
           executionType: "synchronous",
-          code: "import os\nprint(sorted(os.listdir('/mnt/data')))",
+          code: [
+            "from pathlib import Path",
+            "from ade_engine import load_config, process",
+            "",
+            "config = load_config('ade_config', name='ade-config')",
+            "result = process(",
+            "    config=config,",
+            "    input_path=Path('/mnt/data/input.csv'),",
+            "    output_dir=Path('/mnt/data'),",
+            ")",
+            "print(result.output_path.name)",
+            "print(len(result.validation_issues))",
+          ].join("\n"),
         },
       }),
       headers: { "content-type": "application/json" },
       method: "POST",
-    })) as { properties: { exitCode: number; stdout: string } };
+    })) as {
+      properties: { exitCode: number; stdout: string; stderr?: string };
+    };
 
     if (execution.properties.exitCode !== 0) {
-      throw new Error(`Execution failed: ${execution.properties.stdout}`);
+      throw new Error(
+        `Execution failed: ${execution.properties.stderr ?? execution.properties.stdout}`,
+      );
     }
 
     const files = (await jsonFetch("/api/runtime/files")) as {
       value: Array<{ properties: { filename: string } }>;
     };
     const filenames = files.value.map((entry) => entry.properties.filename);
-    if (!filenames.includes("input.csv")) {
+    if (
+      !filenames.includes("input.csv") ||
+      !filenames.includes("input.normalized.xlsx")
+    ) {
       throw new Error(
         `Uploaded file missing from runtime files: ${filenames.join(", ")}`,
       );
@@ -137,6 +156,14 @@ async function main(logger = createConsoleLogger()): Promise<void> {
       throw new Error(
         "Uploaded file download did not return the expected content.",
       );
+    }
+
+    const normalizedWorkbook = await fetch(
+      `http://${localApiHost}:${String(localApiPort)}/api/runtime/files/content/input.normalized.xlsx`,
+    );
+    const workbookBytes = await normalizedWorkbook.arrayBuffer();
+    if (!normalizedWorkbook.ok || workbookBytes.byteLength === 0) {
+      throw new Error("Normalized workbook download did not return any content.");
     }
 
     await jsonFetch("/api/runtime/mcp", {

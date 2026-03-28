@@ -24,6 +24,7 @@ use crate::{
 };
 
 const DEFAULT_ACTIVE_CONFIG_PACKAGE_NAME: &str = "ade-config";
+const DEFAULT_ENGINE_PACKAGE_NAME: &str = "ade-engine";
 const DEFAULT_RUNTIME_SESSION_SECRET: &str = "ade-local-session-secret";
 const DEFAULT_AZURE_ARM_API_VERSION: &str = "2025-10-02-preview";
 const DEFAULT_AZURE_SESSION_API_VERSION: &str = "2024-02-02-preview";
@@ -31,7 +32,7 @@ const DEFAULT_AZURE_MANAGEMENT_ENDPOINT: &str = "https://management.azure.com";
 const DEFAULT_AZURE_SESSION_AUDIENCE: &str = "https://dynamicsessions.io";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ActiveConfigArtifact {
+pub struct PythonPackageArtifact {
     pub package_name: String,
     pub version: String,
     pub sha256: String,
@@ -39,12 +40,12 @@ pub struct ActiveConfigArtifact {
     pub wheel_path: PathBuf,
 }
 
-impl ActiveConfigArtifact {
+impl PythonPackageArtifact {
     fn load_wheel_bytes(&self) -> Result<Vec<u8>, AppError> {
         fs::read(&self.wheel_path).map_err(|error| {
             AppError::io_with_source(
                 format!(
-                    "Failed to read the active config wheel from '{}'.",
+                    "Failed to read the Python package wheel from '{}'.",
                     self.wheel_path.display()
                 ),
                 error,
@@ -59,7 +60,7 @@ impl ActiveConfigArtifact {
             .map(ToOwned::to_owned)
             .ok_or_else(|| {
                 AppError::config(format!(
-                    "Active config wheel path '{}' does not end with a valid filename.",
+                    "Python package wheel path '{}' does not end with a valid filename.",
                     self.wheel_path.display()
                 ))
             })
@@ -94,8 +95,9 @@ pub struct BytesProxyResponse {
 }
 
 pub struct RuntimeService {
-    artifact: ActiveConfigArtifact,
+    config_artifact: PythonPackageArtifact,
     backend: RuntimeBackend,
+    engine_artifact: PythonPackageArtifact,
     job_session_identifier: String,
     mcp_api_key: Mutex<Option<String>>,
     mcp_endpoint: String,
@@ -112,7 +114,8 @@ impl RuntimeService {
         };
         let mcp_endpoint = read_required_string(env, "ADE_SESSION_POOL_MCP_ENDPOINT")?;
 
-        let artifact = resolve_active_config_artifact(env)?;
+        let config_artifact = resolve_active_config_artifact(env)?;
+        let engine_artifact = resolve_engine_artifact(env)?;
         let secret = read_optional_trimmed_string(env, "ADE_RUNTIME_SESSION_SECRET")
             .or_else(|| (!production).then(|| DEFAULT_RUNTIME_SESSION_SECRET.to_string()))
             .ok_or_else(|| {
@@ -129,9 +132,10 @@ impl RuntimeService {
         };
 
         Ok(Some(Arc::new(Self {
-            job_session_identifier: derive_session_identifier(&secret, &artifact.fingerprint),
-            artifact,
+            config_artifact: config_artifact.clone(),
             backend,
+            engine_artifact,
+            job_session_identifier: derive_session_identifier(&secret, &config_artifact.fingerprint),
             mcp_api_key: Mutex::new(None),
             mcp_endpoint,
             mcp_environment_id: Mutex::new(None),
@@ -151,7 +155,7 @@ impl RuntimeService {
             ));
         }
 
-        self.ensure_active_config_wheel_uploaded().await?;
+        self.ensure_required_wheels_uploaded().await?;
         self.data_plane_json(
             Method::POST,
             "code/execute",
@@ -160,7 +164,11 @@ impl RuntimeService {
                 "properties": {
                     "codeInputType": "inline",
                     "executionType": "synchronous",
-                    "code": wrap_execution_code(&self.artifact, &request.properties.code)?,
+                    "code": wrap_execution_code(
+                        &self.engine_artifact,
+                        &self.config_artifact,
+                        &request.properties.code,
+                    )?,
                 }
             })),
         )
@@ -208,16 +216,22 @@ impl RuntimeService {
     }
 
     pub async fn stop_session(&self) -> Result<JsonProxyResponse, AppError> {
-        let response = self
-            .data_plane_json(
-                Method::POST,
-                ".management/stopSession",
-                vec![],
-                Some(json!({})),
-            )
-            .await?;
         *self.mcp_environment_id.lock().await = None;
-        Ok(response)
+        match self.backend {
+            RuntimeBackend::Local(_) => {
+                self.data_plane_json(
+                    Method::POST,
+                    ".management/stopSession",
+                    vec![],
+                    Some(json!({})),
+                )
+                .await
+            }
+            RuntimeBackend::Azure(_) => Err(AppError::request(
+                "Azure built-in session pools do not expose a stopSession data-plane API."
+                    .to_string(),
+            )),
+        }
     }
 
     fn mode_label(&self) -> &'static str {
@@ -227,22 +241,24 @@ impl RuntimeService {
         }
     }
 
-    async fn ensure_active_config_wheel_uploaded(&self) -> Result<(), AppError> {
-        let wheel_filename = self.artifact.wheel_filename()?;
+    async fn ensure_required_wheels_uploaded(&self) -> Result<(), AppError> {
         let files = self.list_files().await?;
-        if session_contains_file(&files.body, &wheel_filename) {
-            return Ok(());
-        }
+        for artifact in [&self.engine_artifact, &self.config_artifact] {
+            let wheel_filename = artifact.wheel_filename()?;
+            if session_contains_file(&files.body, &wheel_filename) {
+                continue;
+            }
 
-        let wheel_bytes = self.artifact.load_wheel_bytes()?;
-        let form = Form::new().part(
-            "file",
-            Part::bytes(wheel_bytes)
-                .file_name(wheel_filename)
-                .mime_str("application/octet-stream")
-                .expect("hard-coded content type is valid"),
-        );
-        let _ = self.data_plane_multipart("files/upload", form).await?;
+            let wheel_bytes = artifact.load_wheel_bytes()?;
+            let form = Form::new().part(
+                "file",
+                Part::bytes(wheel_bytes)
+                    .file_name(wheel_filename)
+                    .mime_str("application/octet-stream")
+                    .expect("hard-coded content type is valid"),
+            );
+            let _ = self.data_plane_multipart("files/upload", form).await?;
+        }
         Ok(())
     }
 
@@ -404,24 +420,53 @@ impl RuntimeService {
     }
 }
 
-fn resolve_active_config_artifact(env: &EnvBag) -> Result<ActiveConfigArtifact, AppError> {
-    let package_name = read_optional_trimmed_string(env, "ADE_ACTIVE_CONFIG_PACKAGE_NAME")
-        .unwrap_or_else(|| DEFAULT_ACTIVE_CONFIG_PACKAGE_NAME.to_string());
+fn resolve_active_config_artifact(env: &EnvBag) -> Result<PythonPackageArtifact, AppError> {
+    resolve_package_artifact(
+        env,
+        "ADE_ACTIVE_CONFIG_PACKAGE_NAME",
+        "ADE_ACTIVE_CONFIG_WHEEL_PATH",
+        Some("ADE_ACTIVE_CONFIG_VERSION"),
+        DEFAULT_ACTIVE_CONFIG_PACKAGE_NAME,
+        "packages/ade-config",
+    )
+}
+
+fn resolve_engine_artifact(env: &EnvBag) -> Result<PythonPackageArtifact, AppError> {
+    resolve_package_artifact(
+        env,
+        "ADE_ENGINE_PACKAGE_NAME",
+        "ADE_ENGINE_WHEEL_PATH",
+        None,
+        DEFAULT_ENGINE_PACKAGE_NAME,
+        "packages/ade-engine",
+    )
+}
+
+fn resolve_package_artifact(
+    env: &EnvBag,
+    package_name_env_name: &str,
+    wheel_path_env_name: &str,
+    version_env_name: Option<&str>,
+    default_package_name: &str,
+    package_dir_relative: &str,
+) -> Result<PythonPackageArtifact, AppError> {
+    let package_name = read_optional_trimmed_string(env, package_name_env_name)
+        .unwrap_or_else(|| default_package_name.to_string());
     let package_name_normalized = package_name.replace('-', "_");
     let wheel_path =
-        if let Some(path) = read_optional_trimmed_string(env, "ADE_ACTIVE_CONFIG_WHEEL_PATH") {
+        if let Some(path) = read_optional_trimmed_string(env, wheel_path_env_name) {
             PathBuf::from(path)
         } else if let Some(path) =
             newest_wheel_in_dir(Path::new("/app/python"), &package_name_normalized)?
         {
             path
         } else {
-            build_local_active_config_wheel(&package_name_normalized)?
+            build_local_package_wheel(package_dir_relative, &package_name_normalized)?
         };
 
     if !wheel_path.is_file() {
         return Err(AppError::config(format!(
-            "Active config wheel not found: '{}'.",
+            "Python package wheel not found: '{}'.",
             wheel_path.display()
         )));
     }
@@ -429,23 +474,24 @@ fn resolve_active_config_artifact(env: &EnvBag) -> Result<ActiveConfigArtifact, 
     let wheel_bytes = fs::read(&wheel_path).map_err(|error| {
         AppError::io_with_source(
             format!(
-                "Failed to read active config wheel '{}'.",
+                "Failed to read Python package wheel '{}'.",
                 wheel_path.display()
             ),
             error,
         )
     })?;
     let sha256 = hex_sha256(&wheel_bytes);
-    let version = read_optional_trimmed_string(env, "ADE_ACTIVE_CONFIG_VERSION")
+    let version = version_env_name
+        .and_then(|name| read_optional_trimmed_string(env, name))
         .or_else(|| parse_wheel_version(&wheel_path, &package_name_normalized))
         .ok_or_else(|| {
             AppError::config(format!(
-                "Unable to determine the active config version from '{}'.",
+                "Unable to determine the package version from '{}'.",
                 wheel_path.display()
             ))
         })?;
 
-    Ok(ActiveConfigArtifact {
+    Ok(PythonPackageArtifact {
         package_name: package_name.clone(),
         version: version.clone(),
         sha256: sha256.clone(),
@@ -454,38 +500,42 @@ fn resolve_active_config_artifact(env: &EnvBag) -> Result<ActiveConfigArtifact, 
     })
 }
 
-fn build_local_active_config_wheel(package_name_normalized: &str) -> Result<PathBuf, AppError> {
+fn build_local_package_wheel(
+    package_dir_relative: &str,
+    package_name_normalized: &str,
+) -> Result<PathBuf, AppError> {
     let repo_root = repo_root();
-    let package_dir = repo_root.join("packages/ade-config");
+    let package_dir = repo_root.join(package_dir_relative);
     if !package_dir.is_dir() {
-        return Err(AppError::config(
-            "No active config wheel was provided and the local ADE config package source was not found."
-                .to_string(),
-        ));
+        return Err(AppError::config(format!(
+            "No wheel was provided and the local Python package source was not found at '{}'.",
+            package_dir.display()
+        )));
     }
 
     let output = std::process::Command::new("uv")
-        .args(["build", "--directory", "packages/ade-config"])
+        .args(["build", "--directory", package_dir_relative])
         .current_dir(&repo_root)
         .output()
         .map_err(|error| {
             AppError::config_with_source(
-                "Failed to run `uv build --directory packages/ade-config`.".to_string(),
+                format!("Failed to run `uv build --directory {package_dir_relative}`."),
                 error,
             )
         })?;
 
     if !output.status.success() {
         return Err(AppError::config(format!(
-            "Failed to build the active config wheel: {}",
+            "Failed to build the Python package wheel: {}",
             output_message(&output)
         )));
     }
 
     newest_wheel_in_dir(&package_dir.join("dist"), package_name_normalized)?.ok_or_else(|| {
-        AppError::config(
-            "The active config wheel was not produced in packages/ade-config/dist.".to_string(),
-        )
+        AppError::config(format!(
+            "The Python package wheel was not produced in '{}'.",
+            package_dir.join("dist").display()
+        ))
     })
 }
 
@@ -575,13 +625,26 @@ impl RuntimeBackend {
         api_key: Option<&str>,
         body: Value,
     ) -> Result<reqwest::RequestBuilder, AppError> {
+        let body = serde_json::to_vec(&body).map_err(|error| {
+            AppError::internal_with_source(
+                "Failed to encode the MCP request body.".to_string(),
+                error,
+            )
+        })?;
         match self {
-            RuntimeBackend::Local(_) => Ok(client.post(url).json(&body)),
+            RuntimeBackend::Local(_) => Ok(client
+                .post(url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body)),
             RuntimeBackend::Azure(_) => {
                 let api_key = api_key.ok_or_else(|| {
                     AppError::internal("MCP API key is not available.".to_string())
                 })?;
-                Ok(client.post(url).header("x-ms-apikey", api_key).json(&body))
+                Ok(client
+                    .post(url)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .header("x-ms-apikey", api_key)
+                    .body(body))
             }
         }
     }
@@ -701,36 +764,55 @@ fn derive_session_identifier(secret: &str, fingerprint: &str) -> String {
 }
 
 fn wrap_execution_code(
-    artifact: &ActiveConfigArtifact,
+    engine_artifact: &PythonPackageArtifact,
+    config_artifact: &PythonPackageArtifact,
     user_code: &str,
 ) -> Result<String, AppError> {
-    let wheel_filename = artifact.wheel_filename()?;
+    let engine_wheel_filename = engine_artifact.wheel_filename()?;
+    let config_wheel_filename = config_artifact.wheel_filename()?;
     Ok(format!(
         concat!(
             "import importlib.metadata\n",
             "import subprocess\n",
             "import sys\n",
             "\n",
-            "EXPECTED_PACKAGE = {package_name:?}\n",
-            "EXPECTED_VERSION = {version:?}\n",
-            "WHEEL_PATH = {wheel_path:?}\n",
+            "ENGINE_PACKAGE = {engine_package_name:?}\n",
+            "ENGINE_VERSION = {engine_version:?}\n",
+            "ENGINE_WHEEL_PATH = {engine_wheel_path:?}\n",
+            "CONFIG_PACKAGE = {config_package_name:?}\n",
+            "CONFIG_VERSION = {config_version:?}\n",
+            "CONFIG_WHEEL_PATH = {config_wheel_path:?}\n",
             "\n",
             "try:\n",
-            "    installed_version = importlib.metadata.version(EXPECTED_PACKAGE)\n",
+            "    installed_engine_version = importlib.metadata.version(ENGINE_PACKAGE)\n",
             "except importlib.metadata.PackageNotFoundError:\n",
-            "    installed_version = None\n",
+            "    installed_engine_version = None\n",
             "\n",
-            "if installed_version != EXPECTED_VERSION:\n",
+            "if installed_engine_version != ENGINE_VERSION:\n",
             "    subprocess.run(\n",
-            "        [sys.executable, '-m', 'pip', 'install', '--no-deps', '--force-reinstall', WHEEL_PATH],\n",
+            "        [sys.executable, '-m', 'pip', 'install', '--force-reinstall', ENGINE_WHEEL_PATH],\n",
+            "        check=True,\n",
+            "    )\n",
+            "\n",
+            "try:\n",
+            "    installed_config_version = importlib.metadata.version(CONFIG_PACKAGE)\n",
+            "except importlib.metadata.PackageNotFoundError:\n",
+            "    installed_config_version = None\n",
+            "\n",
+            "if installed_config_version != CONFIG_VERSION:\n",
+            "    subprocess.run(\n",
+            "        [sys.executable, '-m', 'pip', 'install', '--no-deps', '--force-reinstall', CONFIG_WHEEL_PATH],\n",
             "        check=True,\n",
             "    )\n",
             "\n",
             "{user_code}\n"
         ),
-        package_name = artifact.package_name,
-        version = artifact.version,
-        wheel_path = format!("/mnt/data/{wheel_filename}"),
+        engine_package_name = engine_artifact.package_name,
+        engine_version = engine_artifact.version,
+        engine_wheel_path = format!("/mnt/data/{engine_wheel_filename}"),
+        config_package_name = config_artifact.package_name,
+        config_version = config_artifact.version,
+        config_wheel_path = format!("/mnt/data/{config_wheel_filename}"),
         user_code = user_code
     ))
 }

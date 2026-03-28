@@ -255,7 +255,11 @@ async fn start_stub_server() -> (
     (format!("http://{address}"), state, handle)
 }
 
-fn app_with_runtime(endpoint: &str, wheel_path: &FsPath) -> axum::Router {
+fn app_with_runtime(
+    endpoint: &str,
+    config_wheel_path: &FsPath,
+    engine_wheel_path: &FsPath,
+) -> axum::Router {
     let env = [
         (
             "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
@@ -267,7 +271,11 @@ fn app_with_runtime(endpoint: &str, wheel_path: &FsPath) -> axum::Router {
         ),
         (
             "ADE_ACTIVE_CONFIG_WHEEL_PATH".to_string(),
-            wheel_path.display().to_string(),
+            config_wheel_path.display().to_string(),
+        ),
+        (
+            "ADE_ENGINE_WHEEL_PATH".to_string(),
+            engine_wheel_path.display().to_string(),
         ),
     ]
     .into_iter()
@@ -313,10 +321,12 @@ fn multipart_request(uri: &str, filename: &str, content: &[u8]) -> Request<Body>
 #[tokio::test]
 async fn executions_route_uploads_the_active_config_wheel_and_wraps_code() {
     let temp_dir = tempdir().unwrap();
-    let wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
-    std::fs::write(&wheel_path, b"wheel-bytes").unwrap();
+    let config_wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    let engine_wheel_path = temp_dir.path().join("ade_engine-0.1.0-py3-none-any.whl");
+    std::fs::write(&config_wheel_path, b"config-wheel-bytes").unwrap();
+    std::fs::write(&engine_wheel_path, b"engine-wheel-bytes").unwrap();
     let (endpoint, state, handle) = start_stub_server().await;
-    let app = app_with_runtime(&endpoint, &wheel_path);
+    let app = app_with_runtime(&endpoint, &config_wheel_path, &engine_wheel_path);
 
     let response = app
         .oneshot(
@@ -341,7 +351,10 @@ async fn executions_route_uploads_the_active_config_wheel_and_wraps_code() {
     let state = state.lock().unwrap();
     assert_eq!(
         state.uploaded_names,
-        vec!["ade_config-0.1.0-py3-none-any.whl"]
+        vec![
+            "ade_engine-0.1.0-py3-none-any.whl",
+            "ade_config-0.1.0-py3-none-any.whl",
+        ]
     );
     assert!(
         state
@@ -350,6 +363,8 @@ async fn executions_route_uploads_the_active_config_wheel_and_wraps_code() {
             .all(|identifier| identifier.starts_with("cfg-"))
     );
     assert!(state.execution_codes[0].contains("import importlib.metadata"));
+    assert!(state.execution_codes[0].contains("ade-engine"));
+    assert!(state.execution_codes[0].contains("ade-config"));
     assert!(state.execution_codes[0].contains("print('hello')"));
 
     handle.abort();
@@ -358,10 +373,12 @@ async fn executions_route_uploads_the_active_config_wheel_and_wraps_code() {
 #[tokio::test]
 async fn files_routes_proxy_upload_list_metadata_and_download() {
     let temp_dir = tempdir().unwrap();
-    let wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
-    std::fs::write(&wheel_path, b"wheel-bytes").unwrap();
+    let config_wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    let engine_wheel_path = temp_dir.path().join("ade_engine-0.1.0-py3-none-any.whl");
+    std::fs::write(&config_wheel_path, b"config-wheel-bytes").unwrap();
+    std::fs::write(&engine_wheel_path, b"engine-wheel-bytes").unwrap();
     let (endpoint, _state, handle) = start_stub_server().await;
-    let app = app_with_runtime(&endpoint, &wheel_path);
+    let app = app_with_runtime(&endpoint, &config_wheel_path, &engine_wheel_path);
 
     let upload_response = app
         .clone()
@@ -413,10 +430,12 @@ async fn files_routes_proxy_upload_list_metadata_and_download() {
 #[tokio::test]
 async fn mcp_route_caches_environment_ids_until_stop_session() {
     let temp_dir = tempdir().unwrap();
-    let wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
-    std::fs::write(&wheel_path, b"wheel-bytes").unwrap();
+    let config_wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    let engine_wheel_path = temp_dir.path().join("ade_engine-0.1.0-py3-none-any.whl");
+    std::fs::write(&config_wheel_path, b"config-wheel-bytes").unwrap();
+    std::fs::write(&engine_wheel_path, b"engine-wheel-bytes").unwrap();
     let (endpoint, state, handle) = start_stub_server().await;
-    let app = app_with_runtime(&endpoint, &wheel_path);
+    let app = app_with_runtime(&endpoint, &config_wheel_path, &engine_wheel_path);
 
     for _ in 0..2 {
         let response = app
@@ -477,11 +496,13 @@ async fn mcp_route_caches_environment_ids_until_stop_session() {
 #[tokio::test]
 async fn mcp_route_relaunches_when_the_cached_environment_is_invalid() {
     let temp_dir = tempdir().unwrap();
-    let wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
-    std::fs::write(&wheel_path, b"wheel-bytes").unwrap();
+    let config_wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    let engine_wheel_path = temp_dir.path().join("ade_engine-0.1.0-py3-none-any.whl");
+    std::fs::write(&config_wheel_path, b"config-wheel-bytes").unwrap();
+    std::fs::write(&engine_wheel_path, b"engine-wheel-bytes").unwrap();
     let (endpoint, state, handle) = start_stub_server().await;
     state.lock().unwrap().mcp_invalid_environment_once = true;
-    let app = app_with_runtime(&endpoint, &wheel_path);
+    let app = app_with_runtime(&endpoint, &config_wheel_path, &engine_wheel_path);
 
     let response = app
         .oneshot(
