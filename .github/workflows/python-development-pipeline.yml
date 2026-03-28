@@ -1,0 +1,232 @@
+name: Python Development Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/python-development-pipeline.yml
+      - packages/ade-engine/**
+      - packages/ade-config/**
+      - scripts/python-release/**
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  commit_stage:
+    name: Commit Stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      release_version: ${{ steps.version.outputs.release_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Compute Python release version
+        id: version
+        run: |
+          release_version="$(
+            python3 - <<'PY'
+          from datetime import datetime, timezone
+          import os
+
+          now = datetime.now(timezone.utc)
+          print(f"{now.year}.{now.month}.{now.day}.{os.environ['GITHUB_RUN_NUMBER']}")
+          PY
+          )"
+
+          echo "release_version=${release_version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=ade-py-v${release_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare Python release snapshot
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.release_version }}
+        run: python3 scripts/python-release/prepare_snapshot.py
+
+      - name: Lint Python
+        run: |
+          uv run --directory packages/ade-engine --group lint ruff check . ../../scripts/python-release
+          uv run --directory packages/ade-config --group lint ruff check .
+
+      - name: Test Python
+        run: |
+          uv run --directory packages/ade-engine --group test pytest
+          uv run --directory packages/ade-config --group test pytest
+          uv run --directory packages/ade-engine --group test pytest ../../scripts/python-release/tests
+
+      - name: Build Python distributions
+        run: |
+          rm -rf packages/ade-engine/dist packages/ade-config/dist
+          uv build --directory packages/ade-engine
+          uv build --directory packages/ade-config
+
+  acceptance_stage:
+    name: Acceptance Stage
+    needs:
+      - commit_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Prepare Python release snapshot
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.commit_stage.outputs.release_version }}
+        run: python3 scripts/python-release/prepare_snapshot.py
+
+      - name: Build Python distributions
+        run: |
+          rm -rf packages/ade-engine/dist packages/ade-config/dist
+          uv build --directory packages/ade-engine
+          uv build --directory packages/ade-config
+
+      - name: Smoke install built distributions
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install packages/ade-engine/dist/ade_engine-*.whl
+          python -m pip install --no-deps packages/ade-config/dist/ade_config-*.whl
+          ade version
+          python - <<'PY'
+          from ade_engine import load_config
+
+          config = load_config("ade_config", name="ade-config")
+
+          print(config.name)
+          PY
+
+  release_stage:
+    name: Release Stage
+    needs:
+      - commit_stage
+      - acceptance_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify release candidate is current
+        id: freshness
+        run: |
+          git fetch origin main --depth=1
+
+          if [ "$(git rev-parse origin/main)" != "${GITHUB_SHA}" ]; then
+            echo "current=false" >> "${GITHUB_OUTPUT}"
+            echo "Skipping stale Python release candidate for ${GITHUB_SHA}."
+            exit 0
+          fi
+
+          echo "current=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare Python release snapshot
+        if: steps.freshness.outputs.current == 'true'
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.commit_stage.outputs.release_version }}
+        run: python3 scripts/python-release/prepare_snapshot.py
+
+      - name: Detect existing Python release tag
+        id: tag
+        if: steps.freshness.outputs.current == 'true'
+        env:
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Create and push Python release snapshot tag
+        if: steps.freshness.outputs.current == 'true' && steps.tag.outputs.exists == 'false'
+        env:
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.commit_stage.outputs.release_version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/ade-engine/pyproject.toml packages/ade-config/pyproject.toml
+          git commit -m "release(python): ${RELEASE_VERSION}"
+          git tag -a "${RELEASE_TAG}" -m "Python release ${RELEASE_VERSION}"
+          git push origin "refs/tags/${RELEASE_TAG}"
+
+      - name: Configure authenticated GitHub access for smoke install
+        if: steps.freshness.outputs.current == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+      - name: Smoke install published Python tag
+        if: steps.freshness.outputs.current == 'true'
+        env:
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install "ade-config @ git+https://github.com/${REPOSITORY}.git@${RELEASE_TAG}#subdirectory=packages/ade-config"
+          ade version
+          python - <<'PY'
+          from ade_engine import load_config
+
+          config = load_config("ade_config", name="ade-config")
+
+          print(config.name)
+          PY
+
+      - name: Create GitHub release
+        if: steps.freshness.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "GitHub release ${RELEASE_TAG} already exists."
+          else
+            gh release create "${RELEASE_TAG}" --verify-tag --generate-notes
+          fi

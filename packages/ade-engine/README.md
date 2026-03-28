@@ -4,6 +4,9 @@ ADE runtime library and CLI package. Users typically get it by installing
 `ade-config`, which provides the business rules and pulls `ade-engine` in as a
 dependency.
 
+Published releases are cut from Git tags in the monorepo. End users normally
+install `ade-config`, not `ade-engine`, directly.
+
 Local development:
 
 ```sh

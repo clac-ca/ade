@@ -1,12 +1,19 @@
-# ADE Deployment Pipeline
+# ADE Development Pipelines
 
-This is the canonical deployment pipeline for `clac-ca/ade`.
+This repo currently ships two GitHub Actions pipelines:
 
-The workflow lives at `.github/workflows/deployment_pipeline.yml` and has three stages:
+- `.github/workflows/deployment_pipeline.yml` for the application container and Azure deployment
+- `.github/workflows/python-development-pipeline.yml` for the Python package release tags
+
+Both use the same three-stage shape:
 
 1. Commit stage
 2. Acceptance stage
 3. Release stage
+
+## Application Deployment Pipeline
+
+This is the canonical deployment pipeline for `clac-ca/ade`.
 
 ## Operating model
 
@@ -40,3 +47,21 @@ pnpm test:acceptance
 ```
 
 Runtime config reference: [docs/runtime-config.md](../../docs/runtime-config.md)
+
+## Python Development Pipeline
+
+The Python package workflow lives at `.github/workflows/python-development-pipeline.yml`.
+
+Operating model:
+
+- Pushes to `main` run the workflow only when the Python package paths or Python release helper paths change.
+- The commit stage computes one coordinated CalVer release version for `ade-engine` and `ade-config`, rewrites a temporary release snapshot, then runs Python lint, tests, and builds.
+- Acceptance rebuilds the same release snapshot and smoke-installs the built distributions in a fresh virtualenv.
+- Release rechecks that the triggering SHA is still the tip of `main`, creates a release snapshot commit on detached HEAD, tags that commit, pushes the tag only, then creates the GitHub Release.
+- The workflow never writes version bumps back to `main`; release metadata exists only in the tagged snapshot commit.
+
+Published install shape:
+
+```sh
+pip install "ade-config @ git+https://github.com/clac-ca/ade.git@ade-py-v2026.3.28.42#subdirectory=packages/ade-config"
+```
