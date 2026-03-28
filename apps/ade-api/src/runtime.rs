@@ -135,7 +135,10 @@ impl RuntimeService {
             config_artifact: config_artifact.clone(),
             backend,
             engine_artifact,
-            job_session_identifier: derive_session_identifier(&secret, &config_artifact.fingerprint),
+            job_session_identifier: derive_session_identifier(
+                &secret,
+                &config_artifact.fingerprint,
+            ),
             mcp_api_key: Mutex::new(None),
             mcp_endpoint,
             mcp_environment_id: Mutex::new(None),
@@ -453,16 +456,15 @@ fn resolve_package_artifact(
     let package_name = read_optional_trimmed_string(env, package_name_env_name)
         .unwrap_or_else(|| default_package_name.to_string());
     let package_name_normalized = package_name.replace('-', "_");
-    let wheel_path =
-        if let Some(path) = read_optional_trimmed_string(env, wheel_path_env_name) {
-            PathBuf::from(path)
-        } else if let Some(path) =
-            newest_wheel_in_dir(Path::new("/app/python"), &package_name_normalized)?
-        {
-            path
-        } else {
-            build_local_package_wheel(package_dir_relative, &package_name_normalized)?
-        };
+    let wheel_path = if let Some(path) = read_optional_trimmed_string(env, wheel_path_env_name) {
+        PathBuf::from(path)
+    } else if let Some(path) =
+        newest_wheel_in_dir(Path::new("/app/python"), &package_name_normalized)?
+    {
+        path
+    } else {
+        build_local_package_wheel(package_dir_relative, &package_name_normalized)?
+    };
 
     if !wheel_path.is_file() {
         return Err(AppError::config(format!(
@@ -632,22 +634,34 @@ impl RuntimeBackend {
             )
         })?;
         match self {
-            RuntimeBackend::Local(_) => Ok(client
-                .post(url)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body)),
+            RuntimeBackend::Local(_) => build_mcp_http_request(client, url, None, body),
             RuntimeBackend::Azure(_) => {
                 let api_key = api_key.ok_or_else(|| {
                     AppError::internal("MCP API key is not available.".to_string())
                 })?;
-                Ok(client
-                    .post(url)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .header("x-ms-apikey", api_key)
-                    .body(body))
+                build_mcp_http_request(client, url, Some(api_key), body)
             }
         }
     }
+}
+
+fn build_mcp_http_request(
+    client: &Client,
+    url: Url,
+    api_key: Option<&str>,
+    body: Vec<u8>,
+) -> Result<reqwest::RequestBuilder, AppError> {
+    let content_length = body.len().to_string();
+    let mut request = client
+        .post(url)
+        .version(reqwest::Version::HTTP_11)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(reqwest::header::CONTENT_LENGTH, content_length)
+        .body(body);
+    if let Some(api_key) = api_key {
+        request = request.header("x-ms-apikey", api_key);
+    }
+    Ok(request)
 }
 
 #[derive(Clone)]
@@ -1112,9 +1126,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        cached_launch_shell_response, derive_session_identifier, forwarded_headers,
-        map_runtime_http_error, mcp_environment_is_invalid, session_contains_file,
-        with_mcp_environment_id,
+        build_mcp_http_request, cached_launch_shell_response, derive_session_identifier,
+        forwarded_headers, map_runtime_http_error, mcp_environment_is_invalid,
+        session_contains_file, with_mcp_environment_id,
     };
 
     #[test]
@@ -1192,6 +1206,27 @@ mod tests {
                 "message": "Environment not found: env-123"
             }
         })));
+    }
+
+    #[test]
+    fn mcp_proxy_requests_use_http11_and_send_content_length() {
+        let request = build_mcp_http_request(
+            &reqwest::Client::new(),
+            reqwest::Url::parse("https://example.com/mcp").unwrap(),
+            Some("key-123"),
+            br#"{"jsonrpc":"2.0"}"#.to_vec(),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        assert_eq!(request.version(), reqwest::Version::HTTP_11);
+        assert_eq!(request.headers()["content-type"], "application/json");
+        assert_eq!(
+            request.headers()["content-length"],
+            br#"{"jsonrpc":"2.0"}"#.len().to_string()
+        );
+        assert_eq!(request.headers()["x-ms-apikey"], "key-123");
     }
 
     #[test]
