@@ -44,6 +44,7 @@ async fn health_route_reports_ok() {
             phase: Some(ReadinessPhase::Ready),
             ..CreateReadinessControllerOptions::default()
         }),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -63,6 +64,7 @@ async fn health_route_reports_ok() {
 async fn api_root_works_without_trailing_slash() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -83,6 +85,7 @@ async fn api_root_works_without_trailing_slash() {
 async fn api_root_works_with_trailing_slash() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -107,6 +110,7 @@ async fn ready_route_reflects_readiness_state() {
     });
     let app = normalize_app(create_app(AppState {
         readiness: readiness.clone(),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -138,6 +142,7 @@ async fn ready_route_reflects_readiness_state() {
 async fn version_route_exposes_minimal_runtime_metadata() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -153,6 +158,7 @@ async fn version_route_exposes_minimal_runtime_metadata() {
 async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -172,6 +178,7 @@ async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
 async fn head_requests_to_frontend_routes_preserve_head_semantics() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -188,6 +195,7 @@ async fn head_requests_to_frontend_routes_preserve_head_semantics() {
 async fn unknown_api_routes_return_json_404() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -208,6 +216,7 @@ async fn unknown_api_routes_return_json_404() {
 async fn missing_assets_stay_not_found() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -220,6 +229,7 @@ async fn missing_assets_stay_not_found() {
 async fn head_requests_to_missing_assets_stay_not_found() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 
@@ -235,6 +245,7 @@ async fn head_requests_to_missing_assets_stay_not_found() {
 async fn root_serves_application_shell_when_web_root_exists() {
     let app = normalize_app(create_app(AppState {
         readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
+        runtime: None,
         web_root: Some(fixture_web_root()),
     }));
 

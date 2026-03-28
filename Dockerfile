@@ -55,6 +55,17 @@ RUN cargo build --locked --release --bin ade-api --bin ade-migrate \
     && install -Dm755 /build/apps/ade-api/target/release/ade-api /build/bin/ade-api \
     && install -Dm755 /build/apps/ade-api/target/release/ade-migrate /build/bin/ade-migrate
 
+FROM python:3.12-slim AS python-builder
+
+WORKDIR /build
+
+RUN python -m pip install --no-cache-dir --upgrade pip build uv_build
+
+COPY packages/ade-engine ./packages/ade-engine
+COPY packages/ade-config ./packages/ade-config
+
+RUN python -m build --wheel --outdir /dist /build/packages/ade-config
+
 FROM alpine:3.22
 
 WORKDIR /app
@@ -68,6 +79,7 @@ ENV NODE_ENV=production
 COPY --from=web-builder --chown=ade:ade /build/apps/ade-web/dist ./public
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-api ./bin/ade-api
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-migrate ./bin/ade-migrate
+COPY --from=python-builder --chown=ade:ade /dist/ade_config-*.whl ./python/
 
 USER ade:ade
 

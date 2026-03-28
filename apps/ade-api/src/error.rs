@@ -24,7 +24,9 @@ enum AppErrorKind {
     Io,
     NotFound,
     Request,
+    Response(StatusCode),
     Startup,
+    Unavailable,
 }
 
 #[derive(Debug, Serialize)]
@@ -81,6 +83,10 @@ impl AppError {
         Self::new(AppErrorKind::Request, message, None)
     }
 
+    pub fn status(status: StatusCode, message: String) -> Self {
+        Self::new(AppErrorKind::Response(status), message, None)
+    }
+
     pub fn startup(message: String) -> Self {
         Self::new(AppErrorKind::Startup, message, None)
     }
@@ -90,6 +96,10 @@ impl AppError {
         source: impl StdError + Send + Sync + 'static,
     ) -> Self {
         Self::new(AppErrorKind::Startup, message, Some(Box::new(source)))
+    }
+
+    pub fn unavailable(message: String) -> Self {
+        Self::new(AppErrorKind::Unavailable, message, None)
     }
 
     fn new(kind: AppErrorKind, message: String, source: Option<BoxError>) -> Self {
@@ -104,6 +114,8 @@ impl AppError {
         match self.kind {
             AppErrorKind::NotFound => StatusCode::NOT_FOUND,
             AppErrorKind::Request | AppErrorKind::Config => StatusCode::BAD_REQUEST,
+            AppErrorKind::Response(status) => status,
+            AppErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             AppErrorKind::Database
             | AppErrorKind::Internal
             | AppErrorKind::Io
@@ -114,16 +126,22 @@ impl AppError {
     fn response_error_label(&self) -> &'static str {
         match self.status_code() {
             StatusCode::NOT_FOUND => "Not Found",
+            StatusCode::SERVICE_UNAVAILABLE => "Service Unavailable",
             StatusCode::INTERNAL_SERVER_ERROR => "Internal Server Error",
-            _ => "Request Error",
+            status => status.canonical_reason().unwrap_or("Request Error"),
         }
     }
 
     fn response_message(&self) -> String {
-        if self.status_code().is_server_error() {
-            "Internal Server Error".to_string()
-        } else {
-            self.message.clone()
+        match self.kind {
+            AppErrorKind::Database
+            | AppErrorKind::Internal
+            | AppErrorKind::Io
+            | AppErrorKind::Startup => "Internal Server Error".to_string(),
+            AppErrorKind::Response(StatusCode::INTERNAL_SERVER_ERROR) => {
+                "Internal Server Error".to_string()
+            }
+            _ => self.message.clone(),
         }
     }
 }

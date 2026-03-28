@@ -8,6 +8,7 @@ use ade_api::{
         default_runtime_paths, is_production, read_config,
     },
     init_tracing, run_server_until_shutdown,
+    runtime::{RuntimeService, log_runtime_mode},
 };
 use clap::Parser;
 
@@ -38,6 +39,9 @@ async fn run() -> Result<(), ade_api::error::AppError> {
     let config = read_config(&env, ReadConfigOptions { require_sql: true })?;
     let args = ServerArgs::parse();
     let runtime_paths = default_runtime_paths();
+    let production = is_production(&env);
+    let runtime = RuntimeService::create_from_env(&env, production)?;
+    log_runtime_mode(&runtime);
 
     let AppConfig {
         sql_connection_string,
@@ -51,7 +55,7 @@ async fn run() -> Result<(), ade_api::error::AppError> {
 
     run_server_until_shutdown(ServerOptions {
         host: args.host.unwrap_or_else(|| {
-            if is_production(&env) {
+            if production {
                 DEFAULT_RUNTIME_HOST.to_string()
             } else {
                 DEFAULT_DEV_HOST.to_string()
@@ -59,6 +63,7 @@ async fn run() -> Result<(), ade_api::error::AppError> {
         }),
         port: args.port.unwrap_or(DEFAULT_PORT),
         probe_interval_ms: args.probe_interval_ms.unwrap_or(DEFAULT_PROBE_INTERVAL_MS),
+        runtime,
         sql_connection_string,
         stale_after_ms: args
             .stale_after_ms

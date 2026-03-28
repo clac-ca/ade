@@ -4,6 +4,7 @@ pub mod error;
 pub mod readiness;
 pub mod router;
 pub mod routes;
+pub mod runtime;
 pub mod state;
 
 use std::{
@@ -30,6 +31,7 @@ use crate::{
     error::AppError,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{create_app, normalize_app},
+    runtime::RuntimeService,
     state::AppState,
 };
 
@@ -43,6 +45,7 @@ pub struct ServerOptions {
     pub host: String,
     pub port: u16,
     pub probe_interval_ms: u64,
+    pub runtime: Option<Arc<RuntimeService>>,
     pub sql_connection_string: String,
     pub stale_after_ms: u64,
     pub web_root: Option<PathBuf>,
@@ -71,6 +74,7 @@ impl ServerInstance {
         });
         let app = create_app(AppState {
             readiness: readiness.clone(),
+            runtime: options.runtime,
             web_root: options.web_root,
         });
 
@@ -364,6 +368,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
+            runtime: None,
             sql_connection_string: "unused".to_string(),
             stale_after_ms: 15_000,
             web_root: None,
@@ -390,6 +395,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
+            runtime: None,
             sql_connection_string: "unused".to_string(),
             stale_after_ms: 15_000,
             web_root: None,

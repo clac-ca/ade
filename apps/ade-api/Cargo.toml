@@ -5,19 +5,25 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.89"
+async-stream = "0.3.6"
 axum = "0.8.7"
 azure_core = { version = "0.33.0", features = ["tokio"] }
 azure_identity = { version = "0.33.0", features = ["tokio"] }
 bb8 = "0.9.0"
 bb8-tiberius = { version = "0.16.0", default-features = false, features = ["tds73", "tls", "with-tokio"] }
 clap = { version = "4.5.48", features = ["derive"] }
+futures-core = "0.3.31"
+hex = "0.4.3"
+hmac = "0.12.1"
 native-tls = { version = "0.2.18", features = ["vendored"] }
 refinery = { version = "0.9.0", features = ["tiberius"] }
+reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+sha2 = "0.10.9"
 thiserror = "2.0.17"
 tiberius = { version = "0.12.3", default-features = false, features = ["rustls", "tds73", "tokio", "tokio-util"] }
-tokio = { version = "1.47.1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.47.1", features = ["fs", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.16", features = ["compat"] }
 tower = { version = "0.5.2", features = ["util"] }
 tower-http = { version = "0.6.6", features = ["fs", "normalize-path", "trace"] }

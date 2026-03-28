@@ -16,7 +16,11 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{error::AppError, routes::system, state::AppState};
+use crate::{
+    error::AppError,
+    routes::{runtime, system},
+    state::AppState,
+};
 
 pub fn create_app(state: AppState) -> Router {
     let api_router = Router::new()
@@ -24,6 +28,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/healthz", get(system::healthz))
         .route("/readyz", get(system::readyz))
         .route("/version", get(system::version))
+        .nest("/runtime", runtime::router())
         .fallback(api_not_found);
 
     Router::new()
