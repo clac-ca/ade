@@ -1,7 +1,7 @@
 using '../main.bicep'
 
 // This placeholder must be overridden at deploy time with the release candidate image.
-param image = 'ghcr.io/clac-ca/ade:unset'
+param image = 'ghcr.io/clac-ca/ade-platform:unset'
 param deploymentManagedIdentityName = 'id-ade-deploy-prod-canadacentral-002'
 param githubOrganization = 'clac-ca'
 param githubRepository = 'ade'

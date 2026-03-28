@@ -71,7 +71,7 @@ pnpm package:python
 Python releases use one coordinated CalVer across both packages:
 
 - version format: `YYYY.M.D.<github.run_number>`
-- tag format: `ade-py-v<version>`
+- tag format: `ade-engine-v<version>`
 
 `main` keeps simple development metadata. The release workflow rewrites a
 temporary snapshot so:
@@ -83,7 +83,7 @@ temporary snapshot so:
 Published installs use the Git tag directly:
 
 ```sh
-pip install "ade-config @ git+https://github.com/clac-ca/ade.git@ade-py-v2026.3.28.42#subdirectory=packages/ade-config"
+pip install "ade-config @ git+https://github.com/clac-ca/ade.git@ade-engine-v2026.3.28.42#subdirectory=packages/ade-config"
 ```
 
 Local development still uses the adjacent engine source through

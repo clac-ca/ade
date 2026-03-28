@@ -42,6 +42,9 @@ FROM chef AS api-builder
 
 WORKDIR /build/apps/ade-api
 
+ARG SERVICE_VERSION=0.1.0
+ENV ADE_PLATFORM_VERSION="${SERVICE_VERSION}"
+
 COPY --from=planner /build/apps/ade-api/recipe.json recipe.json
 
 RUN cargo chef cook --release --recipe-path recipe.json

@@ -100,12 +100,12 @@ az group create \
 
 ### 5. Choose a published image for the first deployment
 
-Use a published ADE image from public GHCR.
+Use a published ADE Platform image from public GHCR.
 
 The deployment pipeline publishes a per-commit SHA tag and then promotes the immutable digest for acceptance and release. For manual deployment, prefer the immutable digest form:
 
 ```text
-ghcr.io/clac-ca/ade@sha256:<digest>
+ghcr.io/clac-ca/ade-platform@sha256:<digest>
 ```
 
 Keep it as a shell-local variable:

@@ -9,7 +9,10 @@ pub const DEFAULT_PROBE_INTERVAL_MS: u64 = 5_000;
 pub const DEFAULT_READINESS_STALE_AFTER_MS: u64 = 15_000;
 pub const SQL_CONNECTION_STRING_NAME: &str = "AZURE_SQL_CONNECTIONSTRING";
 pub const SERVICE_NAME: &str = "ade";
-pub const SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const SERVICE_VERSION: &str = match option_env!("ADE_PLATFORM_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 pub type EnvBag = BTreeMap<String, String>;
 

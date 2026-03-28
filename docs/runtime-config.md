@@ -19,6 +19,8 @@ ADE does not support a migration-on-startup toggle. `ade-api` never runs migrati
 ADE keeps runtime HTTP metadata intentionally small:
 
 - `/api/version` returns only `{ service, version }`
+- released ADE Platform builds report the injected platform CalVer; local builds
+  fall back to the app package version when no release version is injected
 
 Build provenance such as image creation time and source revision is stored in OCI image metadata rather than the runtime API.
 

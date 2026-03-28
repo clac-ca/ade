@@ -42,7 +42,7 @@ async function ensureImageAvailable(image: string): Promise<void> {
     stdio: "ignore",
   }).catch(() => {
     throw new Error(
-      image === "ade:local"
+      image === "ade-platform:local"
         ? "Run `pnpm build` first."
         : `The configured image is not available locally: ${image}. Run \`docker pull ${image}\` or choose a local image.`,
     );

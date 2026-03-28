@@ -5,7 +5,8 @@ ADE runtime library and CLI package. Users typically get it by installing
 dependency.
 
 Published releases are cut from Git tags in the monorepo. End users normally
-install `ade-config`, not `ade-engine`, directly.
+install `ade-config`, not `ade-engine`, directly. Engine release tags use the
+`ade-engine-v...` prefix.
 
 Local development:
 

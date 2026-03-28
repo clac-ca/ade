@@ -84,7 +84,7 @@ function parseStartArgs(argv: readonly string[]): StartArgs {
   });
 
   return {
-    image: values.image?.trim() ? values.image : "ade:local",
+    image: values.image?.trim() ? values.image : "ade-platform:local",
     noOpen: values["no-open"] ?? false,
     port: values.port === undefined ? 8000 : parsePort(values.port, "port"),
   };
@@ -127,7 +127,7 @@ function parseAcceptanceArgs(argv: readonly string[]): AcceptanceArgs {
   }
 
   return {
-    image: values.image?.trim() ? values.image : "ade:local",
+    image: values.image?.trim() ? values.image : "ade-platform:local",
     mode: "managed",
     port: values.port === undefined ? 4100 : parsePort(values.port, "port"),
   };

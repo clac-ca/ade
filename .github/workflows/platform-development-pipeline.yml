@@ -1,12 +1,38 @@
-name: Deployment Pipeline
+name: ADE Platform Development Pipeline
 
 on:
   pull_request:
     branches:
       - main
+    paths:
+      - .github/workflows/platform-development-pipeline.yml
+      - .node-version
+      - Dockerfile
+      - apps/ade-api/**
+      - apps/ade-web/**
+      - infra/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - scripts/**/*.ts
+      - tsconfig.base.json
+      - tsconfig.scripts.json
   push:
     branches:
       - main
+    paths:
+      - .github/workflows/platform-development-pipeline.yml
+      - .node-version
+      - Dockerfile
+      - apps/ade-api/**
+      - apps/ade-web/**
+      - infra/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - scripts/**/*.ts
+      - tsconfig.base.json
+      - tsconfig.scripts.json
 
 concurrency:
   group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number || github.run_id }}
@@ -20,8 +46,8 @@ defaults:
     shell: bash
 
 env:
+  IMAGE_NAME: ${{ github.repository_owner }}/ade-platform
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   commit_stage:
@@ -33,6 +59,9 @@ jobs:
       packages: write
     outputs:
       release_candidate_image: ${{ steps.release_candidate_ref.outputs.release_candidate_image }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      release_title: ${{ steps.version.outputs.release_title }}
+      release_version: ${{ steps.version.outputs.release_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -47,15 +76,27 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           node-version-file: .node-version
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-        with:
-          python-version: "3.12"
-
       - name: Set up Rust
         run: |
           rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt
           rustup default 1.94.0
+
+      - name: Compute platform release version
+        id: version
+        run: |
+          release_version="$(
+            python3 - <<'PY'
+          from datetime import datetime, timezone
+          import os
+
+          now = datetime.now(timezone.utc)
+          print(f"{now.year}.{now.month}.{now.day}.{os.environ['GITHUB_RUN_NUMBER']}")
+          PY
+          )"
+
+          echo "release_version=${release_version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=ade-platform-v${release_version}" >> "${GITHUB_OUTPUT}"
+          echo "release_title=ADE Platform ${release_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Restore Rust cache
         id: rust_cache
@@ -77,16 +118,13 @@ jobs:
         run: pnpm typecheck
 
       - name: Run lint
-        run: pnpm lint
+        run: |
+          pnpm --filter @ade/api lint
+          pnpm exec eslint .
+          az bicep lint --file infra/main.bicep
 
       - name: Run unit tests
         run: pnpm test:unit
-
-      - name: Run Python tests
-        run: pnpm test:python
-
-      - name: Package Python distributions
-        run: pnpm package:python
 
       - name: Save Rust cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rust_cache.outputs.cache-hit != 'true'
@@ -127,25 +165,29 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
         with:
+          build-args: |
+            SERVICE_VERSION=${{ steps.version.outputs.release_version }}
+          cache-from: type=gha,scope=ade-platform-release-candidate
           context: .
           file: ./Dockerfile
+          labels: ${{ steps.meta.outputs.labels }}
           push: false
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=ade-release-candidate
 
       - name: Build release candidate image (push)
         if: github.event_name == 'push'
         id: push
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
         with:
+          build-args: |
+            SERVICE_VERSION=${{ steps.version.outputs.release_version }}
+          cache-from: type=gha,scope=ade-platform-release-candidate
+          cache-to: type=gha,scope=ade-platform-release-candidate,mode=max
           context: .
           file: ./Dockerfile
+          labels: ${{ steps.meta.outputs.labels }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=ade-release-candidate
-          cache-to: type=gha,scope=ade-release-candidate,mode=max
 
       - name: Export release candidate image ref
         if: github.event_name == 'push'
@@ -206,11 +248,14 @@ jobs:
     environment:
       name: production
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - name: Log in to Azure
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
@@ -258,33 +303,39 @@ jobs:
 
           echo "Started migration job execution: ${execution_name}"
 
-          for attempt in $(seq 1 90); do
-            status="$(
-              az containerapp job execution show \
-                --name "${ADE_MIGRATION_JOB_NAME}" \
-                --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-                --job-execution-name "${execution_name}" \
-                --query properties.status \
-                --output tsv 2>/dev/null || true
-            )"
+      - name: Detect existing platform release tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
 
-            if [ "${status}" = "Succeeded" ]; then
-              echo "Migration job succeeded."
-              exit 0
-            fi
+      - name: Create and push platform release tag
+        if: steps.tag.outputs.exists == 'false'
+        env:
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.commit_stage.outputs.release_version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${RELEASE_TAG}" "${GITHUB_SHA}" -m "ADE Platform release ${RELEASE_VERSION}"
+          git push origin "refs/tags/${RELEASE_TAG}"
 
-            if [ "${status}" = "Failed" ]; then
-              echo "Migration job failed."
-              az containerapp job execution show \
-                --name "${ADE_MIGRATION_JOB_NAME}" \
-                --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-                --job-execution-name "${execution_name}" \
-                --output json
-              exit 1
-            fi
-
-            sleep 10
-          done
-
-          echo "Timed out waiting for migration job execution ${execution_name}."
-          exit 1
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.commit_stage.outputs.release_tag }}
+          RELEASE_TITLE: ${{ needs.commit_stage.outputs.release_title }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "GitHub release ${RELEASE_TAG} already exists."
+          else
+            gh release create "${RELEASE_TAG}" \
+              --title "${RELEASE_TITLE}" \
+              --verify-tag \
+              --generate-notes
+          fi

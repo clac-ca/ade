@@ -18,9 +18,14 @@ test("parseDevArgs accepts an explicit port and --no-open", () => {
 
 test("parseStartArgs accepts an image override", () => {
   assert.deepEqual(
-    parseStartArgs(["--port", "9000", "--image", "ghcr.io/example/ade:test"]),
+    parseStartArgs([
+      "--port",
+      "9000",
+      "--image",
+      "ghcr.io/example/ade-platform:test",
+    ]),
     {
-      image: "ghcr.io/example/ade:test",
+      image: "ghcr.io/example/ade-platform:test",
       noOpen: false,
       port: 9000,
     },
@@ -29,7 +34,7 @@ test("parseStartArgs accepts an image override", () => {
 
 test("parseAcceptanceArgs defaults to a managed local environment", () => {
   assert.deepEqual(parseAcceptanceArgs([]), {
-    image: "ade:local",
+    image: "ade-platform:local",
     mode: "managed",
     port: 4100,
   });

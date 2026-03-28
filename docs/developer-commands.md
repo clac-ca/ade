@@ -48,7 +48,7 @@ pnpm deps:up
 pnpm deps:down
 ```
 
-`pnpm clean` removes local build output, Python virtualenvs and locks, ADE local containers, Compose state, and the `ade:local` image.
+`pnpm clean` removes local build output, Python virtualenvs and locks, ADE local containers, Compose state, and the `ade-platform:local` image.
 
 ## Production-Like Runtime Commands
 
@@ -56,15 +56,15 @@ pnpm deps:down
 pnpm build
 pnpm start
 pnpm start --no-open
-pnpm start --image ghcr.io/example/ade:test --port 9000
+pnpm start --image ghcr.io/example/ade-platform:test --port 9000
 pnpm test:acceptance
 pnpm test:acceptance --url http://127.0.0.1:4100
-pnpm test:acceptance --image ghcr.io/example/ade:test --port 4101
+pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 ```
 
-`pnpm build` builds the local release image `ade:local` and accepts no extra arguments.
+`pnpm build` builds the local ADE Platform image `ade-platform:local` and accepts no extra arguments.
 
-`pnpm start` and managed `pnpm test:acceptance` use `ade:local` by default, so build first unless you pass `--image`.
+`pnpm start` and managed `pnpm test:acceptance` use `ade-platform:local` by default, so build first unless you pass `--image`.
 
 `pnpm test:acceptance --url <base-url>` attaches to an existing environment instead of starting a managed one.
 

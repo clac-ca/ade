@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   const metadata = readBuildMetadata(process.env);
 
   await ensureDocker(dockerCommand, "`pnpm build`");
-  await buildImage("ade:local", ".", {
+  await buildImage("ade-platform:local", ".", {
     BUILT_AT: metadata.builtAt,
     GIT_SHA: metadata.gitSha,
     SERVICE_VERSION: metadata.version,

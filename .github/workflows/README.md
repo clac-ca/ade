@@ -1,9 +1,9 @@
 # ADE Development Pipelines
 
-This repo currently ships two GitHub Actions pipelines:
+This repo ships two GitHub Actions development pipelines:
 
-- `.github/workflows/deployment_pipeline.yml` for the application container and Azure deployment
-- `.github/workflows/python-development-pipeline.yml` for the Python package release tags
+- `.github/workflows/platform-development-pipeline.yml` for ADE Platform image, deployment, and platform releases
+- `.github/workflows/engine-development-pipeline.yml` for ADE Engine package releases
 
 Both use the same three-stage shape:
 
@@ -11,19 +11,19 @@ Both use the same three-stage shape:
 2. Acceptance stage
 3. Release stage
 
-## Application Deployment Pipeline
+## ADE Platform Development Pipeline
 
-This is the canonical deployment pipeline for `clac-ca/ade`.
+This is the canonical platform pipeline for `clac-ca/ade`.
 
-## Operating model
+Operating model:
 
-- Pull requests to `main` run only the commit stage.
-- Pushes to `main` run all three stages.
+- Pull requests to `main` run only the commit stage when deployable platform paths change.
+- Pushes to `main` run all three stages when deployable platform paths change.
 - Workflow concurrency cancels superseded pull-request runs, but `main` pushes can run commit and acceptance work immediately while only the production release job is serialized.
-- The commit stage runs the existing repo checks first, including Bicep lint and compilation, and then builds the release candidate image once with Buildx from source using the Dockerfile's multi-stage build and standard metadata-action tags and OCI labels.
-- On push, the workflow publishes that image to GHCR and records the pushed digest.
+- The commit stage runs platform-only checks first, including TypeScript typecheck, Rust/API lint, ESLint, and Bicep lint, then builds the ADE Platform release candidate image once with Buildx from source using the Dockerfile's multi-stage build and standard metadata-action tags and OCI labels.
+- On push, the workflow publishes that image to `ghcr.io/<org>/ade-platform` and records the pushed digest.
 - Acceptance reuses that exact immutable digest. It runs `pnpm test:acceptance --image <release-candidate-image>`, and the command manages local SQL, runs the separate migration binary, starts the same release candidate, waits for readiness, runs the checks, and tears the environment down.
-- Release reuses the same immutable digest, validates the Bicep deployment inputs first, passes the image to Bicep as an explicit `image=` parameter override, and then starts the separate migration job explicitly after deployment.
+- Release reuses that exact immutable digest, validates the Bicep deployment inputs first, passes the image to Bicep as an explicit `image=` parameter override, starts the separate migration job explicitly after deployment, then tags the commit as `ade-platform-v...` and creates the GitHub Release.
 - The app container never runs schema migrations on startup.
 
 ## Required GitHub environment variables
@@ -48,20 +48,20 @@ pnpm test:acceptance
 
 Runtime config reference: [docs/runtime-config.md](../../docs/runtime-config.md)
 
-## Python Development Pipeline
+## ADE Engine Development Pipeline
 
-The Python package workflow lives at `.github/workflows/python-development-pipeline.yml`.
+The ADE Engine workflow lives at `.github/workflows/engine-development-pipeline.yml`.
 
 Operating model:
 
-- Pushes to `main` run the workflow only when the Python package paths or Python release helper paths change.
+- Pushes to `main` run the workflow only when the engine/config package paths or engine release helper paths change.
 - The commit stage computes one coordinated CalVer release version for `ade-engine` and `ade-config`, rewrites a temporary release snapshot, then runs Python lint, tests, and builds.
 - Acceptance rebuilds the same release snapshot and smoke-installs the built distributions in a fresh virtualenv.
-- Release rechecks that the triggering SHA is still the tip of `main`, creates a release snapshot commit on detached HEAD, tags that commit, pushes the tag only, then creates the GitHub Release.
+- Release creates a release snapshot commit on detached HEAD, tags that commit as `ade-engine-v...`, smoke-installs from the published tag, then creates the GitHub Release.
 - The workflow never writes version bumps back to `main`; release metadata exists only in the tagged snapshot commit.
 
 Published install shape:
 
 ```sh
-pip install "ade-config @ git+https://github.com/clac-ca/ade.git@ade-py-v2026.3.28.42#subdirectory=packages/ade-config"
+pip install "ade-config @ git+https://github.com/clac-ca/ade.git@ade-engine-v2026.3.28.42#subdirectory=packages/ade-config"
 ```

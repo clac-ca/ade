@@ -56,7 +56,7 @@ def test_prepare_snapshot_rewrites_versions_and_dependency(tmp_path: Path) -> No
     MODULE.prepare_snapshot(
         root=tmp_path,
         release_version="2026.3.28.42",
-        release_tag="ade-py-v2026.3.28.42",
+        release_tag="ade-engine-v2026.3.28.42",
         repository="clac-ca/ade",
     )
 
@@ -67,7 +67,7 @@ def test_prepare_snapshot_rewrites_versions_and_dependency(tmp_path: Path) -> No
     assert 'version = "2026.3.28.42"' in config_text
     assert (
         'dependencies = ["ade-engine @ git+https://github.com/clac-ca/ade.git@'
-        'ade-py-v2026.3.28.42#subdirectory=packages/ade-engine"]'
+        'ade-engine-v2026.3.28.42#subdirectory=packages/ade-engine"]'
     ) in config_text
     assert 'ade-engine = { path = "../ade-engine", editable = true }' in config_text
 
@@ -88,7 +88,7 @@ def test_prepare_snapshot_fails_when_engine_version_is_missing(tmp_path: Path) -
         MODULE.prepare_snapshot(
             root=tmp_path,
             release_version="2026.3.28.42",
-            release_tag="ade-py-v2026.3.28.42",
+            release_tag="ade-engine-v2026.3.28.42",
             repository="clac-ca/ade",
         )
 
@@ -111,7 +111,7 @@ def test_prepare_snapshot_fails_when_config_dependency_is_missing(
         MODULE.prepare_snapshot(
             root=tmp_path,
             release_version="2026.3.28.42",
-            release_tag="ade-py-v2026.3.28.42",
+            release_tag="ade-engine-v2026.3.28.42",
             repository="clac-ca/ade",
         )
 
@@ -138,6 +138,6 @@ def test_prepare_snapshot_fails_when_config_version_is_duplicated(
         MODULE.prepare_snapshot(
             root=tmp_path,
             release_version="2026.3.28.42",
-            release_tag="ade-py-v2026.3.28.42",
+            release_tag="ade-engine-v2026.3.28.42",
             repository="clac-ca/ade",
         )
