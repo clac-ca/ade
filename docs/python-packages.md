@@ -70,8 +70,12 @@ pnpm package:python
 
 Python releases use one coordinated CalVer across both packages:
 
-- version format: `YYYY.M.D.<github.run_number>`
+- version format: `YYYY.M.D.<github.run_number>` using the qualifying commit timestamp converted to `America/Vancouver` for the calendar day
 - tag format: `ade-engine-v<version>`
+
+Reruns reuse the same release version. Recovery is by rerunning the failed
+workflow run; manual dispatch is intentionally disabled so the workflow does not
+create a second publication path for the same commit.
 
 `main` keeps simple development metadata. The release workflow rewrites a
 temporary snapshot so:
@@ -89,6 +93,10 @@ pip install "ade-config @ git+https://github.com/clac-ca/ade.git@ade-engine-v202
 Local development still uses the adjacent engine source through
 `[tool.uv.sources]`; the release tag dependency exists only in the release
 snapshot prepared by CI.
+
+Do not casually rename `.github/workflows/engine-development-pipeline.yml`.
+`github.run_number` is scoped to the workflow, so a rename resets the visible
+counter history for future engine releases.
 
 ## Testing Strategy
 

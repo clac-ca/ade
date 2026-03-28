@@ -9,7 +9,6 @@ on:
       - packages/ade-engine/**
       - packages/ade-config/**
       - scripts/engine-release/**
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -42,12 +41,16 @@ jobs:
       - name: Compute engine release version
         id: version
         run: |
+          commit_timestamp="$(git show -s --format=%cI "${GITHUB_SHA}")"
           release_version="$(
-            python3 - <<'PY'
-          from datetime import datetime, timezone
+            COMMIT_TIMESTAMP="${commit_timestamp}" python3 - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
           import os
 
-          now = datetime.now(timezone.utc)
+          now = datetime.fromisoformat(os.environ["COMMIT_TIMESTAMP"]).astimezone(
+              ZoneInfo("America/Vancouver")
+          )
           print(f"{now.year}.{now.month}.{now.day}.{os.environ['GITHUB_RUN_NUMBER']}")
           PY
           )"

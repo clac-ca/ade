@@ -35,7 +35,9 @@ on:
       - tsconfig.scripts.json
 
 concurrency:
-  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number || github.run_id }}
+  # PRs cancel older runs. Pushes to main keep one running release and only the
+  # newest pending release candidate for the shared production stream.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -84,12 +86,16 @@ jobs:
       - name: Compute platform release version
         id: version
         run: |
+          commit_timestamp="$(git show -s --format=%cI "${GITHUB_SHA}")"
           release_version="$(
-            python3 - <<'PY'
-          from datetime import datetime, timezone
+            COMMIT_TIMESTAMP="${commit_timestamp}" python3 - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
           import os
 
-          now = datetime.now(timezone.utc)
+          now = datetime.fromisoformat(os.environ["COMMIT_TIMESTAMP"]).astimezone(
+              ZoneInfo("America/Vancouver")
+          )
           print(f"{now.year}.{now.month}.{now.day}.{os.environ['GITHUB_RUN_NUMBER']}")
           PY
           )"
