@@ -32,6 +32,7 @@ pnpm dev --port 8100
 pnpm dev --no-open
 pnpm typecheck
 pnpm lint
+pnpm format
 pnpm test
 pnpm test:unit
 pnpm clean
