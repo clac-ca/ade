@@ -27,19 +27,29 @@ def _clear_package(package_name: str) -> None:
             sys.modules.pop(module_name)
 
 
-def test_load_config_discovers_modules_and_orders_rules(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    package_name = "fixture_config"
-
+def _load_fixture_package(
+    monkeypatch: pytest.MonkeyPatch, package_name: str, *, name: str | None = None
+):
     monkeypatch.syspath_prepend(str(FIXTURES_DIR))
     importlib.invalidate_caches()
     _clear_package(package_name)
+    return load_config(package_name, name=name)
 
-    config = load_config(package_name, name="fixture-config")
+
+def test_load_config_discovers_modules_and_orders_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _load_fixture_package(
+        monkeypatch,
+        "fixture_config",
+        name="fixture-config",
+    )
 
     assert config.name == "fixture-config"
-    assert sorted(config.fields) == ["email", "full_name"]
+    assert list(config.fields) == ["full_name", "email"]
+    assert [fn.__name__ for fn in config.fields["full_name"].detectors] == [
+        "score_full_name"
+    ]
     assert [fn.__name__ for fn in config.fields["email"].detectors] == [
         "score_email_header",
         "score_email_values",
@@ -54,8 +64,8 @@ def test_load_config_discovers_modules_and_orders_rules(
     assert [fn.__name__ for fn in config.row_detectors["data"]] == ["score_data"]
     assert [fn.__name__ for fn in config.row_detectors["header"]] == ["score_header"]
     assert [fn.__name__ for fn in config.hooks["on_table_written"]] == [
-        "log_table_written",
-        "append_summary",
+        "rename_output_sheet",
+        "add_summary_sheet",
     ]
 
     row = Row(values=["Full Name", "Email Address"])
@@ -76,14 +86,28 @@ def test_load_config_discovers_modules_and_orders_rules(
 def test_load_config_requires_register_function(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    package_name = "fixture_missing_register"
-
-    monkeypatch.syspath_prepend(str(FIXTURES_DIR))
-    importlib.invalidate_caches()
-    _clear_package(package_name)
-
     with pytest.raises(
         TypeError,
-        match=rf"Module '{package_name}\.hooks\.bad' must define register\(config\)",
+        match=r"Module 'fixture_missing_register\.hooks\.bad' must define register\(config\)",
     ):
-        load_config(package_name)
+        _load_fixture_package(monkeypatch, "fixture_missing_register")
+
+
+def test_load_config_requires_explicit_field_declaration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Field 'email' must be declared with config.field\\(\\.\\.\\.\\) before "
+            "registering rules."
+        ),
+    ):
+        _load_fixture_package(monkeypatch, "fixture_undeclared_field")
+
+
+def test_load_config_rejects_duplicate_field_declarations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="Field 'email' is already declared."):
+        _load_fixture_package(monkeypatch, "fixture_duplicate_field")

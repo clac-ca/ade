@@ -25,7 +25,9 @@ class _RegisteredRule:
 
 
 @dataclass
-class _FieldRegistrations:
+class _FieldState:
+    priority: int
+    sequence: int
     detectors: list[_RegisteredRule] = field(default_factory=list)
     transforms: list[_RegisteredRule] = field(default_factory=list)
     validators: list[_RegisteredRule] = field(default_factory=list)
@@ -41,7 +43,7 @@ def _sorted_rules(registrations: list[_RegisteredRule]) -> list[Rule]:
 
 @dataclass
 class _Collector:
-    fields: dict[str, _FieldRegistrations] = field(default_factory=dict)
+    fields: dict[str, _FieldState] = field(default_factory=dict)
     row_detectors: dict[str, list[_RegisteredRule]] = field(
         default_factory=lambda: {"header": [], "data": []},
     )
@@ -58,23 +60,30 @@ class _Collector:
             fn=fn, priority=int(priority), sequence=self._next_sequence()
         )
 
-    def _field_registrations(self, field_name: str) -> _FieldRegistrations:
-        return self.fields.setdefault(field_name, _FieldRegistrations())
+    def field(self, name: str, *, priority: int = 100) -> None:
+        if name in self.fields:
+            raise ValueError(f"Field '{name}' is already declared.")
+        self.fields[name] = _FieldState(
+            priority=int(priority),
+            sequence=self._next_sequence(),
+        )
+
+    def _field_state(self, field_name: str) -> _FieldState:
+        try:
+            return self.fields[field_name]
+        except KeyError as error:
+            raise ValueError(
+                f"Field '{field_name}' must be declared with config.field(...) before registering rules."
+            ) from error
 
     def detector(self, field: str, fn: Rule, *, priority: int = 100) -> None:
-        self._field_registrations(field).detectors.append(
-            self._registration(fn, priority)
-        )
+        self._field_state(field).detectors.append(self._registration(fn, priority))
 
     def transform(self, field: str, fn: Rule, *, priority: int = 100) -> None:
-        self._field_registrations(field).transforms.append(
-            self._registration(fn, priority)
-        )
+        self._field_state(field).transforms.append(self._registration(fn, priority))
 
     def validator(self, field: str, fn: Rule, *, priority: int = 100) -> None:
-        self._field_registrations(field).validators.append(
-            self._registration(fn, priority)
-        )
+        self._field_state(field).validators.append(self._registration(fn, priority))
 
     def row_detector(self, kind: str, fn: Rule, *, priority: int = 100) -> None:
         if kind not in self.row_detectors:
@@ -85,13 +94,17 @@ class _Collector:
         self.hooks.setdefault(event, []).append(self._registration(fn, priority))
 
     def build(self, *, name: str) -> EngineConfig:
+        ordered_fields = sorted(
+            self.fields.items(),
+            key=lambda item: (item[1].priority, item[1].sequence),
+        )
         fields = {
             field_name: FieldRules(
-                detectors=_sorted_rules(registrations.detectors),
-                transforms=_sorted_rules(registrations.transforms),
-                validators=_sorted_rules(registrations.validators),
+                detectors=_sorted_rules(field_state.detectors),
+                transforms=_sorted_rules(field_state.transforms),
+                validators=_sorted_rules(field_state.validators),
             )
-            for field_name, registrations in self.fields.items()
+            for field_name, field_state in ordered_fields
         }
         row_detectors = {
             kind: _sorted_rules(registrations)

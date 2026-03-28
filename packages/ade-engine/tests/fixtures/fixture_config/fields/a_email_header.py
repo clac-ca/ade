@@ -20,6 +20,7 @@ def lowercase(value: object) -> str | None:
 
 
 def register(config) -> None:
+    config.field("email", priority=200)
     config.detector("email", score_email_header, priority=200)
     config.transform("email", strip_whitespace, priority=200)
     config.transform("email", lowercase, priority=200)

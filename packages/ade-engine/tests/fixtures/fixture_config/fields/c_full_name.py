@@ -16,5 +16,6 @@ def normalize_full_name(value: object) -> str | None:
 
 
 def register(config) -> None:
+    config.field("full_name", priority=100)
     config.detector("full_name", score_full_name)
     config.transform("full_name", normalize_full_name)

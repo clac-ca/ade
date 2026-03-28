@@ -12,5 +12,5 @@ def require_at_symbol(value: object) -> str | None:
 
 
 def register(config) -> None:
-    config.detector("email", score_email_values, priority=200)
-    config.validator("email", require_at_symbol, priority=300)
+    config.detector("email", score_email_values, priority=300)
+    config.validator("email", require_at_symbol, priority=400)

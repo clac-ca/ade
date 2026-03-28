@@ -33,6 +33,7 @@ def require_at_symbol(value: object) -> str | None:
 
 
 def register(config) -> None:
+    config.field("email", priority=200)
     config.detector("email", score_email_header, priority=200)
     config.detector("email", score_email_values, priority=300)
     config.transform("email", strip_whitespace, priority=200)

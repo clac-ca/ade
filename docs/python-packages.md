@@ -16,6 +16,7 @@ Each rule module defines `register(config)`.
 
 ```python
 def register(config):
+    config.field("email", priority=200)
     config.detector("email", score_email_header, priority=200)
     config.transform("email", normalize_email, priority=200)
     config.validator("email", validate_email, priority=300)
@@ -28,6 +29,7 @@ Rules are discovered from:
 - `hooks/`
 
 Lower `priority` runs first. Equal priorities keep registration order.
+Declared field order becomes the normalized workbook column order.
 
 ## Tooling
 
@@ -75,7 +77,10 @@ pnpm package:python
 
 - No import-time work except definitions.
 - Prefer stdlib-first solutions unless a dependency clearly pays for itself.
+- Prefer built-in exceptions over custom hierarchies unless a custom type clearly adds meaning.
 - Keep public APIs small and explicit.
+- Represent each concept once.
+- Make important product contracts explicit, especially field order.
 - Keep package READMEs short and audience-specific.
 - Keep contributor detail in repo docs, not package landing pages.
 - Make tests own their fixtures instead of borrowing state from another package.
