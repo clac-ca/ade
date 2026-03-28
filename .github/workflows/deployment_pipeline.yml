@@ -14,16 +14,22 @@ concurrency:
 
 permissions: {}
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   commit_stage:
     name: Commit Stage
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
+      attestations: write
       contents: read
+      id-token: write
       packages: write
     outputs:
-      release_candidate_image: ${{ steps.build_metadata.outputs.release_candidate_image }}
+      release_candidate_image: ${{ steps.release_candidate_ref.outputs.release_candidate_image }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -90,20 +96,25 @@ jobs:
             apps/ade-api/target
           key: ${{ steps.rust_cache.outputs.cache-primary-key }}
 
-      - name: Compute release candidate image ref and OCI metadata
+      - name: Compute OCI build metadata
         id: build_metadata
         run: |
-          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          image="ghcr.io/${owner}/ade:sha-${GITHUB_SHA}"
           built_at="$(git show --no-patch --format=%cI "${GITHUB_SHA}")"
           service_version="$(
             node --print "JSON.parse(require('node:fs').readFileSync('apps/ade-api/package.json', 'utf8')).version"
           )"
 
-          echo "release_candidate_image=${image}" >> "${GITHUB_OUTPUT}"
           echo "built_at=${built_at}" >> "${GITHUB_OUTPUT}"
           echo "git_sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
           echo "service_version=${service_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Extract image tags
+        id: meta
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-
 
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push'
@@ -118,27 +129,39 @@ jobs:
           az bicep build --file infra/main.bicep --stdout >/dev/null
           az bicep build-params --file infra/environments/main.prod.bicepparam --stdout >/dev/null
 
-      - name: Clear Docker Hub credentials
-        run: |
-          docker logout docker.io || true
-          docker logout https://index.docker.io/v1/ || true
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Build release candidate image
+        id: push
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
         with:
           context: .
           file: ./Dockerfile
           push: ${{ github.event_name == 'push' }}
-          tags: ${{ steps.build_metadata.outputs.release_candidate_image }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           build-args: |
             BUILT_AT=${{ steps.build_metadata.outputs.built_at }}
             GIT_SHA=${{ steps.build_metadata.outputs.git_sha }}
             SERVICE_VERSION=${{ steps.build_metadata.outputs.service_version }}
           cache-from: type=gha,scope=ade-release-candidate
           cache-to: type=gha,scope=ade-release-candidate,mode=max
+
+      - name: Export release candidate image ref
+        if: github.event_name == 'push'
+        id: release_candidate_ref
+        run: |
+          echo "release_candidate_image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate artifact attestation
+        if: github.event_name == 'push'
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   acceptance_stage:
     name: Acceptance Stage
