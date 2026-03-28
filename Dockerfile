@@ -62,14 +62,6 @@ RUN apk add --no-cache ca-certificates \
 
 ENV NODE_ENV=production
 
-ARG BUILT_AT
-ARG GIT_SHA
-ARG SERVICE_VERSION
-
-LABEL org.opencontainers.image.created=$BUILT_AT \
-      org.opencontainers.image.revision=$GIT_SHA \
-      org.opencontainers.image.version=$SERVICE_VERSION
-
 COPY --from=web-builder --chown=ade:ade /build/apps/ade-web/dist ./public
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-api ./bin/ade-api
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-migrate ./bin/ade-migrate

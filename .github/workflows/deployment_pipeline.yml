@@ -9,7 +9,7 @@ on:
       - main
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -102,19 +102,7 @@ jobs:
             apps/ade-api/target
           key: ${{ steps.rust_cache.outputs.cache-primary-key }}
 
-      - name: Compute OCI build metadata
-        id: build_metadata
-        run: |
-          built_at="$(git show --no-patch --format=%cI "${GITHUB_SHA}")"
-          service_version="$(
-            node --print "JSON.parse(require('node:fs').readFileSync('apps/ade-api/package.json', 'utf8')).version"
-          )"
-
-          echo "built_at=${built_at}" >> "${GITHUB_OUTPUT}"
-          echo "git_sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
-          echo "service_version=${service_version}" >> "${GITHUB_OUTPUT}"
-
-      - name: Extract image tags
+      - name: Extract image tags and labels
         id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
@@ -146,12 +134,7 @@ jobs:
           file: ./Dockerfile
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          build-args: |
-            BUILT_AT=${{ steps.build_metadata.outputs.built_at }}
-            GIT_SHA=${{ steps.build_metadata.outputs.git_sha }}
-            SERVICE_VERSION=${{ steps.build_metadata.outputs.service_version }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=ade-release-candidate
           cache-to: type=gha,scope=ade-release-candidate,mode=max
 
@@ -217,6 +200,8 @@ jobs:
       - acceptance_stage
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: production
     environment:
       name: production
     permissions:
