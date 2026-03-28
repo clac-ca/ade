@@ -277,6 +277,7 @@ jobs:
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --parameters infra/environments/main.prod.bicepparam \
             --parameters image="${{ needs.commit_stage.outputs.release_candidate_image }}" \
+            --parameters runtimeSessionSecret="${{ secrets.ADE_RUNTIME_SESSION_SECRET }}" \
             --validation-level Provider \
             --output none
 
@@ -289,6 +290,7 @@ jobs:
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
               --parameters infra/environments/main.prod.bicepparam \
               --parameters image="${{ needs.commit_stage.outputs.release_candidate_image }}" \
+              --parameters runtimeSessionSecret="${{ secrets.ADE_RUNTIME_SESSION_SECRET }}" \
               --query properties.outputs.migrationJobName.value \
               --output tsv
           )"

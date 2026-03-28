@@ -3,7 +3,9 @@ param location string = resourceGroup().location
 param tags object = {}
 param containerType string = 'PythonLTS'
 param cooldownPeriodInSeconds int = 3600
-param maxConcurrentSessions int = 1
+@minValue(5)
+@maxValue(600)
+param maxConcurrentSessions int = 5
 param networkStatus string = 'EgressEnabled'
 
 resource sessionPool 'Microsoft.App/sessionPools@2025-10-02-preview' = {
