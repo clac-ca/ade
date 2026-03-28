@@ -54,6 +54,13 @@ param storageAccountName string
 @description('Name for the Blob container.')
 param blobContainerName string = 'documents'
 
+@description('Name for the Azure Container Apps session pool.')
+param sessionPoolName string = '${prefix}-sessions'
+
+@description('Secret used to derive deterministic ADE runtime session identifiers.')
+@secure()
+param runtimeSessionSecret string
+
 @description('CPU allocation for the ADE container app.')
 param appCpu string = '0.25'
 
@@ -148,6 +155,15 @@ module storage 'modules/storage-account.bicep' = {
   }
 }
 
+module sessionPool 'modules/session-pool.bicep' = {
+  name: 'sessionPool'
+  params: {
+    location: location
+    name: sessionPoolName
+    tags: mergedTags
+  }
+}
+
 var appSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
 var migrationSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};User ID=${deploymentManagedIdentity.properties.clientId};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
 
@@ -160,6 +176,22 @@ module app 'modules/container-app.bicep' = {
       {
         name: 'AZURE_SQL_CONNECTIONSTRING'
         value: appSqlConnectionString
+      }
+      {
+        name: 'ADE_RUNTIME_SESSION_SECRET'
+        value: runtimeSessionSecret
+      }
+      {
+        name: 'ADE_SESSION_POOL_MANAGEMENT_ENDPOINT'
+        value: sessionPool.outputs.poolManagementEndpoint
+      }
+      {
+        name: 'ADE_SESSION_POOL_MCP_ENDPOINT'
+        value: sessionPool.outputs.mcpEndpoint
+      }
+      {
+        name: 'ADE_SESSION_POOL_RESOURCE_ID'
+        value: sessionPool.outputs.id
       }
     ]
     probes: [
@@ -246,6 +278,10 @@ output deploymentManagedIdentityName string = deploymentManagedIdentity.name
 output deploymentManagedIdentityPrincipalId string = deploymentManagedIdentity.properties.principalId
 output migrationJobName string = migrationJobName
 output sqlDatabaseName string = sql.outputs.databaseName
+output sessionPoolId string = sessionPool.outputs.id
+output sessionPoolMcpEndpoint string = sessionPool.outputs.mcpEndpoint
+output sessionPoolName string = sessionPool.outputs.name
+output sessionPoolPoolManagementEndpoint string = sessionPool.outputs.poolManagementEndpoint
 output sqlServerIdentityPrincipalId string = sql.outputs.serverIdentityPrincipalId
 output sqlServerName string = sql.outputs.serverName
 output storageAccountName string = storageAccountName

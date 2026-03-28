@@ -1,5 +1,6 @@
 function createContainerRunArgs(options: {
   containerName: string;
+  envNames?: readonly string[];
   hostPort: number;
   image: string;
 }): string[] {
@@ -14,6 +15,7 @@ function createContainerRunArgs(options: {
     `${String(options.hostPort)}:8000`,
     "--env",
     "AZURE_SQL_CONNECTIONSTRING",
+    ...(options.envNames ?? []).flatMap((name) => ["--env", name]),
     options.image,
   ];
 }

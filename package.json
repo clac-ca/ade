@@ -19,6 +19,7 @@
     "test:unit": "pnpm --filter @ade/api test && pnpm --filter @ade/web test && pnpm test:scripts",
     "test:scripts": "tsx --test scripts/test/*.test.ts",
     "test:python": "uv run --directory packages/ade-engine --group test pytest && uv run --directory packages/ade-config --group test pytest && uv run --directory packages/ade-engine --group test pytest ../../scripts/engine-release/tests",
+    "test:runtime:local": "tsx scripts/runtime-smoke.ts",
     "package:python": "uv build --directory packages/ade-engine && uv build --directory packages/ade-config",
     "test": "pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:python && pnpm package:python && az bicep build --file infra/main.bicep --stdout >/dev/null && az bicep build-params --file infra/environments/main.prod.bicepparam --stdout >/dev/null",
     "test:acceptance": "tsx scripts/acceptance.ts",

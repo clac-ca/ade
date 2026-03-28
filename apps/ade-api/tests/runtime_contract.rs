@@ -1,149 +1,51 @@
 use std::{
-    collections::{HashMap, VecDeque},
-    path::PathBuf,
+    collections::HashMap,
+    path::Path as FsPath,
     sync::{Arc, Mutex},
 };
 
 use ade_api::{
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::create_app,
-    runtime::{
-        ActiveConfigArtifact, EventBatch, InstalledConfigStatus, RunStatus, RuntimeEvent,
-        RuntimeService, RuntimeStatus, SessionRuntime, TerminalStatus, UploadedFile,
-    },
+    runtime::RuntimeService,
     state::AppState,
     unix_time_ms,
 };
-use async_trait::async_trait;
 use axum::{
-    body::{Body, to_bytes},
+    Json, Router,
+    body::{Body, Bytes, to_bytes},
+    extract::{Multipart, Path, Query, State},
     http::{Method, Request, StatusCode},
+    response::IntoResponse,
+    routing::{get, post},
 };
 use serde_json::{Value, json};
+use tempfile::tempdir;
 use tower::util::ServiceExt;
 
-use ade_api::error::AppError;
-
-struct FakeRuntimeState {
-    download_files: HashMap<String, Vec<u8>>,
-    ensure_calls: usize,
-    event_batches: VecDeque<EventBatch>,
-    install_calls: usize,
-    poll_afters: Vec<u64>,
-    reset_calls: usize,
-    rpc_calls: Vec<(String, Value)>,
-    status: RuntimeStatus,
-    upload_calls: Vec<(String, Vec<u8>)>,
-}
-
-impl Default for FakeRuntimeState {
-    fn default() -> Self {
-        Self {
-            download_files: HashMap::new(),
-            ensure_calls: 0,
-            event_batches: VecDeque::new(),
-            install_calls: 0,
-            poll_afters: Vec::new(),
-            reset_calls: 0,
-            rpc_calls: Vec::new(),
-            status: runtime_status(),
-            upload_calls: Vec::new(),
-        }
-    }
+#[derive(Default)]
+struct PoolStubState {
+    uploaded_files: HashMap<String, Vec<u8>>,
+    uploaded_names: Vec<String>,
+    execution_codes: Vec<String>,
+    identifiers: Vec<String>,
+    mcp_invalid_environment_once: bool,
+    mcp_launch_calls: usize,
+    mcp_shell_calls: usize,
+    stop_calls: usize,
 }
 
 #[derive(Clone)]
-struct FakeRuntime {
-    state: Arc<Mutex<FakeRuntimeState>>,
+struct PoolStub {
+    state: Arc<Mutex<PoolStubState>>,
 }
 
-impl FakeRuntime {
-    fn new(state: FakeRuntimeState) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(state)),
-        }
-    }
-}
-
-#[async_trait]
-impl SessionRuntime for FakeRuntime {
-    async fn ensure_session(&self, _: &str) -> Result<(), AppError> {
-        self.state.lock().unwrap().ensure_calls += 1;
-        Ok(())
-    }
-
-    async fn status(&self, _: &str) -> Result<RuntimeStatus, AppError> {
-        Ok(self.state.lock().unwrap().status.clone())
-    }
-
-    async fn install_config(
-        &self,
-        _: &str,
-        artifact: &ActiveConfigArtifact,
-    ) -> Result<RuntimeStatus, AppError> {
-        let mut state = self.state.lock().unwrap();
-        state.install_calls += 1;
-        state.status.installed_config = Some(InstalledConfigStatus {
-            package_name: artifact.package_name.clone(),
-            version: artifact.version.clone(),
-            sha256: artifact.sha256.clone(),
-            fingerprint: artifact.fingerprint.clone(),
-        });
-        Ok(state.status.clone())
-    }
-
-    async fn upload_file(
-        &self,
-        _: &str,
-        relative_path: &str,
-        content: Vec<u8>,
-    ) -> Result<UploadedFile, AppError> {
-        let mut state = self.state.lock().unwrap();
-        state
-            .upload_calls
-            .push((relative_path.to_string(), content.clone()));
-        state
-            .download_files
-            .insert(relative_path.to_string(), content.clone());
-        Ok(UploadedFile {
-            path: relative_path.to_string(),
-            size: content.len(),
-        })
-    }
-
-    async fn download_file(&self, _: &str, relative_path: &str) -> Result<Vec<u8>, AppError> {
-        self.state
-            .lock()
-            .unwrap()
-            .download_files
-            .get(relative_path)
-            .cloned()
-            .ok_or_else(|| AppError::not_found(format!("Missing file: {relative_path}")))
-    }
-
-    async fn rpc(&self, _: &str, method: &str, params: Value) -> Result<Value, AppError> {
-        self.state
-            .lock()
-            .unwrap()
-            .rpc_calls
-            .push((method.to_string(), params.clone()));
-        Ok(json!({"ok": true, "method": method, "params": params}))
-    }
-
-    async fn poll_events(&self, _: &str, after: u64, _: u64) -> Result<EventBatch, AppError> {
-        let mut state = self.state.lock().unwrap();
-        state.poll_afters.push(after);
-        if let Some(batch) = state.event_batches.pop_front() {
-            return Ok(batch);
-        }
-
-        Err(AppError::internal("stop".to_string()))
-    }
-
-    async fn reset_session(&self, _: &str) -> Result<(), AppError> {
-        self.state.lock().unwrap().reset_calls += 1;
-        Ok(())
-    }
+#[derive(serde::Deserialize)]
+struct IdentifierQuery {
+    identifier: String,
+    #[allow(dead_code)]
+    #[serde(rename = "api-version")]
+    api_version: Option<String>,
 }
 
 fn ready_state() -> ReadinessController {
@@ -157,43 +59,222 @@ fn ready_state() -> ReadinessController {
     readiness
 }
 
-fn runtime_status() -> RuntimeStatus {
-    RuntimeStatus {
-        workspace: "/workspace".to_string(),
-        installed_config: None,
-        terminal: TerminalStatus {
-            open: false,
-            cwd: "/workspace".to_string(),
-            cols: None,
-            rows: None,
-        },
-        run: RunStatus {
-            active: false,
-            input_path: None,
-            output_path: None,
-            pid: None,
-        },
-        earliest_seq: 1,
-        latest_seq: 1,
+async fn stub_upload_file(
+    State(stub): State<PoolStub>,
+    Query(query): Query<IdentifierQuery>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let field = multipart
+        .next_field()
+        .await
+        .unwrap()
+        .expect("multipart file");
+    let filename = field.file_name().unwrap().to_string();
+    let bytes = field.bytes().await.unwrap();
+    let mut state = stub.state.lock().unwrap();
+    state.identifiers.push(query.identifier.clone());
+    state.uploaded_names.push(filename.clone());
+    state
+        .uploaded_files
+        .insert(format!("{}::{filename}", query.identifier), bytes.to_vec());
+
+    Json(json!({
+        "properties": {
+            "filename": filename,
+            "size": bytes.len(),
+        }
+    }))
+}
+
+async fn stub_list_files(
+    State(stub): State<PoolStub>,
+    Query(query): Query<IdentifierQuery>,
+) -> impl IntoResponse {
+    let mut state = stub.state.lock().unwrap();
+    state.identifiers.push(query.identifier.clone());
+    let prefix = format!("{}::", query.identifier);
+    let files = state
+        .uploaded_files
+        .iter()
+        .filter_map(|(key, content)| key.strip_prefix(&prefix).map(|name| (name, content)))
+        .map(|(filename, content)| {
+            json!({
+                "properties": {
+                    "filename": filename,
+                    "size": content.len(),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(json!({ "value": files }))
+}
+
+async fn stub_download_file(
+    State(stub): State<PoolStub>,
+    Query(query): Query<IdentifierQuery>,
+    Path(filename): Path<String>,
+) -> impl IntoResponse {
+    let mut state = stub.state.lock().unwrap();
+    state.identifiers.push(query.identifier.clone());
+    let key = format!("{}::{filename}", query.identifier);
+    let content = state.uploaded_files.get(&key).unwrap().clone();
+    (StatusCode::OK, Bytes::from(content))
+}
+
+async fn stub_execute(
+    State(stub): State<PoolStub>,
+    Query(query): Query<IdentifierQuery>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let mut state = stub.state.lock().unwrap();
+    state.identifiers.push(query.identifier);
+    state
+        .execution_codes
+        .push(body["properties"]["code"].as_str().unwrap().to_string());
+    (
+        [
+            ("operation-id", "op-1"),
+            ("x-ms-session-guid", "cfg-session"),
+        ],
+        Json(json!({
+            "properties": {
+                "stdout": "ok",
+                "stderr": "",
+                "exitCode": 0,
+                "status": "Succeeded",
+            }
+        })),
+    )
+}
+
+async fn stub_stop_session(
+    State(stub): State<PoolStub>,
+    Query(query): Query<IdentifierQuery>,
+) -> impl IntoResponse {
+    let mut state = stub.state.lock().unwrap();
+    state.identifiers.push(query.identifier);
+    state.stop_calls += 1;
+    Json(json!({}))
+}
+
+async fn stub_mcp(State(stub): State<PoolStub>, Json(body): Json<Value>) -> impl IntoResponse {
+    match body["method"].as_str().unwrap() {
+        "initialize" => Json(json!({
+            "jsonrpc": "2.0",
+            "id": body["id"].clone(),
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": { "tools": { "list": true, "call": true } }
+            }
+        })),
+        "tools/list" => Json(json!({
+            "jsonrpc": "2.0",
+            "id": body["id"].clone(),
+            "result": {
+                "tools": [
+                    {"name": "launchShell"},
+                    {"name": "runShellCommandInRemoteEnvironment"},
+                    {"name": "runPythonCodeInRemoteEnvironment"}
+                ]
+            }
+        })),
+        "tools/call" => {
+            let name = body["params"]["name"].as_str().unwrap();
+            if name == "launchShell" {
+                stub.state.lock().unwrap().mcp_launch_calls += 1;
+                return Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"].clone(),
+                    "result": { "structuredContent": { "environmentId": "env-123" } }
+                }));
+            }
+            if name == "runShellCommandInRemoteEnvironment" {
+                let mut state = stub.state.lock().unwrap();
+                state.mcp_shell_calls += 1;
+                if state.mcp_invalid_environment_once {
+                    state.mcp_invalid_environment_once = false;
+                    return Json(json!({
+                        "jsonrpc": "2.0",
+                        "id": body["id"].clone(),
+                        "error": { "code": -32000, "message": "Environment not found: env-123" }
+                    }));
+                }
+                assert_eq!(
+                    body["params"]["arguments"]["environmentId"],
+                    json!("env-123")
+                );
+                return Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"].clone(),
+                    "result": {
+                        "structuredContent": {
+                            "stdout": "hello",
+                            "stderr": "",
+                            "exitCode": 0
+                        }
+                    }
+                }));
+            }
+            Json(json!({
+                "jsonrpc": "2.0",
+                "id": body["id"].clone(),
+                "error": { "code": -32000, "message": "Unsupported tool" }
+            }))
+        }
+        _ => Json(json!({
+            "jsonrpc": "2.0",
+            "id": body["id"].clone(),
+            "error": { "code": -32000, "message": "Unsupported method" }
+        })),
     }
 }
 
-fn active_config_artifact() -> ActiveConfigArtifact {
-    ActiveConfigArtifact {
-        package_name: "ade-config".to_string(),
-        version: "0.1.0".to_string(),
-        sha256: "abc123".to_string(),
-        fingerprint: "ade-config@0.1.0:abc123".to_string(),
-        wheel_path: PathBuf::from("/tmp/ade-config-test.whl"),
-    }
+async fn start_stub_server() -> (
+    String,
+    Arc<Mutex<PoolStubState>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = Arc::new(Mutex::new(PoolStubState::default()));
+    let stub = PoolStub {
+        state: state.clone(),
+    };
+    let app = Router::new()
+        .route("/files/upload", post(stub_upload_file))
+        .route("/files", get(stub_list_files))
+        .route("/files/content/{filename}", get(stub_download_file))
+        .route("/code/execute", post(stub_execute))
+        .route("/.management/stopSession", post(stub_stop_session))
+        .route("/mcp", post(stub_mcp))
+        .with_state(stub);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    (format!("http://{address}"), state, handle)
 }
 
-fn app_with_runtime(runtime: FakeRuntime) -> axum::Router {
-    let service = Arc::new(RuntimeService::new(
-        Arc::new(runtime),
-        active_config_artifact(),
-        "cfg-test".to_string(),
-    ));
+fn app_with_runtime(endpoint: &str, wheel_path: &FsPath) -> axum::Router {
+    let env = [
+        (
+            "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
+            endpoint.to_string(),
+        ),
+        (
+            "ADE_SESSION_POOL_MCP_ENDPOINT".to_string(),
+            format!("{endpoint}/mcp"),
+        ),
+        (
+            "ADE_ACTIVE_CONFIG_WHEEL_PATH".to_string(),
+            wheel_path.display().to_string(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let service = RuntimeService::create_from_env(&env, false)
+        .unwrap()
+        .expect("runtime configured");
 
     create_app(AppState {
         readiness: ready_state(),
@@ -206,157 +287,223 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
 }
 
-fn request(uri: &str, method: Method, body: Body) -> Request<Body> {
+fn multipart_request(uri: &str, filename: &str, content: &[u8]) -> Request<Body> {
+    let boundary = "ade-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(content);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
     Request::builder()
-        .method(method)
+        .method(Method::POST)
         .uri(uri)
-        .body(body)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
         .unwrap()
 }
 
 #[tokio::test]
-async fn ensure_route_installs_the_active_config_when_needed() {
-    let fake_runtime = FakeRuntime::new(FakeRuntimeState {
-        status: runtime_status(),
-        ..FakeRuntimeState::default()
-    });
-    let state = fake_runtime.state.clone();
-    let app = app_with_runtime(fake_runtime);
-
-    let response = app
-        .oneshot(request(
-            "/api/runtime/session/ensure",
-            Method::POST,
-            Body::empty(),
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let payload = json_body(response).await;
-    assert_eq!(
-        payload["status"]["installedConfig"]["fingerprint"],
-        "ade-config@0.1.0:abc123"
-    );
-    assert_eq!(state.lock().unwrap().install_calls, 1);
-}
-
-#[tokio::test]
-async fn terminal_open_route_calls_the_runtime_rpc() {
-    let fake_runtime = FakeRuntime::new(FakeRuntimeState {
-        status: RuntimeStatus {
-            installed_config: Some(InstalledConfigStatus {
-                package_name: "ade-config".to_string(),
-                version: "0.1.0".to_string(),
-                sha256: "abc123".to_string(),
-                fingerprint: "ade-config@0.1.0:abc123".to_string(),
-            }),
-            ..runtime_status()
-        },
-        ..FakeRuntimeState::default()
-    });
-    let state = fake_runtime.state.clone();
-    let app = app_with_runtime(fake_runtime);
+async fn executions_route_uploads_the_active_config_wheel_and_wraps_code() {
+    let temp_dir = tempdir().unwrap();
+    let wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    std::fs::write(&wheel_path, b"wheel-bytes").unwrap();
+    let (endpoint, state, handle) = start_stub_server().await;
+    let app = app_with_runtime(&endpoint, &wheel_path);
 
     let response = app
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/api/runtime/terminal/open")
+                .uri("/api/runtime/code/execute")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"rows":30,"cols":120}"#))
+                .body(Body::from(
+                    r#"{"properties":{"codeInputType":"inline","executionType":"synchronous","code":"print('hello')"}} "#,
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let calls = &state.lock().unwrap().rpc_calls;
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "terminal.open");
-    assert_eq!(calls[0].1, json!({"rows": 30, "cols": 120}));
+    assert_eq!(response.headers().get("operation-id").unwrap(), "op-1");
+
+    let payload = json_body(response).await;
+    assert_eq!(payload["properties"]["stdout"], "ok");
+
+    let state = state.lock().unwrap();
+    assert_eq!(
+        state.uploaded_names,
+        vec!["ade_config-0.1.0-py3-none-any.whl"]
+    );
+    assert!(
+        state
+            .identifiers
+            .iter()
+            .all(|identifier| identifier.starts_with("cfg-"))
+    );
+    assert!(state.execution_codes[0].contains("import importlib.metadata"));
+    assert!(state.execution_codes[0].contains("print('hello')"));
+
+    handle.abort();
 }
 
 #[tokio::test]
-async fn events_route_resumes_from_last_event_id() {
-    let fake_runtime = FakeRuntime::new(FakeRuntimeState {
-        status: RuntimeStatus {
-            installed_config: Some(InstalledConfigStatus {
-                package_name: "ade-config".to_string(),
-                version: "0.1.0".to_string(),
-                sha256: "abc123".to_string(),
-                fingerprint: "ade-config@0.1.0:abc123".to_string(),
-            }),
-            latest_seq: 6,
-            ..runtime_status()
-        },
-        event_batches: VecDeque::from([EventBatch {
-            needs_resync: false,
-            status: RuntimeStatus {
-                installed_config: Some(InstalledConfigStatus {
-                    package_name: "ade-config".to_string(),
-                    version: "0.1.0".to_string(),
-                    sha256: "abc123".to_string(),
-                    fingerprint: "ade-config@0.1.0:abc123".to_string(),
-                }),
-                latest_seq: 6,
-                ..runtime_status()
-            },
-            events: vec![RuntimeEvent {
-                seq: 6,
-                time: 1,
-                event_type: "run.log".to_string(),
-                payload: json!({"message": "hello"}),
-            }],
-        }]),
-        ..FakeRuntimeState::default()
-    });
-    let state = fake_runtime.state.clone();
-    let app = app_with_runtime(fake_runtime);
+async fn files_routes_proxy_upload_list_metadata_and_download() {
+    let temp_dir = tempdir().unwrap();
+    let wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    std::fs::write(&wheel_path, b"wheel-bytes").unwrap();
+    let (endpoint, _state, handle) = start_stub_server().await;
+    let app = app_with_runtime(&endpoint, &wheel_path);
 
-    let response = app
+    let upload_response = app
+        .clone()
+        .oneshot(multipart_request(
+            "/api/runtime/files/upload",
+            "input.csv",
+            b"name,email\nalice,A@example.com\n",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(upload_response.status(), StatusCode::OK);
+
+    let list_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/api/runtime/events")
-                .header("Last-Event-ID", "5")
+                .uri("/api/runtime/files")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
+    let list_payload = json_body(list_response).await;
+    assert_eq!(
+        list_payload["value"][0]["properties"]["filename"],
+        "input.csv"
+    );
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = String::from_utf8(
-        to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap();
-    assert!(body.contains("id: 6"));
-    assert!(body.contains("event: run.log"));
-    assert_eq!(state.lock().unwrap().poll_afters.first().copied(), Some(5));
+    let download_response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/runtime/files/content/input.csv")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(download_response.status(), StatusCode::OK);
+    let bytes = to_bytes(download_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(bytes.as_ref(), b"name,email\nalice,A@example.com\n");
+
+    handle.abort();
 }
 
 #[tokio::test]
-async fn reset_route_calls_the_runtime_reset() {
-    let fake_runtime = FakeRuntime::new(FakeRuntimeState {
-        status: runtime_status(),
-        ..FakeRuntimeState::default()
-    });
-    let state = fake_runtime.state.clone();
-    let app = app_with_runtime(fake_runtime);
+async fn mcp_route_caches_environment_ids_until_stop_session() {
+    let temp_dir = tempdir().unwrap();
+    let wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    std::fs::write(&wheel_path, b"wheel-bytes").unwrap();
+    let (endpoint, state, handle) = start_stub_server().await;
+    let app = app_with_runtime(&endpoint, &wheel_path);
+
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/runtime/mcp")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"runShellCommandInRemoteEnvironment","arguments":{"shellCommand":"echo hello"}}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = json_body(response).await;
+        assert_eq!(payload["result"]["structuredContent"]["stdout"], "hello");
+    }
+
+    let stop_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/runtime/.management/stopSession")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stop_response.status(), StatusCode::OK);
 
     let response = app
-        .oneshot(request(
-            "/api/runtime/session/reset",
-            Method::POST,
-            Body::empty(),
-        ))
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/runtime/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"runShellCommandInRemoteEnvironment","arguments":{"shellCommand":"echo hello"}}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let state = state.lock().unwrap();
+    assert_eq!(state.mcp_launch_calls, 2);
+    assert_eq!(state.mcp_shell_calls, 3);
+    assert_eq!(state.stop_calls, 1);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn mcp_route_relaunches_when_the_cached_environment_is_invalid() {
+    let temp_dir = tempdir().unwrap();
+    let wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    std::fs::write(&wheel_path, b"wheel-bytes").unwrap();
+    let (endpoint, state, handle) = start_stub_server().await;
+    state.lock().unwrap().mcp_invalid_environment_once = true;
+    let app = app_with_runtime(&endpoint, &wheel_path);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/runtime/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"runShellCommandInRemoteEnvironment","arguments":{"shellCommand":"echo hello"}}}"#,
+                ))
+                .unwrap(),
+        )
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(state.lock().unwrap().reset_calls, 1);
+    let payload = json_body(response).await;
+    assert_eq!(payload["result"]["structuredContent"]["stdout"], "hello");
+
+    let state = state.lock().unwrap();
+    assert_eq!(state.mcp_launch_calls, 2);
+    assert_eq!(state.mcp_shell_calls, 2);
+
+    handle.abort();
 }

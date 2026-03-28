@@ -12,6 +12,7 @@ The template deploys:
 - one Blob Storage account and blob container placeholder
 - one Log Analytics workspace
 - one VNet-integrated Azure Container Apps environment
+- one shared Azure Container Apps session pool for hosted ADE runtime and MCP console access
 - one public Container App for the API/web host
 - one manual Azure Container Apps Job for schema migrations
 
@@ -30,6 +31,7 @@ The migration job is the only Azure resource that overrides its command, and it 
 - Container Apps environment: `cae-ade-prod-canadacentral-002`
 - Container App: `ca-ade-prod-canadacentral-002`
 - Migration job: `job-ade-migrate-prod-cc-002`
+- Session pool: `sp-ade-prod-canadacentral-002`
 - Virtual network: `vnet-ade-prod-canadacentral-002`
 - Azure SQL logical server: `sql-ade-prod-cc-002`
 - Azure SQL database: `sqldb-ade-prod-cc-002`
@@ -42,6 +44,7 @@ The migration job is the only Azure resource that overrides its command, and it 
 Lock these assumptions in:
 
 - the running app authenticates to Azure SQL with its system-assigned managed identity
+- the running app authenticates to the Azure Container Apps session-pool data plane with its system-assigned managed identity
 - the migration job authenticates to Azure SQL with the deployment managed identity
 - the deployment managed identity is also the Azure SQL logical server's Microsoft Entra admin
 - the SQL logical server itself has a system-assigned managed identity
@@ -49,6 +52,7 @@ Lock these assumptions in:
 - Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a virtual network rule
 - Blob Storage stays provisioned as a placeholder, but it is not an active application dependency today
 - the Azure SQL database uses the General Purpose serverless compute tier with auto-pause enabled
+- the shared Azure session pool uses the built-in `PythonLTS` container type with MCP enabled
 
 ## Prerequisites
 
@@ -116,12 +120,18 @@ image=<image-ref>
 
 ### 6. Run the first manual deployment
 
+Choose a strong runtime session secret and keep it as a shell-local variable:
+
+```sh
+runtimeSessionSecret="$(openssl rand -hex 32)"
+```
+
 ```sh
 az deployment group validate \
   --name ade-prod-initial-validate \
   --resource-group rg-ade-prod-canadacentral-002 \
   --parameters infra/environments/main.prod.bicepparam \
-  --parameters image="$image"
+  --parameters image="$image" runtimeSessionSecret="$runtimeSessionSecret"
 ```
 
 ```sh
@@ -129,7 +139,7 @@ az deployment group create \
   --name ade-prod-initial \
   --resource-group rg-ade-prod-canadacentral-002 \
   --parameters infra/environments/main.prod.bicepparam \
-  --parameters image="$image"
+  --parameters image="$image" runtimeSessionSecret="$runtimeSessionSecret"
 ```
 
 ### 7. Grant the deployment identity the minimum Azure RBAC it needs

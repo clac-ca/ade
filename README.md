@@ -12,13 +12,14 @@ pnpm dev
 
 ADE opens at `http://127.0.0.1:5173`.
 
-`pnpm dev` starts local SQL Server, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host.
+`pnpm dev` starts local SQL Server and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host.
 
 ## What Starts Locally
 
 - Web: `http://127.0.0.1:5173`
 - API: `http://127.0.0.1:8000`
 - SQL Server: `127.0.0.1:8013`
+- Session Pool Emulator: `http://127.0.0.1:8014`
 
 Use `pnpm dev --port 8100` to change only the web port.
 
@@ -39,12 +40,13 @@ pnpm format:python:check
 pnpm test
 pnpm test:python
 pnpm test:unit
+pnpm test:runtime:local
 pnpm clean
 ```
 
 `pnpm lint` and `pnpm test` require Azure CLI 2.53+ with Bicep support.
 
-If you only need the local SQL dependency:
+If you only need the local infrastructure dependencies:
 
 ```sh
 pnpm deps:up
@@ -52,6 +54,8 @@ pnpm deps:down
 ```
 
 `pnpm clean` removes local build output, Python virtualenvs and locks, ADE local containers, Compose state, and the `ade-platform:local` image.
+
+`pnpm test:runtime:local` runs one black-box smoke path against the local SQL and session-pool infrastructure through the ADE API.
 
 ## Production-Like Local Runtime
 
@@ -71,7 +75,7 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 
 `pnpm start` and managed `pnpm test:acceptance` use `ade-platform:local` by default, so build first unless you pass `--image`.
 
-`pnpm dev` does not read `.env`. `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local SQL themselves. For connection string and authentication details, see [docs/runtime-config.md](docs/runtime-config.md).
+`pnpm dev` does not read `.env`. `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local SQL and the local session-pool emulator themselves. For connection string and hosted runtime details, see [docs/runtime-config.md](docs/runtime-config.md).
 
 ## Requirements
 

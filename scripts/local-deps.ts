@@ -33,7 +33,7 @@ async function runCompose(
 async function upLocalDependencies(): Promise<void> {
   await ensureDocker(dockerCommand, "`pnpm deps:up`");
   await runCompose(["down", "-v", "--remove-orphans"]).catch(() => undefined);
-  await runCompose(["up", "-d", "--wait", "sqlserver"]);
+  await runCompose(["up", "-d", "--build", "--wait", "sqlserver", "sessionpool"]);
 }
 
 async function downLocalDependencies(
@@ -45,7 +45,7 @@ async function downLocalDependencies(
 }
 
 async function readLocalDependencyLogs(
-  services: readonly string[] = ["sqlserver"],
+  services: readonly string[] = ["sqlserver", "sessionpool"],
 ): Promise<string> {
   const { stdout } = await runCommandCapture(
     dockerCommand,
@@ -80,12 +80,12 @@ async function main(logger = createConsoleLogger()): Promise<void> {
 
   if (command === "up") {
     await upLocalDependencies();
-    logger.info("ADE local SQL is running on 127.0.0.1:8013");
+    logger.info("ADE local SQL and session pool are running");
     return;
   }
 
   await downLocalDependencies();
-  logger.info("ADE local SQL is stopped");
+  logger.info("ADE local SQL and session pool are stopped");
 }
 
 export { downLocalDependencies, readLocalDependencyLogs, upLocalDependencies };

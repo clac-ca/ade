@@ -4,9 +4,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseDevArgs } from "./lib/args";
 import { openBrowser } from "./lib/browser";
 import {
+  createLocalSessionPoolManagementEndpoint,
+  createLocalSessionPoolMcpEndpoint,
   createLocalSqlConnectionString,
   localApiHost,
   localApiPort,
+  localSessionPoolRuntimeSecret,
 } from "./lib/dev-config";
 import { createConsoleLogger, formatError, runMain } from "./lib/runtime";
 import {
@@ -65,6 +68,10 @@ async function main(logger = createConsoleLogger()): Promise<void> {
   const { noOpen, port } = parseDevArgs(process.argv.slice(2));
   const apiEnv = {
     [sqlConnectionStringName]: createLocalSqlConnectionString(),
+    ADE_RUNTIME_SESSION_SECRET: localSessionPoolRuntimeSecret,
+    ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
+      createLocalSessionPoolManagementEndpoint(),
+    ADE_SESSION_POOL_MCP_ENDPOINT: createLocalSessionPoolMcpEndpoint(),
   };
   const detached = process.platform !== "win32";
   const children: ChildProcessWithAde[] = [];
