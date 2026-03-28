@@ -1,10 +1,10 @@
 [project]
 name = "ade-config"
-version = "0.0.0"
+version = "2026.3.28.1"
 description = "Installed ADE business rules package"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["ade-engine"]
+dependencies = ["ade-engine @ git+https://github.com/clac-ca/ade.git@ade-engine-v2026.3.28.1#subdirectory=packages/ade-engine"]
 
 [dependency-groups]
 test = ["pytest"]
