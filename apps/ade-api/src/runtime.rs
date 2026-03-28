@@ -799,10 +799,10 @@ impl AzureSessionRuntime {
     async fn bearer_token(&self) -> Result<String, AppError> {
         let scope = format!("{}/.default", self.audience.trim_end_matches('/'));
 
-        if let Ok(credential) = ManagedIdentityCredential::new(None) {
-            if let Ok(token) = credential.get_token(&[scope.as_str()], None).await {
-                return Ok(token.token.secret().to_string());
-            }
+        if let Ok(credential) = ManagedIdentityCredential::new(None)
+            && let Ok(token) = credential.get_token(&[scope.as_str()], None).await
+        {
+            return Ok(token.token.secret().to_string());
         }
 
         let credential = DeveloperToolsCredential::new(None).map_err(|error| {
@@ -824,26 +824,24 @@ impl AzureSessionRuntime {
         Ok(token.token.secret().to_string())
     }
 
-    async fn json_request<T: DeserializeOwned>(
+    async fn session_request(
         &self,
         method: Method,
         session_identifier: &str,
         path: &str,
         extra_query: &[(&str, String)],
-        body: Option<Vec<u8>>,
-        headers: &[(&str, String)],
-        operation: &str,
-    ) -> Result<T, AppError> {
+    ) -> Result<reqwest::RequestBuilder, AppError> {
         let token = self.bearer_token().await?;
         let url = self.session_url(session_identifier, path, extra_query)?;
-        let mut request = self.client.request(method, url).bearer_auth(token);
-        for (name, value) in headers {
-            request = request.header(*name, value);
-        }
-        if let Some(body) = body {
-            request = request.body(body);
-        }
-        parse_json_response(request, operation).await
+        Ok(self.client.request(method, url).bearer_auth(token))
+    }
+
+    async fn json_request<T: DeserializeOwned>(
+        &self,
+        builder: reqwest::RequestBuilder,
+        operation: &str,
+    ) -> Result<T, AppError> {
+        parse_json_response(builder, operation).await
     }
 
     async fn bytes_request(
@@ -861,19 +859,15 @@ impl SessionRuntime for AzureSessionRuntime {
         for _ in 0..40 {
             let result: Result<HealthStatus, AppError> = self
                 .json_request(
-                    Method::GET,
-                    session_identifier,
-                    "/readyz",
-                    &[],
-                    None,
-                    &[],
+                    self.session_request(Method::GET, session_identifier, "/readyz", &[])
+                        .await?,
                     "ensure the Azure sandbox session",
                 )
                 .await;
-            if let Ok(status) = result {
-                if status.status == "ready" {
-                    return Ok(());
-                }
+            if let Ok(status) = result
+                && status.status == "ready"
+            {
+                return Ok(());
             }
             sleep(Duration::from_millis(250)).await;
         }
@@ -885,12 +879,8 @@ impl SessionRuntime for AzureSessionRuntime {
 
     async fn status(&self, session_identifier: &str) -> Result<RuntimeStatus, AppError> {
         self.json_request(
-            Method::GET,
-            session_identifier,
-            "/v1/status",
-            &[],
-            None,
-            &[],
+            self.session_request(Method::GET, session_identifier, "/v1/status", &[])
+                .await?,
             "read sandbox status",
         )
         .await
@@ -903,16 +893,12 @@ impl SessionRuntime for AzureSessionRuntime {
     ) -> Result<RuntimeStatus, AppError> {
         let wheel_bytes = artifact.load_wheel_bytes()?;
         self.json_request(
-            Method::POST,
-            session_identifier,
-            "/v1/config/install",
-            &[],
-            Some(wheel_bytes),
-            &[
-                ("X-ADE-Package", artifact.package_name.clone()),
-                ("X-ADE-Version", artifact.version.clone()),
-                ("X-ADE-Sha256", artifact.sha256.clone()),
-                (
+            self.session_request(Method::POST, session_identifier, "/v1/config/install", &[])
+                .await?
+                .header("X-ADE-Package", &artifact.package_name)
+                .header("X-ADE-Version", &artifact.version)
+                .header("X-ADE-Sha256", &artifact.sha256)
+                .header(
                     "X-ADE-Wheel-Filename",
                     artifact
                         .wheel_path
@@ -923,10 +909,9 @@ impl SessionRuntime for AzureSessionRuntime {
                                 "Active config wheel path '{}' does not end with a valid filename.",
                                 artifact.wheel_path.display()
                             ))
-                        })?
-                        .to_string(),
-                ),
-            ],
+                        })?,
+                )
+                .body(wheel_bytes),
             "install the active config",
         )
         .await
@@ -939,12 +924,14 @@ impl SessionRuntime for AzureSessionRuntime {
         content: Vec<u8>,
     ) -> Result<UploadedFile, AppError> {
         self.json_request(
-            Method::POST,
-            session_identifier,
-            "/v1/files",
-            &[("path", relative_path.to_string())],
-            Some(content),
-            &[],
+            self.session_request(
+                Method::POST,
+                session_identifier,
+                "/v1/files",
+                &[("path", relative_path.to_string())],
+            )
+            .await?
+            .body(content),
             "upload a sandbox file",
         )
         .await
@@ -990,15 +977,16 @@ impl SessionRuntime for AzureSessionRuntime {
         wait_ms: u64,
     ) -> Result<EventBatch, AppError> {
         self.json_request(
-            Method::GET,
-            session_identifier,
-            "/v1/events",
-            &[
-                ("after", after.to_string()),
-                ("waitMs", wait_ms.to_string()),
-            ],
-            None,
-            &[],
+            self.session_request(
+                Method::GET,
+                session_identifier,
+                "/v1/events",
+                &[
+                    ("after", after.to_string()),
+                    ("waitMs", wait_ms.to_string()),
+                ],
+            )
+            .await?,
             "poll sandbox events",
         )
         .await
@@ -1107,10 +1095,10 @@ async fn error_message(response: reqwest::Response) -> Result<String, AppError> 
             error,
         )
     })?;
-    if let Ok(body) = serde_json::from_slice::<ErrorBody>(&bytes) {
-        if let Some(message) = body.message {
-            return Ok(message);
-        }
+    if let Ok(body) = serde_json::from_slice::<ErrorBody>(&bytes)
+        && let Some(message) = body.message
+    {
+        return Ok(message);
     }
 
     let fallback = String::from_utf8_lossy(&bytes).trim().to_string();
