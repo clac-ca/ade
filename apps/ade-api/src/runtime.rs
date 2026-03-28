@@ -101,7 +101,8 @@ pub struct RuntimeService {
     job_session_identifier: String,
     mcp_api_key: Mutex<Option<String>>,
     mcp_endpoint: String,
-    mcp_environment_id: Mutex<Option<String>>,
+    mcp_python_environment_id: Mutex<Option<String>>,
+    mcp_shell_environment_id: Mutex<Option<String>>,
     pool_management_endpoint: String,
 }
 
@@ -141,7 +142,8 @@ impl RuntimeService {
             ),
             mcp_api_key: Mutex::new(None),
             mcp_endpoint,
-            mcp_environment_id: Mutex::new(None),
+            mcp_python_environment_id: Mutex::new(None),
+            mcp_shell_environment_id: Mutex::new(None),
             pool_management_endpoint,
         })))
     }
@@ -219,7 +221,8 @@ impl RuntimeService {
     }
 
     pub async fn stop_session(&self) -> Result<JsonProxyResponse, AppError> {
-        *self.mcp_environment_id.lock().await = None;
+        *self.mcp_python_environment_id.lock().await = None;
+        *self.mcp_shell_environment_id.lock().await = None;
         match self.backend {
             RuntimeBackend::Local(_) => {
                 self.data_plane_json(
@@ -351,27 +354,25 @@ impl RuntimeService {
                 AppError::request("MCP tools/call request must include a tool name.".to_string())
             })?;
 
-        if tool_name == "launchShell" {
-            if let Some(environment_id) = self.mcp_environment_id.lock().await.clone() {
-                return Ok(cached_launch_shell_response(&request, environment_id));
+        if let Some(cache) = self.launch_tool_cache(tool_name) {
+            if let Some(environment_id) = cache.lock().await.clone() {
+                return Ok(cached_launch_environment_response(&request, environment_id));
             }
 
             let response = self.mcp_request(request).await?;
             if let Some(environment_id) = extract_environment_id(&response.body) {
-                *self.mcp_environment_id.lock().await = Some(environment_id);
+                *cache.lock().await = Some(environment_id);
             }
             return Ok(response);
         }
 
-        if tool_name == "runShellCommandInRemoteEnvironment"
-            || tool_name == "runPythonCodeInRemoteEnvironment"
-        {
-            let environment_id = self.ensure_mcp_environment().await?;
+        if let Some(launch_tool_name) = launch_tool_name(tool_name) {
+            let environment_id = self.ensure_mcp_environment(launch_tool_name).await?;
             let request = with_mcp_environment_id(request, &environment_id)?;
             let response = self.mcp_request(request.clone()).await?;
             if mcp_environment_is_invalid(&response.body) {
-                *self.mcp_environment_id.lock().await = None;
-                let environment_id = self.ensure_mcp_environment().await?;
+                *self.mcp_environment_cache(launch_tool_name).lock().await = None;
+                let environment_id = self.ensure_mcp_environment(launch_tool_name).await?;
                 return self
                     .mcp_request(with_mcp_environment_id(request, &environment_id)?)
                     .await;
@@ -382,17 +383,18 @@ impl RuntimeService {
         self.mcp_request(request).await
     }
 
-    async fn ensure_mcp_environment(&self) -> Result<String, AppError> {
-        if let Some(environment_id) = self.mcp_environment_id.lock().await.clone() {
+    async fn ensure_mcp_environment(&self, launch_tool_name: &str) -> Result<String, AppError> {
+        let cache = self.mcp_environment_cache(launch_tool_name);
+        if let Some(environment_id) = cache.lock().await.clone() {
             return Ok(environment_id);
         }
 
         let request = json!({
             "jsonrpc": "2.0",
-            "id": "ade-launch-shell",
+            "id": format!("ade-{launch_tool_name}"),
             "method": "tools/call",
             "params": {
-                "name": "launchShell",
+                "name": launch_tool_name,
                 "arguments": {}
             }
         });
@@ -400,8 +402,24 @@ impl RuntimeService {
         let environment_id = extract_environment_id(&response.body).ok_or_else(|| {
             AppError::internal("The MCP endpoint did not return an environmentId.".to_string())
         })?;
-        *self.mcp_environment_id.lock().await = Some(environment_id.clone());
+        *cache.lock().await = Some(environment_id.clone());
         Ok(environment_id)
+    }
+
+    fn launch_tool_cache(&self, tool_name: &str) -> Option<&Mutex<Option<String>>> {
+        match tool_name {
+            "launchPythonEnvironment" => Some(&self.mcp_python_environment_id),
+            "launchShell" => Some(&self.mcp_shell_environment_id),
+            _ => None,
+        }
+    }
+
+    fn mcp_environment_cache(&self, launch_tool_name: &str) -> &Mutex<Option<String>> {
+        match launch_tool_name {
+            "launchPythonEnvironment" => &self.mcp_python_environment_id,
+            "launchShell" => &self.mcp_shell_environment_id,
+            _ => unreachable!("Unsupported MCP launch tool: {launch_tool_name}"),
+        }
     }
 
     async fn mcp_api_key(&self) -> Result<Option<String>, AppError> {
@@ -926,7 +944,18 @@ fn session_contains_file(body: &Value, filename: &str) -> bool {
         })
 }
 
-fn cached_launch_shell_response(request: &Value, environment_id: String) -> JsonProxyResponse {
+fn launch_tool_name(tool_name: &str) -> Option<&'static str> {
+    match tool_name {
+        "runPythonCodeInRemoteEnvironment" => Some("launchPythonEnvironment"),
+        "runShellCommandInRemoteEnvironment" => Some("launchShell"),
+        _ => None,
+    }
+}
+
+fn cached_launch_environment_response(
+    request: &Value,
+    environment_id: String,
+) -> JsonProxyResponse {
     JsonProxyResponse {
         body: json!({
             "jsonrpc": "2.0",
@@ -1142,8 +1171,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_mcp_http_request, cached_launch_shell_response, derive_session_identifier,
-        forwarded_headers, map_runtime_http_error, mcp_environment_is_invalid,
+        build_mcp_http_request, cached_launch_environment_response, derive_session_identifier,
+        forwarded_headers, launch_tool_name, map_runtime_http_error, mcp_environment_is_invalid,
         session_contains_file, with_mcp_environment_id,
     };
 
@@ -1168,13 +1197,27 @@ mod tests {
     }
 
     #[test]
-    fn cached_launch_shell_response_reuses_existing_environment() {
-        let response = cached_launch_shell_response(&json!({"id": "1"}), "env-123".to_string());
+    fn cached_launch_environment_response_reuses_existing_environment() {
+        let response =
+            cached_launch_environment_response(&json!({"id": "1"}), "env-123".to_string());
 
         assert_eq!(
             response.body["result"]["structuredContent"]["environmentId"],
             "env-123"
         );
+    }
+
+    #[test]
+    fn run_tools_map_to_their_launch_tools() {
+        assert_eq!(
+            launch_tool_name("runPythonCodeInRemoteEnvironment"),
+            Some("launchPythonEnvironment")
+        );
+        assert_eq!(
+            launch_tool_name("runShellCommandInRemoteEnvironment"),
+            Some("launchShell")
+        );
+        assert_eq!(launch_tool_name("launchShell"), None);
     }
 
     #[test]

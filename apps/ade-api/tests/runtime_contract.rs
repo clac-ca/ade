@@ -30,7 +30,9 @@ struct PoolStubState {
     execution_codes: Vec<String>,
     identifiers: Vec<String>,
     mcp_invalid_environment_once: bool,
-    mcp_launch_calls: usize,
+    mcp_python_launch_calls: usize,
+    mcp_shell_launch_calls: usize,
+    mcp_python_calls: usize,
     mcp_shell_calls: usize,
     stop_calls: usize,
 }
@@ -172,6 +174,7 @@ async fn stub_mcp(State(stub): State<PoolStub>, Json(body): Json<Value>) -> impl
             "id": body["id"].clone(),
             "result": {
                 "tools": [
+                    {"name": "launchPythonEnvironment"},
                     {"name": "launchShell"},
                     {"name": "runShellCommandInRemoteEnvironment"},
                     {"name": "runPythonCodeInRemoteEnvironment"}
@@ -180,12 +183,38 @@ async fn stub_mcp(State(stub): State<PoolStub>, Json(body): Json<Value>) -> impl
         })),
         "tools/call" => {
             let name = body["params"]["name"].as_str().unwrap();
+            if name == "launchPythonEnvironment" {
+                stub.state.lock().unwrap().mcp_python_launch_calls += 1;
+                return Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"].clone(),
+                    "result": { "structuredContent": { "environmentId": "env-py-123" } }
+                }));
+            }
             if name == "launchShell" {
-                stub.state.lock().unwrap().mcp_launch_calls += 1;
+                stub.state.lock().unwrap().mcp_shell_launch_calls += 1;
                 return Json(json!({
                     "jsonrpc": "2.0",
                     "id": body["id"].clone(),
                     "result": { "structuredContent": { "environmentId": "env-123" } }
+                }));
+            }
+            if name == "runPythonCodeInRemoteEnvironment" {
+                let mut state = stub.state.lock().unwrap();
+                state.mcp_python_calls += 1;
+                assert_eq!(
+                    body["params"]["arguments"]["environmentId"],
+                    json!("env-py-123")
+                );
+                return Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"].clone(),
+                    "result": {
+                        "structuredContent": {
+                            "stdout": "python-ok",
+                            "stderr": ""
+                        }
+                    }
                 }));
             }
             if name == "runShellCommandInRemoteEnvironment" {
@@ -486,7 +515,7 @@ async fn mcp_route_caches_environment_ids_until_stop_session() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let state = state.lock().unwrap();
-    assert_eq!(state.mcp_launch_calls, 2);
+    assert_eq!(state.mcp_shell_launch_calls, 2);
     assert_eq!(state.mcp_shell_calls, 3);
     assert_eq!(state.stop_calls, 1);
 
@@ -523,8 +552,48 @@ async fn mcp_route_relaunches_when_the_cached_environment_is_invalid() {
     assert_eq!(payload["result"]["structuredContent"]["stdout"], "hello");
 
     let state = state.lock().unwrap();
-    assert_eq!(state.mcp_launch_calls, 2);
+    assert_eq!(state.mcp_shell_launch_calls, 2);
     assert_eq!(state.mcp_shell_calls, 2);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn mcp_route_caches_python_environment_ids() {
+    let temp_dir = tempdir().unwrap();
+    let config_wheel_path = temp_dir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    let engine_wheel_path = temp_dir.path().join("ade_engine-0.1.0-py3-none-any.whl");
+    std::fs::write(&config_wheel_path, b"config-wheel-bytes").unwrap();
+    std::fs::write(&engine_wheel_path, b"engine-wheel-bytes").unwrap();
+    let (endpoint, state, handle) = start_stub_server().await;
+    let app = app_with_runtime(&endpoint, &config_wheel_path, &engine_wheel_path);
+
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/runtime/mcp")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"runPythonCodeInRemoteEnvironment","arguments":{"pythonCode":"print('hello')"}}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = json_body(response).await;
+        assert_eq!(
+            payload["result"]["structuredContent"]["stdout"],
+            "python-ok"
+        );
+    }
+
+    let state = state.lock().unwrap();
+    assert_eq!(state.mcp_python_launch_calls, 1);
+    assert_eq!(state.mcp_python_calls, 2);
 
     handle.abort();
 }
