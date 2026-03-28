@@ -722,6 +722,8 @@ impl AzureSessionPoolBackend {
             .client
             .post(url)
             .bearer_auth(&token)
+            .header(reqwest::header::CONTENT_LENGTH, "0")
+            .body(Vec::new())
             .send()
             .await
             .map_err(|error| {
