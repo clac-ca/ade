@@ -29,10 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
-      attestations: write
-      artifact-metadata: write
       contents: read
-      id-token: write
       packages: write
     outputs:
       release_candidate_image: ${{ steps.release_candidate_ref.outputs.release_candidate_image }}
@@ -155,14 +152,6 @@ jobs:
         id: release_candidate_ref
         run: |
           echo "release_candidate_image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}" >> "${GITHUB_OUTPUT}"
-
-      - name: Generate artifact attestation
-        if: github.event_name == 'push'
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
 
   acceptance_stage:
     name: Acceptance Stage
