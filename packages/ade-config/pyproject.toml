@@ -1,17 +1,26 @@
 [project]
 name = "ade-config"
 version = "0.1.0"
-description = "Installed ADE business package and CLI"
+description = "Installed ADE business rules package"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["ade-engine==0.1.0", "typer>=0.24,<0.25"]
+dependencies = ["ade-engine==0.1.0"]
 
-[project.scripts]
-ade = "ade_config.cli:app"
+[dependency-groups]
+test = ["pytest"]
+lint = ["ruff"]
+dev = [{ include-group = "test" }, { include-group = "lint" }]
 
 # Local in-repo development uses the adjacent ade-engine source in editable mode.
 [tool.uv.sources]
 ade-engine = { path = "../ade-engine", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]
+
+[tool.ruff]
+target-version = "py312"
 
 [build-system]
 requires = ["uv_build>=0.9.28,<0.12.0"]

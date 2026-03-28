@@ -32,8 +32,12 @@ pnpm dev --port 8100
 pnpm dev --no-open
 pnpm typecheck
 pnpm lint
+pnpm lint:python
 pnpm format
+pnpm format:python
+pnpm format:python:check
 pnpm test
+pnpm test:python
 pnpm test:unit
 pnpm clean
 ```
@@ -83,16 +87,17 @@ pnpm test:acceptance --image ghcr.io/example/ade:test --port 4101
 
 - `apps/ade-web` - React web app
 - `apps/ade-api` - Axum API and production web host
-- `packages/ade-config` - installed product package and `ade` CLI
-- `packages/ade-engine` - extraction runtime library used by `ade-config`
+- `packages/ade-config` - installed business rules package
+- `packages/ade-engine` - runtime library and `ade` CLI used by `ade-config`
 - `infra/` - Azure infrastructure definitions
 - `scripts/` - root development, build, acceptance, and deployment entrypoints
 
 ## Further Docs
 
 - [docs/developer-commands.md](docs/developer-commands.md) - local development commands and defaults
+- [docs/python-packages.md](docs/python-packages.md) - Python package structure, commands, and authoring conventions
 - [docs/runtime-config.md](docs/runtime-config.md) - application runtime configuration
 - [docs/release-deployment.md](docs/release-deployment.md) - release pipeline overview
 - [infra/README.md](infra/README.md) - Azure bootstrap and production infrastructure
-- [packages/ade-config/README.md](packages/ade-config/README.md) - `ade-config` package and `ade` CLI
-- [packages/ade-engine/README.md](packages/ade-engine/README.md) - `ade-engine` runtime package
+- [packages/ade-config/README.md](packages/ade-config/README.md) - `ade-config` business rules package
+- [packages/ade-engine/README.md](packages/ade-engine/README.md) - `ade-engine` runtime package and `ade` CLI

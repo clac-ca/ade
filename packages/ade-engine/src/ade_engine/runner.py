@@ -2,16 +2,18 @@
 
 from pathlib import Path
 
-from ade_engine.types import AdeConfig
+from ade_engine.config import EngineConfig
 
 
-def run(*, config: AdeConfig, input_path: Path, output_dir: Path) -> None:
+def run(*, config: EngineConfig, input_path: Path, output_dir: Path) -> None:
     """Accept the installed config package and stop at the parsing boundary."""
 
     if not input_path.exists():
         raise NotImplementedError(f"Input path does not exist: '{input_path}'.")
 
-    source_kind = "file" if input_path.is_file() else "directory" if input_path.is_dir() else None
+    source_kind = (
+        "file" if input_path.is_file() else "directory" if input_path.is_dir() else None
+    )
     if source_kind is None:
         raise NotImplementedError(
             f"Input path must be a file or directory: '{input_path}'.",
