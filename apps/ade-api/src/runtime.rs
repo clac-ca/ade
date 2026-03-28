@@ -336,7 +336,7 @@ impl RuntimeService {
         let api_key = self.mcp_api_key().await?;
         let request = self
             .backend
-            .mcp_request(self.backend.client(), url, api_key.as_deref(), request)
+            .mcp_request(self.backend.mcp_client(), url, api_key.as_deref(), request)
             .await?;
         parse_json_response(request, "call the MCP endpoint").await
     }
@@ -599,6 +599,13 @@ impl RuntimeBackend {
         }
     }
 
+    fn mcp_client(&self) -> &Client {
+        match self {
+            RuntimeBackend::Local(backend) => &backend.client,
+            RuntimeBackend::Azure(backend) => &backend.mcp_client,
+        }
+    }
+
     fn data_plane_api_version(&self) -> &str {
         match self {
             RuntimeBackend::Local(backend) => &backend.data_plane_api_version,
@@ -686,6 +693,7 @@ struct AzureSessionPoolBackend {
     client: Client,
     data_plane_api_version: String,
     management_endpoint: String,
+    mcp_client: Client,
     resource_id: String,
 }
 
@@ -697,6 +705,12 @@ impl AzureSessionPoolBackend {
             client: Client::new(),
             data_plane_api_version: DEFAULT_AZURE_SESSION_API_VERSION.to_string(),
             management_endpoint: DEFAULT_AZURE_MANAGEMENT_ENDPOINT.to_string(),
+            mcp_client: Client::builder().http1_only().build().map_err(|error| {
+                AppError::config_with_source(
+                    "Failed to create the HTTP/1-only MCP client.".to_string(),
+                    error,
+                )
+            })?,
             resource_id: read_required_string(env, "ADE_SESSION_POOL_RESOURCE_ID")?,
         })
     }
