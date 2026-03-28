@@ -43,6 +43,8 @@ def test_process_command_passes_the_installed_config_to_the_engine(
         "input_path": input_path,
         "output_dir": output_dir,
     }
+    assert cli.CONFIG.name == "ade-config"
+    assert sorted(cli.CONFIG.fields) == ["email", "full_name"]
 
 
 def test_process_command_returns_exit_code_one_for_engine_boundaries(

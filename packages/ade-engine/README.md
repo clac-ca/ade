@@ -3,14 +3,15 @@
 `ade-engine` is ADE's runtime library.
 
 It owns the execution boundary between the installed business package and the
-file-processing engine. The installed product is `ade-config`, which depends on
-this package and calls `ade_engine.run(...)`.
+file-processing engine. It also loads installed config packages by discovering
+rule modules in `fields/`, `row_detectors/`, and `hooks/`, then calling each
+module's `register(config)` function.
 
 This scaffold is intentionally minimal. It defines a tiny typed handoff
-contract and a `run(...)` entrypoint, but it does not implement parsing yet.
-The runtime currently validates that the input path exists and identifies
-whether it is a file or directory before stopping at the deliberate
-not-implemented boundary.
+contract, a `load_config(...)` helper, and a `run(...)` entrypoint, but it does
+not implement parsing yet. The runtime currently validates that the input path
+exists and identifies whether it is a file or directory before stopping at the
+deliberate not-implemented boundary.
 
 `ade-engine` is not the user-facing CLI package. Users install `ade-config` and
 run `ade`.
