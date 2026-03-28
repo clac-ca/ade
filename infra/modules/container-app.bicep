@@ -12,6 +12,7 @@ param allowInsecure bool = false
 ])
 param transport string = 'auto'
 param env array = []
+param secrets array = []
 param probes array = []
 param cpu string = '0.25'
 param memory string = '0.5Gi'
@@ -42,6 +43,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         ]
         transport: transport
       }
+      secrets: secrets
     }
     template: {
       containers: [

@@ -179,7 +179,7 @@ module app 'modules/container-app.bicep' = {
       }
       {
         name: 'ADE_RUNTIME_SESSION_SECRET'
-        value: runtimeSessionSecret
+        secretRef: 'ade-runtime-session-secret'
       }
       {
         name: 'ADE_SESSION_POOL_MANAGEMENT_ENDPOINT'
@@ -242,6 +242,12 @@ module app 'modules/container-app.bicep' = {
     memory: appMemory
     minReplicas: appMinReplicas
     name: appName
+    secrets: [
+      {
+        name: 'ade-runtime-session-secret'
+        value: runtimeSessionSecret
+      }
+    ]
     tags: mergedTags
   }
 }
