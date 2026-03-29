@@ -537,7 +537,16 @@ fn resolve_wheel_from_path(
         )));
     }
 
-    let filename = wheel_filename(&wheel_path)?;
+    let resolved_wheel_path = fs::canonicalize(&wheel_path).map_err(|error| {
+        AppError::io_with_source(
+            format!(
+                "Failed to resolve the Python package wheel from '{}'.",
+                wheel_path.display()
+            ),
+            error,
+        )
+    })?;
+    let filename = wheel_filename(&resolved_wheel_path)?;
     let version = parse_wheel_version(&filename, wheel_prefix).ok_or_else(|| {
         AppError::config(format!(
             "Unable to determine the package version from '{}'.",
