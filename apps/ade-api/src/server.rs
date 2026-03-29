@@ -20,7 +20,7 @@ use crate::{
     db::{Database, DatabaseProbe},
     error::AppError,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
-    router::{AppState, create_app, normalize_app},
+    router::{AppState, create_app},
     session::SessionService,
 };
 
@@ -96,7 +96,7 @@ impl ServerInstance {
             })?;
 
         let shutdown = Arc::new(Notify::new());
-        let server = axum::serve(listener, Shared::new(normalize_app(self.app.clone())))
+        let server = axum::serve(listener, Shared::new(self.app.clone()))
             .with_graceful_shutdown(wait_for_shutdown(Arc::clone(&shutdown)));
         let readiness = self.readiness.clone();
         let database_for_probe = Arc::clone(&database);

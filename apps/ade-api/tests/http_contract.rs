@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 use ade_api::{
     config::SERVICE_VERSION,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
-    router::{AppState, create_app, normalize_app},
+    router::{AppState, create_app},
     session::SessionService,
     unix_time_ms,
 };
@@ -84,14 +84,14 @@ fn app_state(readiness: ReadinessController) -> AppState {
 
 #[tokio::test]
 async fn health_route_reports_ok() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions {
             database_ok: Some(true),
             last_checked_at: Some(unix_time_ms()),
             phase: Some(ReadinessPhase::Ready),
             ..CreateReadinessControllerOptions::default()
         },
-    ))));
+    )));
 
     let response = app.oneshot(request("/api/healthz")).await.unwrap();
 
@@ -107,9 +107,9 @@ async fn health_route_reports_ok() {
 
 #[tokio::test]
 async fn api_root_works_without_trailing_slash() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app.oneshot(request("/api")).await.unwrap();
 
@@ -126,9 +126,9 @@ async fn api_root_works_without_trailing_slash() {
 
 #[tokio::test]
 async fn api_root_works_with_trailing_slash() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app.oneshot(request("/api/")).await.unwrap();
 
@@ -149,7 +149,7 @@ async fn ready_route_reflects_readiness_state() {
         phase: Some(ReadinessPhase::Starting),
         ..CreateReadinessControllerOptions::default()
     });
-    let app = normalize_app(create_app(app_state(readiness.clone())));
+    let app = create_app(app_state(readiness.clone()));
 
     let not_ready = app.clone().oneshot(request("/api/readyz")).await.unwrap();
     assert_eq!(not_ready.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -177,9 +177,9 @@ async fn ready_route_reflects_readiness_state() {
 
 #[tokio::test]
 async fn version_route_exposes_minimal_runtime_metadata() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app.oneshot(request("/api/version")).await.unwrap();
     let payload = json_body(response).await;
@@ -191,9 +191,9 @@ async fn version_route_exposes_minimal_runtime_metadata() {
 
 #[tokio::test]
 async fn openapi_route_serves_generated_spec() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app.oneshot(request("/api/openapi.json")).await.unwrap();
     let payload = json_body(response).await;
@@ -208,13 +208,26 @@ async fn openapi_route_serves_generated_spec() {
 
 #[tokio::test]
 async fn docs_route_serves_swagger_ui() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let redirect = app.clone().oneshot(request("/api/docs")).await.unwrap();
     assert_eq!(redirect.status(), StatusCode::SEE_OTHER);
     assert_eq!(redirect.headers().get("location").unwrap(), "/api/docs/");
+
+    let response = app.clone().oneshot(request("/api/docs/")).await.unwrap();
+    let status = response.status();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Swagger UI"));
 
     let response = app.oneshot(request("/api/docs/index.html")).await.unwrap();
     let status = response.status();
@@ -232,9 +245,9 @@ async fn docs_route_serves_swagger_ui() {
 
 #[tokio::test]
 async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app.oneshot(request("/documents/example")).await.unwrap();
     let html = String::from_utf8(
@@ -250,9 +263,9 @@ async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
 
 #[tokio::test]
 async fn head_requests_to_frontend_routes_preserve_head_semantics() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app
         .oneshot(request_with_method("/documents/example", Method::HEAD))
@@ -265,9 +278,9 @@ async fn head_requests_to_frontend_routes_preserve_head_semantics() {
 
 #[tokio::test]
 async fn unknown_api_routes_return_json_404() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app.oneshot(request("/api/unknown")).await.unwrap();
 
@@ -284,9 +297,9 @@ async fn unknown_api_routes_return_json_404() {
 
 #[tokio::test]
 async fn missing_assets_stay_not_found() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app.oneshot(request("/assets/missing.js")).await.unwrap();
 
@@ -295,9 +308,9 @@ async fn missing_assets_stay_not_found() {
 
 #[tokio::test]
 async fn head_requests_to_missing_assets_stay_not_found() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app
         .oneshot(request_with_method("/assets/missing.js", Method::HEAD))
@@ -309,9 +322,9 @@ async fn head_requests_to_missing_assets_stay_not_found() {
 
 #[tokio::test]
 async fn root_serves_application_shell_when_web_root_exists() {
-    let app = normalize_app(create_app(app_state(ReadinessController::new(
+    let app = create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
-    ))));
+    )));
 
     let response = app.oneshot(request("/")).await.unwrap();
     let html = String::from_utf8(

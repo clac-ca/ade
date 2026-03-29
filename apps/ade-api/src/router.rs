@@ -8,10 +8,8 @@ use axum::{
     response::Response,
     routing::get,
 };
-use tower::Layer;
 use tower::util::ServiceExt;
 use tower_http::{
-    normalize_path::{NormalizePath, NormalizePathLayer},
     services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
@@ -59,16 +57,12 @@ pub fn create_app(state: AppState) -> Router {
         .fallback(api_not_found);
 
     Router::new()
+        .route("/api/", get(system::api_root))
         .nest("/api", api_router)
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi))
         .fallback(spa_or_not_found)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
-}
-
-#[must_use]
-pub fn normalize_app(app: Router) -> NormalizePath<Router> {
-    NormalizePathLayer::trim_trailing_slash().layer(app)
 }
 
 async fn api_not_found(original_uri: OriginalUri, request: AxumRequest) -> AppError {
