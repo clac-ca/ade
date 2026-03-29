@@ -28,13 +28,17 @@ The running API is the trusted component. It chooses blob paths, validates scope
 
 The runtime storage settings are:
 
-| Name                   | Required | Used by | Notes                                                                                                   |
-| ---------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------- |
-| `ADE_BLOB_ACCOUNT_URL` | Yes      | API     | Blob service endpoint for direct browser upload and session-side run input/output access.               |
-| `ADE_BLOB_CONTAINER`   | Yes      | API     | Private blob container that stores scoped uploads and run outputs.                                      |
-| `ADE_ARTIFACTS_ROOT`   | Local    | API     | Filesystem fallback for local development and tests when blob env vars are omitted.                     |
+| Name                           | Required | Used by | Notes                                                                                                   |
+| ------------------------------ | -------- | ------- | ------------------------------------------------------------------------------------------------------- |
+| `ADE_BLOB_ACCOUNT_URL`         | Yes      | API     | Blob service endpoint used by the API for container management and durable artifact reads and writes.   |
+| `ADE_BLOB_CONTAINER`           | Yes      | API     | Private blob container that stores scoped uploads and run outputs.                                      |
+| `ADE_BLOB_PUBLIC_ACCOUNT_URL`  | No       | API     | Optional browser-facing blob endpoint used when upload SAS URLs must differ from the API/runtime host.  |
+| `ADE_BLOB_RUNTIME_ACCOUNT_URL` | No       | API     | Optional session-facing blob endpoint used when the session runtime needs a different reachable host.    |
+| `ADE_BLOB_CORS_ALLOWED_ORIGINS` | No      | API     | Comma-separated browser origins to allow on the blob service. Used for managed local Azurite setup.     |
+| `ADE_BLOB_ACCOUNT_KEY`         | Local    | API     | Shared key used only for local Azurite management and local exact-blob SAS minting.                     |
+| `ADE_ARTIFACTS_ROOT`           | Fallback | API     | Filesystem fallback for internal tests or emergency local use when blob settings are intentionally omitted. |
 
-Local development and tests use `ADE_ARTIFACTS_ROOT` when `ADE_BLOB_ACCOUNT_URL` and `ADE_BLOB_CONTAINER` are not configured together.
+`pnpm dev`, `pnpm start`, and managed `pnpm test:acceptance` do not use `ADE_ARTIFACTS_ROOT` in the normal path. They provision local Azurite automatically and inject the blob settings instead.
 
 Deployed environments use Azure Blob Storage with user delegation SAS:
 
@@ -43,6 +47,8 @@ Deployed environments use Azure Blob Storage with user delegation SAS:
 - session output grants are exact-blob create/write URLs
 - the browser and session never receive container-wide credentials
 - the API does not proxy upload or output bytes
+
+Local development uses Azurite instead of Azure Blob Storage. Azurite does not support user delegation SAS, so ADE uses the Azurite shared key only for the local emulator path. The browser and session still receive exact-blob SAS URLs, and the API still owns path selection and container setup.
 
 ## Hosted Session Config
 
@@ -102,14 +108,25 @@ The server listen address is not environment-driven.
 
 `pnpm dev` is host-based and always uses local infrastructure:
 
+- local Azurite Blob Storage on `http://127.0.0.1:10000/devstoreaccount1`
 - local SQL on `127.0.0.1:8013`
 - local session-pool emulator on `http://127.0.0.1:8014`
 - freshly packaged local `ade-engine` wheel plus an injected `ADE_CONFIG_TARGETS` mapping for:
   - `workspace-a/config-v1`
   - `workspace-b/config-v2`
 
+Managed local blob settings are injected as:
+
+- `ADE_BLOB_ACCOUNT_URL=http://127.0.0.1:10000/devstoreaccount1`
+- `ADE_BLOB_CONTAINER=documents`
+- `ADE_BLOB_ACCOUNT_KEY=<Azurite devstoreaccount1 key>`
+- `ADE_BLOB_PUBLIC_ACCOUNT_URL=http://127.0.0.1:10000/devstoreaccount1`
+- `ADE_BLOB_RUNTIME_ACCOUNT_URL=http://host.docker.internal:10000/devstoreaccount1`
+- `ADE_BLOB_CORS_ALLOWED_ORIGINS=http://127.0.0.1:<web-port>,http://localhost:<web-port>`
+
 `pnpm start` and `pnpm test:acceptance` load `.env` when present.
 
+- If `ADE_BLOB_ACCOUNT_URL` is absent, they start local Azurite and inject the same managed local blob settings, except `ADE_BLOB_ACCOUNT_URL` is set to `http://host.docker.internal:10000/devstoreaccount1` so the app container can reach the emulator.
 - If `AZURE_SQL_CONNECTIONSTRING` is absent, they start local SQL and synthesize the container-safe connection string.
 - If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is absent, they start the local session-pool emulator and inject:
   - `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT=http://host.docker.internal:8014`
@@ -118,7 +135,7 @@ The server listen address is not environment-driven.
   - `ADE_CONFIG_TARGETS` mapping both sample scopes to `/app/python/ade_config.whl`
 - If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they require `ADE_SESSION_SECRET`, `ADE_ENGINE_WHEEL_PATH`, and `ADE_CONFIG_TARGETS` to already be configured in `.env` and pass them through unchanged.
 
-Deployed environments follow the same pattern. Bicep injects one shared session-pool endpoint plus an explicit `ADE_CONFIG_TARGETS` JSON string into the app container. That keeps config artifact resolution request-scoped without adding a separate registry service.
+Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, one shared session-pool endpoint, and an explicit `ADE_CONFIG_TARGETS` JSON string in the app container. The running app gets Blob Storage RBAC so it can mint user delegation SAS, but the session runtime does not receive broad storage access.
 
 ## Public Runtime API
 
@@ -170,7 +187,7 @@ The product flow is:
 
 1. Request upload instructions through `POST /uploads`.
 2. Upload the file directly to Blob Storage with the returned `PUT` URL and headers.
-2. Run ADE against that existing session file through:
+3. Run ADE against that uploaded blob-backed file through:
 
 ```json
 {
@@ -179,9 +196,9 @@ The product flow is:
 }
 ```
 
-3. Poll `GET /runs/{runId}` for current state or reconnect safety.
-4. Stream logs and lifecycle changes from `GET /runs/{runId}/events` over SSE.
-5. Read the final `outputPath` from the run resource when the run succeeds.
+4. Poll `GET /runs/{runId}` for current state or reconnect safety.
+5. Stream logs and lifecycle changes from `GET /runs/{runId}/events` over SSE.
+6. Read the final `outputPath` from the run resource when the run succeeds.
 
 Public `/files` and `/executions` routes are removed. The session-pool `/files` and `/executions` endpoints remain internal implementation details for wheel staging and Python bootstrap execution.
 

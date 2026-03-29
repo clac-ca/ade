@@ -1,5 +1,9 @@
 import process from "node:process";
-import { createLocalContainerSqlConnectionString } from "./dev-config";
+import {
+  createLocalContainerAppUrl,
+  createLocalContainerSqlConnectionString,
+} from "./dev-config";
+import { createContainerBlobEnv } from "./blob-env";
 import { createContainerSessionPoolEnv } from "./session-pool-env";
 import type { Logger } from "./runtime";
 import { createMigrationRunArgs, createContainerRunArgs } from "./start";
@@ -81,16 +85,28 @@ async function startLocalRuntime(options: {
   await ensureImageAvailable(options.image);
 
   const usesManagedLocalSql = options.sqlConnectionString === undefined;
+  const { usesManagedLocalBlobStorage, values: blobEnv } = createContainerBlobEnv(
+    options.hostPort,
+  );
   const { usesManagedLocalSessionPool, values: sessionPoolEnv } =
-    createContainerSessionPoolEnv();
+    createContainerSessionPoolEnv(process.env, {
+      appUrl: createLocalContainerAppUrl(options.hostPort),
+    });
   const effectiveSqlConnectionString =
     options.sqlConnectionString ?? createLocalContainerSqlConnectionString();
 
-  if (usesManagedLocalSql || usesManagedLocalSessionPool) {
+  if (
+    usesManagedLocalSql ||
+    usesManagedLocalSessionPool ||
+    usesManagedLocalBlobStorage
+  ) {
+    const managedDependencies = [
+      ...(usesManagedLocalBlobStorage ? ["Blob Storage"] : []),
+      ...(usesManagedLocalSql ? ["SQL"] : []),
+      ...(usesManagedLocalSessionPool ? ["session pool"] : []),
+    ];
     options.logger?.info(
-      usesManagedLocalSql
-        ? "Starting managed local SQL and session pool."
-        : "Starting the managed local session pool.",
+      `Starting managed local ${managedDependencies.join(", ")}.`,
     );
     await upLocalDependencies();
   }
@@ -113,12 +129,13 @@ async function startLocalRuntime(options: {
       dockerCommand,
       createContainerRunArgs({
         containerName: options.containerName,
-        envNames: Object.keys(sessionPoolEnv),
+        envNames: [...Object.keys(sessionPoolEnv), ...Object.keys(blobEnv)],
         hostPort: options.hostPort,
         image: options.image,
       }),
       {
         env: {
+          ...blobEnv,
           ...sessionPoolEnv,
           [sqlConnectionStringName]: effectiveSqlConnectionString,
         },
@@ -137,7 +154,11 @@ async function startLocalRuntime(options: {
           sections.push(appLogs);
         }
 
-        if (usesManagedLocalSql || usesManagedLocalSessionPool) {
+        if (
+          usesManagedLocalSql ||
+          usesManagedLocalSessionPool ||
+          usesManagedLocalBlobStorage
+        ) {
           const dependencyLogs = await readLocalDependencyLogs().catch(
             () => "",
           );
@@ -154,7 +175,11 @@ async function startLocalRuntime(options: {
       stop: async () => {
         await removeContainer(options.containerName);
 
-        if (usesManagedLocalSql || usesManagedLocalSessionPool) {
+        if (
+          usesManagedLocalSql ||
+          usesManagedLocalSessionPool ||
+          usesManagedLocalBlobStorage
+        ) {
           await downLocalDependencies({
             stdio: "ignore",
           }).catch(() => undefined);
@@ -162,7 +187,11 @@ async function startLocalRuntime(options: {
       },
     };
   } catch (error) {
-    if (usesManagedLocalSql || usesManagedLocalSessionPool) {
+    if (
+      usesManagedLocalSql ||
+      usesManagedLocalSessionPool ||
+      usesManagedLocalBlobStorage
+    ) {
       await downLocalDependencies({
         stdio: "ignore",
       }).catch(() => undefined);

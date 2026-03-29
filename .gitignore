@@ -11,8 +11,10 @@ pnpm-debug.log*
 apps/ade-api/.package/
 apps/ade-api/target/
 .buildx-cache/
+.tmp-azurite/
 infra/*.json
 infra/environments/*.json
+apps/ade-api/.ade-artifacts/
 
 __pycache__/
 .pytest_cache/

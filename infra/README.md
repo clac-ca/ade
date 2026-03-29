@@ -1,7 +1,7 @@
 # ADE Infrastructure
 
 ADE uses one Azure template: [`main.bicep`](main.bicep).
-Local laptop and CI dependency services live separately in [`local/compose.yaml`](local/compose.yaml); that file is not part of the Azure deployment model.
+Local laptop and CI dependency services live separately in [`local/compose.yaml`](local/compose.yaml); that file is not part of the Azure deployment model, but it mirrors the production storage, SQL, and session-pool split with Azurite, SQL Server, and the local session-pool emulator.
 
 The template deploys:
 
@@ -59,6 +59,16 @@ Lock these assumptions in:
 - Blob Storage CORS allows only the ADE app origin and only the headers and methods required for browser PUT/GET/HEAD/OPTIONS traffic
 - the Azure SQL database uses the General Purpose serverless compute tier with auto-pause enabled
 - the shared Azure session pool uses the built-in `PythonLTS` container type
+
+The storage account is intentionally boring:
+
+- `StorageV2` with the Standard locally redundant SKU
+- TLS 1.2 minimum and HTTPS-only
+- no public blob access
+- shared-key auth disabled in Azure
+- one private `documents` container
+- blob CORS configured in Bicep for the ADE app origin only
+- RBAC grants that let the running app mint user delegation SAS without giving the session runtime broad storage permissions
 
 ## Prerequisites
 

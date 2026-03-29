@@ -1,7 +1,6 @@
 param accountName string
 param blobContainerName string
 param corsAllowedOrigins array
-param virtualNetworkSubnetId string
 param location string
 param tags object = {}
 
@@ -17,16 +16,6 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2024-01-01' = {
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
     minimumTlsVersion: 'TLS1_2'
-    networkAcls: {
-      bypass: 'None'
-      defaultAction: 'Allow'
-      virtualNetworkRules: [
-        {
-          action: 'Allow'
-          id: virtualNetworkSubnetId
-        }
-      ]
-    }
     publicNetworkAccess: 'Enabled'
     supportsHttpsTrafficOnly: true
   }

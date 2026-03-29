@@ -1,12 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
 import process from "node:process";
 import {
   createLocalSqlConnectionString,
   localApiHost,
   localApiPort,
 } from "./lib/dev-config";
+import { createHostBlobEnv } from "./lib/blob-env";
 import { createHostSessionPoolEnv } from "./lib/session-pool-env";
 import { createConsoleLogger, formatError, runMain } from "./lib/runtime";
 import { runCommand, spawnCommand, waitForReady } from "./lib/shell";
@@ -16,6 +16,7 @@ const cargoCommand = process.platform === "win32" ? "cargo.exe" : "cargo";
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
+const storageServiceVersion = "2024-11-04";
 
 type UploadResponse = {
   filePath: string;
@@ -47,9 +48,47 @@ type RunDetailResponse = {
 };
 
 function apiEnv(): Record<string, string> {
+  const { values: blobEnv } = createHostBlobEnv();
   return {
-    ...createHostSessionPoolEnv(),
+    ...blobEnv,
+    ...createHostSessionPoolEnv({
+      appUrl: `http://host.docker.internal:${String(localApiPort)}`,
+    }),
     [sqlConnectionStringName]: createLocalSqlConnectionString(),
+  };
+}
+
+function hostBlobConfig() {
+  const { values } = createHostBlobEnv();
+  const accountKey = values["ADE_BLOB_ACCOUNT_KEY"];
+  const container = values["ADE_BLOB_CONTAINER"];
+  const configuredAccountUrl =
+    values["ADE_BLOB_PUBLIC_ACCOUNT_URL"] ?? values["ADE_BLOB_ACCOUNT_URL"];
+
+  if (
+    accountKey === undefined ||
+    container === undefined ||
+    configuredAccountUrl === undefined
+  ) {
+    throw new Error("Managed local Blob config was incomplete.");
+  }
+
+  const accountUrl = new URL(
+    configuredAccountUrl,
+  );
+  const accountName =
+    accountUrl.hostname === "127.0.0.1" || accountUrl.hostname === "localhost"
+      ? accountUrl.pathname.split("/").filter(Boolean)[0]
+      : accountUrl.hostname.split(".")[0];
+  if (accountName === undefined) {
+    throw new Error("Local Blob account URL did not include an account name.");
+  }
+
+  return {
+    accountKey,
+    accountName,
+    accountUrl,
+    container,
   };
 }
 
@@ -207,6 +246,65 @@ async function fetchRunEvents(
   return body;
 }
 
+function blobIso8601(value: Date): string {
+  return value.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function blobReadUrl(path: string): string {
+  const { accountKey, accountName, accountUrl, container } = hostBlobConfig();
+  const canonicalizedResource = `/blob/${accountName}/${container}/${path}`;
+  const start = blobIso8601(new Date(Date.now() - 5 * 60_000));
+  const expiry = blobIso8601(new Date(Date.now() + 60 * 60_000));
+  const stringToSign = [
+    "r",
+    start,
+    expiry,
+    canonicalizedResource,
+    "",
+    "",
+    "https,http",
+    storageServiceVersion,
+    "b",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+  ].join("\n");
+  const signature = createHmac("sha256", Buffer.from(accountKey, "base64"))
+    .update(stringToSign, "utf8")
+    .digest("base64");
+  const url = new URL(accountUrl.toString());
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/${container}/${path}`;
+  url.searchParams.set("sv", storageServiceVersion);
+  url.searchParams.set("sp", "r");
+  url.searchParams.set("sr", "b");
+  url.searchParams.set("st", start);
+  url.searchParams.set("se", expiry);
+  url.searchParams.set("spr", "https,http");
+  url.searchParams.set("sig", signature);
+  return url.toString();
+}
+
+async function fetchBlobBytes(path: string): Promise<Uint8Array> {
+  const response = await fetch(blobReadUrl(path));
+  if (!response.ok) {
+    throw new Error(
+      `Blob read failed with ${String(response.status)} ${response.statusText}: ${await response.text()}`,
+    );
+  }
+
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function parseSseIds(body: string): number[] {
+  return [...body.matchAll(/^id:\s*(\d+)$/gm)].map((match) =>
+    Number.parseInt(match[1] ?? "0", 10),
+  );
+}
+
 async function main(logger = createConsoleLogger()): Promise<void> {
   await runCommand(pnpmCommand, ["package:python"], {
     cwd: rootDir,
@@ -321,13 +419,11 @@ async function main(logger = createConsoleLogger()): Promise<void> {
       firstRun.runId,
       2,
     );
-    if (resumedEvents.includes("id: 1") || resumedEvents.includes("id: 2")) {
+    if (parseSseIds(resumedEvents).some((id) => id <= 2)) {
       throw new Error("Run SSE resume replay did not honor the requested sequence.");
     }
 
-    const firstOutputBytes = await readFile(
-      join(rootDir, ".ade-artifacts", firstDetail.outputPath),
-    );
+    const firstOutputBytes = await fetchBlobBytes(firstDetail.outputPath);
     if (firstOutputBytes.byteLength === 0) {
       throw new Error("First run output artifact was empty.");
     }

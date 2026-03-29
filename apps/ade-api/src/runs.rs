@@ -490,7 +490,7 @@ impl RunService {
         let expires_at = run_access_expiry(RUN_ACCESS_TTL_SECONDS);
         let upload = self
             .artifact_store
-            .create_upload_access(&file_path, request.content_type.as_deref(), expires_at)
+            .create_browser_upload_access(&file_path, request.content_type.as_deref(), expires_at)
             .await?;
 
         Ok(CreateUploadResponse {

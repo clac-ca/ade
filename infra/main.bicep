@@ -171,7 +171,6 @@ module storage 'modules/storage-account.bicep' = {
     ]
     location: location
     tags: mergedTags
-    virtualNetworkSubnetId: network.outputs.containerAppsSubnetId
   }
 }
 

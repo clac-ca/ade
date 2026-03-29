@@ -2,6 +2,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseDevArgs } from "./lib/args";
+import { createHostBlobEnv } from "./lib/blob-env";
 import { openBrowser } from "./lib/browser";
 import {
   createLocalSqlConnectionString,
@@ -69,8 +70,10 @@ async function main(logger = createConsoleLogger()): Promise<void> {
     cwd: rootDir,
   });
   const sessionEnv = createHostSessionPoolEnv();
+  const { values: blobEnv } = createHostBlobEnv();
   const apiEnv = {
     [sqlConnectionStringName]: createLocalSqlConnectionString(),
+    ...blobEnv,
     ...sessionEnv,
   };
   const detached = process.platform !== "win32";
