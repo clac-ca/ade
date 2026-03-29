@@ -87,12 +87,18 @@ describe("TerminalPocPage", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    const firstSocket = MockWebSocket.instances[0]!;
+    const firstSocket = MockWebSocket.instances[0];
     expect(firstSocket).toBeDefined();
+    if (!firstSocket) {
+      throw new Error("missing first socket");
+    }
 
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    const secondSocket = MockWebSocket.instances[1]!;
+    const secondSocket = MockWebSocket.instances[1];
     expect(secondSocket).toBeDefined();
+    if (!secondSocket) {
+      throw new Error("missing second socket");
+    }
 
     expect(
       screen.getByText("Connecting to the terminal bridge..."),
