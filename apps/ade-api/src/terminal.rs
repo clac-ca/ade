@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -35,6 +35,7 @@ static CHANNEL_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub struct TerminalService {
+    active_sessions: ActiveTerminalManager,
     app_url: Url,
     manager: PendingTerminalManager,
     session_secret: String,
@@ -62,6 +63,7 @@ impl TerminalService {
         }
 
         Ok(Self {
+            active_sessions: ActiveTerminalManager::default(),
             app_url: parsed_app_url,
             manager: PendingTerminalManager::default(),
             session_secret: session_service.session_secret().to_string(),
@@ -70,6 +72,21 @@ impl TerminalService {
     }
 
     pub(crate) async fn run_browser_terminal(&self, scope: Scope, mut browser_socket: WebSocket) {
+        let lease = match self.active_sessions.try_acquire(&scope) {
+            Ok(lease) => lease,
+            Err(_) => {
+                let _ = send_terminal_event(
+                    &mut browser_socket,
+                    TerminalServerMessage::error(
+                        "A terminal session for this workspace is still shutting down. Retry in a few seconds.".to_string(),
+                    ),
+                )
+                .await;
+                let _ = browser_socket.send(Message::Close(None)).await;
+                return;
+            }
+        };
+
         let pending = self.create_pending_terminal();
         let bridge_url = match self.build_bridge_url(&pending.channel_id, &pending.token) {
             Ok(url) => url,
@@ -115,11 +132,15 @@ impl TerminalService {
             )
             .await
         {
-            Some(socket) => socket,
-            None => return,
+            TerminalPhase::Continue(socket) => socket,
+            TerminalPhase::AwaitExecution => {
+                spawn_execution_cleanup(execution_task, lease);
+                return;
+            }
+            TerminalPhase::Finished => return,
         };
 
-        if !self
+        match self
             .wait_for_ready_message(
                 &mut browser_socket,
                 &mut bridge_socket,
@@ -128,10 +149,15 @@ impl TerminalService {
             )
             .await
         {
-            return;
+            TerminalPhase::Continue(()) => {}
+            TerminalPhase::AwaitExecution => {
+                spawn_execution_cleanup(execution_task, lease);
+                return;
+            }
+            TerminalPhase::Finished => return,
         }
 
-        self.relay_terminal_session(browser_socket, bridge_socket, execution_task)
+        self.relay_terminal_session(browser_socket, bridge_socket, execution_task, lease)
             .await;
     }
 
@@ -197,7 +223,7 @@ impl TerminalService {
         browser_socket: &mut WebSocket,
         execution_task: &mut JoinHandle<Result<PythonExecution, AppError>>,
         startup_deadline: Instant,
-    ) -> Option<WebSocket> {
+    ) -> TerminalPhase<WebSocket> {
         let startup_timeout = tokio::time::sleep_until(startup_deadline);
         tokio::pin!(startup_timeout);
         let bridge_rx = pending.bridge_rx;
@@ -207,7 +233,7 @@ impl TerminalService {
             tokio::select! {
                 bridge_result = &mut bridge_rx => {
                     return match bridge_result {
-                        Ok(socket) => Some(socket),
+                        Ok(socket) => TerminalPhase::Continue(socket),
                         Err(_) => {
                             let _ = send_terminal_event(
                                 browser_socket,
@@ -216,7 +242,7 @@ impl TerminalService {
                                 ),
                             ).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
-                            None
+                            TerminalPhase::AwaitExecution
                         }
                     };
                 }
@@ -225,15 +251,13 @@ impl TerminalService {
                         BrowserStartupOutcome::Ignore => {}
                         BrowserStartupOutcome::Disconnect => {
                             self.manager.cancel(&pending.channel_id);
-                            execution_task.abort();
-                            return None;
+                            return TerminalPhase::AwaitExecution;
                         }
                         BrowserStartupOutcome::Error(message) => {
                             self.manager.cancel(&pending.channel_id);
-                            execution_task.abort();
                             let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(message)).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
-                            return None;
+                            return TerminalPhase::AwaitExecution;
                         }
                     }
                 }
@@ -242,11 +266,10 @@ impl TerminalService {
                     let message = execution_failure_message(join_execution_result(result));
                     let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(message)).await;
                     let _ = browser_socket.send(Message::Close(None)).await;
-                    return None;
+                    return TerminalPhase::Finished;
                 }
                 _ = &mut startup_timeout => {
                     self.manager.cancel(&pending.channel_id);
-                    execution_task.abort();
                     let _ = send_terminal_event(
                         browser_socket,
                         TerminalServerMessage::error(
@@ -255,7 +278,7 @@ impl TerminalService {
                     ).await;
                     let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
                     let _ = browser_socket.send(Message::Close(None)).await;
-                    return None;
+                    return TerminalPhase::AwaitExecution;
                 }
             }
         }
@@ -267,7 +290,7 @@ impl TerminalService {
         bridge_socket: &mut WebSocket,
         execution_task: &mut JoinHandle<Result<PythonExecution, AppError>>,
         startup_deadline: Instant,
-    ) -> bool {
+    ) -> TerminalPhase<()> {
         let startup_timeout = tokio::time::sleep_until(startup_deadline);
         tokio::pin!(startup_timeout);
 
@@ -281,9 +304,9 @@ impl TerminalService {
                                 Ok(TerminalServerMessage::Ready) => {
                                     if browser_socket.send(Message::Text(raw.into())).await.is_err() {
                                         let _ = send_close_message(bridge_socket).await;
-                                        return false;
+                                        return TerminalPhase::AwaitExecution;
                                     }
-                                    return true;
+                                    return TerminalPhase::Continue(());
                                 }
                                 Ok(_) => {
                                     let _ = send_terminal_event(
@@ -294,13 +317,13 @@ impl TerminalService {
                                     ).await;
                                     let _ = send_close_message(bridge_socket).await;
                                     let _ = browser_socket.send(Message::Close(None)).await;
-                                    return false;
+                                    return TerminalPhase::AwaitExecution;
                                 }
                                 Err(error) => {
                                     let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(error.to_string())).await;
                                     let _ = send_close_message(bridge_socket).await;
                                     let _ = browser_socket.send(Message::Close(None)).await;
-                                    return false;
+                                    return TerminalPhase::AwaitExecution;
                                 }
                             }
                         }
@@ -313,13 +336,13 @@ impl TerminalService {
                             ).await;
                             let _ = send_close_message(bridge_socket).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
-                            return false;
+                            return TerminalPhase::AwaitExecution;
                         }
                         Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
                         Some(Ok(Message::Close(_))) | None => {
                             let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
-                            return false;
+                            return TerminalPhase::AwaitExecution;
                         }
                         Some(Err(error)) => {
                             let _ = send_terminal_event(
@@ -328,7 +351,7 @@ impl TerminalService {
                             ).await;
                             let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
-                            return false;
+                            return TerminalPhase::AwaitExecution;
                         }
                     }
                 }
@@ -336,16 +359,14 @@ impl TerminalService {
                     match BrowserStartupOutcome::from_message(browser_message) {
                         BrowserStartupOutcome::Ignore => {}
                         BrowserStartupOutcome::Disconnect => {
-                            execution_task.abort();
                             let _ = send_close_message(bridge_socket).await;
-                            return false;
+                            return TerminalPhase::AwaitExecution;
                         }
                         BrowserStartupOutcome::Error(message) => {
-                            execution_task.abort();
                             let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(message)).await;
                             let _ = send_close_message(bridge_socket).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
-                            return false;
+                            return TerminalPhase::AwaitExecution;
                         }
                     }
                 }
@@ -355,10 +376,9 @@ impl TerminalService {
                     let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
                     let _ = send_close_message(bridge_socket).await;
                     let _ = browser_socket.send(Message::Close(None)).await;
-                    return false;
+                    return TerminalPhase::Finished;
                 }
                 _ = &mut startup_timeout => {
-                    execution_task.abort();
                     let _ = send_terminal_event(
                         browser_socket,
                         TerminalServerMessage::error(
@@ -368,7 +388,7 @@ impl TerminalService {
                     let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
                     let _ = send_close_message(bridge_socket).await;
                     let _ = browser_socket.send(Message::Close(None)).await;
-                    return false;
+                    return TerminalPhase::AwaitExecution;
                 }
             }
         }
@@ -379,10 +399,12 @@ impl TerminalService {
         mut browser_socket: WebSocket,
         mut bridge_socket: WebSocket,
         mut execution_task: JoinHandle<Result<PythonExecution, AppError>>,
+        lease: ActiveTerminalLease,
     ) {
         let session_timeout =
             tokio::time::sleep(Duration::from_secs(TERMINAL_EXECUTION_TIMEOUT_SECONDS));
         tokio::pin!(session_timeout);
+        let mut phase = TerminalPhase::AwaitExecution;
 
         loop {
             tokio::select! {
@@ -445,6 +467,7 @@ impl TerminalService {
                         let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::error(message)).await;
                         let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::exit(None)).await;
                         let _ = send_close_message(&mut bridge_socket).await;
+                        phase = TerminalPhase::Finished;
                         break;
                     }
                 }
@@ -463,7 +486,56 @@ impl TerminalService {
         }
 
         let _ = browser_socket.send(Message::Close(None)).await;
-        execution_task.abort();
+        match phase {
+            TerminalPhase::AwaitExecution => spawn_execution_cleanup(execution_task, lease),
+            TerminalPhase::Finished => {}
+            TerminalPhase::Continue(()) => {
+                unreachable!("terminal relay does not continue after exit")
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+struct ActiveTerminalManager {
+    inner: Arc<Mutex<HashSet<String>>>,
+}
+
+impl ActiveTerminalManager {
+    fn try_acquire(&self, scope: &Scope) -> Result<ActiveTerminalLease, ()> {
+        let key = terminal_scope_key(scope);
+        let mut active = self
+            .inner
+            .lock()
+            .expect("active terminal session lock poisoned");
+
+        if !active.insert(key.clone()) {
+            return Err(());
+        }
+
+        Ok(ActiveTerminalLease {
+            key,
+            manager: self.clone(),
+        })
+    }
+
+    fn release(&self, key: &str) {
+        let _ = self
+            .inner
+            .lock()
+            .expect("active terminal session lock poisoned")
+            .remove(key);
+    }
+}
+
+struct ActiveTerminalLease {
+    key: String,
+    manager: ActiveTerminalManager,
+}
+
+impl Drop for ActiveTerminalLease {
+    fn drop(&mut self) {
+        self.manager.release(&self.key);
     }
 }
 
@@ -551,6 +623,13 @@ impl BrowserStartupOutcome {
             Some(Err(error)) => Self::Error(format!("Browser websocket failed: {error}")),
         }
     }
+}
+
+#[derive(Debug)]
+enum TerminalPhase<T> {
+    AwaitExecution,
+    Continue(T),
+    Finished,
 }
 
 #[derive(Debug)]
@@ -744,6 +823,20 @@ fn spawn_terminal_execution(
             )
             .await
     })
+}
+
+fn spawn_execution_cleanup(
+    execution_task: JoinHandle<Result<PythonExecution, AppError>>,
+    lease: ActiveTerminalLease,
+) {
+    tokio::spawn(async move {
+        let _ = execution_task.await;
+        drop(lease);
+    });
+}
+
+fn terminal_scope_key(scope: &Scope) -> String {
+    format!("{}:{}", scope.workspace_id, scope.config_version_id)
 }
 
 fn join_execution_result(

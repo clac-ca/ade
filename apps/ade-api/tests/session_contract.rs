@@ -722,6 +722,51 @@ async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
 }
 
 #[tokio::test]
+async fn reconnect_while_previous_terminal_is_shutting_down_returns_clear_error() {
+    let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        auto_connect_terminal_bridge: false,
+        terminal_bridge_delay_ms: 0,
+        terminal_execution_delay_ms: 300,
+    })
+    .await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let terminal_url =
+        format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/terminal");
+    let (mut first_socket, _response) = connect_async(&terminal_url).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    first_socket.close(None).await.unwrap();
+
+    let (mut second_socket, _response) = connect_async(&terminal_url).await.unwrap();
+    let message = second_socket
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .into_text()
+        .unwrap();
+    assert_eq!(
+        message,
+        r#"{"type":"error","message":"A terminal session for this workspace is still shutting down. Retry in a few seconds."}"#
+    );
+
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
 async fn unsupported_execution_fields_are_rejected() {
     let (endpoint, _state, handle) = start_stub_server().await;
     let (_tempdir, config_v1, config_v2, engine) = create_wheels();
