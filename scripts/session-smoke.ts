@@ -1,5 +1,7 @@
-import process from "node:process";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import process from "node:process";
 import {
   createLocalSqlConnectionString,
   localApiHost,
@@ -15,20 +17,32 @@ const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
 
-type SessionFile = {
-  filename: string;
-  size: number;
+type UploadResponse = {
+  filePath: string;
+  upload: {
+    expiresAt: string;
+    headers: Record<string, string>;
+    method: string;
+    url: string;
+  };
+  uploadId: string;
 };
 
-type CommandExecutionResponse = {
-  durationMs: number;
-  exitCode: number;
-  stderr: string;
-  stdout: string;
+type RunCreatedResponse = {
+  eventsUrl: string;
+  inputPath: string;
+  outputPath: string | null;
+  runId: string;
+  status: string;
 };
 
-type RunResponse = {
-  outputPath: string;
+type RunDetailResponse = {
+  errorMessage?: string | null;
+  inputPath: string;
+  outputPath?: string | null;
+  phase?: string | null;
+  runId: string;
+  status: string;
   validationIssues: unknown[];
 };
 
@@ -39,22 +53,16 @@ function apiEnv(): Record<string, string> {
   };
 }
 
-function sessionBasePath(workspaceId: string, configVersionId: string): string {
+function scopeBasePath(workspaceId: string, configVersionId: string): string {
   return `/api/workspaces/${encodeURIComponent(workspaceId)}/configs/${encodeURIComponent(configVersionId)}`;
 }
 
-function encodeSessionFilePath(path: string): string {
-  return path
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
+function apiUrl(path: string): string {
+  return `http://${localApiHost}:${String(localApiPort)}${path}`;
 }
 
-async function jsonFetch(path: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(
-    `http://${localApiHost}:${String(localApiPort)}${path}`,
-    init,
-  );
+async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(apiUrl(path), init);
   const body = await response.text();
 
   if (!response.ok) {
@@ -63,7 +71,140 @@ async function jsonFetch(path: string, init?: RequestInit): Promise<unknown> {
     );
   }
 
-  return body === "" ? null : JSON.parse(body);
+  return JSON.parse(body) as T;
+}
+
+async function directUpload(
+  baseUrl: string,
+  upload: UploadResponse["upload"],
+  content: Uint8Array,
+): Promise<void> {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(upload.headers)) {
+    headers.set(name, value);
+  }
+
+  const target = new URL(upload.url, baseUrl).toString();
+  const response = await fetch(target, {
+    body: Buffer.from(content),
+    headers,
+    method: upload.method,
+  });
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Direct upload failed with ${String(response.status)} ${response.statusText}: ${body}`,
+    );
+  }
+}
+
+async function createUpload(
+  workspaceId: string,
+  configVersionId: string,
+  filename: string,
+  contentType: string,
+  content: Uint8Array,
+): Promise<UploadResponse> {
+  const response = await jsonFetch<UploadResponse>(
+    `${scopeBasePath(workspaceId, configVersionId)}/uploads`,
+    {
+      body: JSON.stringify({
+        contentType,
+        filename,
+        size: content.byteLength,
+      }),
+      headers: {
+        "content-type": "application/json",
+      },
+      method: "POST",
+    },
+  );
+  await directUpload(
+    apiUrl("/"),
+    response.upload,
+    content,
+  );
+  return response;
+}
+
+async function createRun(
+  workspaceId: string,
+  configVersionId: string,
+  inputPath: string,
+): Promise<RunCreatedResponse> {
+  const response = await fetch(
+    apiUrl(`${scopeBasePath(workspaceId, configVersionId)}/runs`),
+    {
+      body: JSON.stringify({
+        inputPath,
+      }),
+      headers: {
+        "content-type": "application/json",
+      },
+      method: "POST",
+    },
+  );
+  const body = await response.text();
+  if (response.status !== 202) {
+    throw new Error(
+      `Run creation failed with ${String(response.status)} ${response.statusText}: ${body}`,
+    );
+  }
+
+  return JSON.parse(body) as RunCreatedResponse;
+}
+
+async function waitForRun(
+  workspaceId: string,
+  configVersionId: string,
+  runId: string,
+): Promise<RunDetailResponse> {
+  const path = `${scopeBasePath(workspaceId, configVersionId)}/runs/${encodeURIComponent(runId)}`;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const detail = await jsonFetch<RunDetailResponse>(path);
+    if (detail.status === "succeeded") {
+      return detail;
+    }
+    if (detail.status === "failed" || detail.status === "cancelled") {
+      throw new Error(
+        `Run ${runId} finished with ${detail.status}: ${detail.errorMessage ?? "no error message"}`,
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(`Run ${runId} did not finish before the smoke timeout.`);
+}
+
+async function fetchRunEvents(
+  workspaceId: string,
+  configVersionId: string,
+  runId: string,
+  after?: number,
+): Promise<string> {
+  const url = new URL(
+    apiUrl(
+      `${scopeBasePath(workspaceId, configVersionId)}/runs/${encodeURIComponent(runId)}/events`,
+    ),
+  );
+  if (after !== undefined) {
+    url.searchParams.set("after", String(after));
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      accept: "text/event-stream",
+    },
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(
+      `Run events fetch failed with ${String(response.status)} ${response.statusText}: ${body}`,
+    );
+  }
+  return body;
 }
 
 async function main(logger = createConsoleLogger()): Promise<void> {
@@ -121,197 +262,121 @@ async function main(logger = createConsoleLogger()): Promise<void> {
       },
     );
 
-    const firstScope = sessionBasePath("workspace-a", "config-v1");
-    const secondScope = sessionBasePath("workspace-b", "config-v2");
-
-    const uploadForm = new FormData();
-    uploadForm.append(
-      "file",
-      new Blob(["hello from scope a"], { type: "text/plain" }),
-      "notes.txt",
-    );
-    const uploadedNotes = (await jsonFetch(`${firstScope}/files`, {
-      body: uploadForm,
-      method: "POST",
-    })) as SessionFile;
-    if (uploadedNotes.filename !== "notes.txt") {
-      throw new Error("Session file upload did not return the expected path.");
-    }
-
-    const firstFiles = (await jsonFetch(
-      `${firstScope}/files`,
-    )) as SessionFile[];
-    const firstFilenames = firstFiles.map((entry) => entry.filename);
-    if (!firstFilenames.includes(uploadedNotes.filename)) {
-      throw new Error("Session file upload did not appear in the first scope.");
-    }
-
-    const secondFiles = (await jsonFetch(
-      `${secondScope}/files`,
-    )) as SessionFile[];
-    if (
-      secondFiles.some((entry) => entry.filename === uploadedNotes.filename)
-    ) {
-      throw new Error("Session files leaked across workspace/config scopes.");
-    }
-
-    const commandExecution = (await jsonFetch(`${firstScope}/executions`, {
-      body: JSON.stringify({
-        shellCommand: "pwd",
-      }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    })) as CommandExecutionResponse;
-    const commandStdout = commandExecution.stdout;
-
-    if (commandExecution.exitCode !== 0 || commandStdout.trim() === "") {
-      throw new Error(
-        `Command execution failed: ${commandExecution.stderr || commandExecution.stdout || "unknown error"}`,
-      );
-    }
-
-    const sessionFileResponse = await fetch(
-      `http://${localApiHost}:${String(localApiPort)}${firstScope}/files/${encodeSessionFilePath(uploadedNotes.filename)}/content`,
-    );
-    const sessionFileText = await sessionFileResponse.text();
-    if (!sessionFileResponse.ok || sessionFileText !== "hello from scope a") {
-      throw new Error(
-        "Session file download did not return the uploaded content.",
-      );
-    }
-
-    const runUploadForm = new FormData();
-    runUploadForm.append(
-      "file",
-      new Blob(["name,email\nalice,alice@example.com\n"], { type: "text/csv" }),
-      "input.csv",
-    );
-    const uploadedRunInput = (await jsonFetch(`${firstScope}/files`, {
-      body: runUploadForm,
-      method: "POST",
-    })) as SessionFile;
-    const firstRun = (await jsonFetch(`${firstScope}/runs`, {
-      body: JSON.stringify({
-        inputPath: uploadedRunInput.filename,
-      }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    })) as RunResponse;
-
-    if (
-      !firstRun.outputPath.endsWith(".xlsx") ||
-      firstRun.validationIssues.length !== 0
-    ) {
-      throw new Error("ADE run did not return the expected result metadata.");
-    }
-
-    const firstWorkbook = await fetch(
-      `http://${localApiHost}:${String(localApiPort)}${firstScope}/files/${encodeSessionFilePath(firstRun.outputPath)}/content`,
-    );
-    const firstWorkbookBytes = await firstWorkbook.arrayBuffer();
-    if (!firstWorkbook.ok || firstWorkbookBytes.byteLength === 0) {
-      throw new Error(
-        "First run workbook download did not return any content.",
-      );
-    }
-
-    const secondRunUploadForm = new FormData();
-    secondRunUploadForm.append(
-      "file",
-      new Blob(["name,email\nbob,bob@example.com\n"], { type: "text/csv" }),
-      "input.csv",
-    );
-    const secondUploadedRunInput = (await jsonFetch(`${secondScope}/files`, {
-      body: secondRunUploadForm,
-      method: "POST",
-    })) as SessionFile;
-    const secondRun = (await jsonFetch(`${secondScope}/runs`, {
-      body: JSON.stringify({
-        inputPath: secondUploadedRunInput.filename,
-      }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    })) as RunResponse;
-
-    if (secondRun.outputPath === firstRun.outputPath) {
-      throw new Error("Parallel ADE runs reused the same output path.");
-    }
-
-    const isolatedFiles = (await jsonFetch(
-      `${secondScope}/files`,
-    )) as SessionFile[];
-    if (
-      isolatedFiles.some((entry) => entry.filename === uploadedNotes.filename)
-    ) {
-      throw new Error("Second scope can see files from the first scope.");
-    }
-
-    const overlappingUploadA = new FormData();
-    overlappingUploadA.append(
-      "file",
-      new Blob(["name,email\ncarol,carol@example.com\n"], { type: "text/csv" }),
+    const firstUpload = await createUpload(
+      "workspace-a",
+      "config-v1",
       "input-a.csv",
+      "text/csv",
+      new TextEncoder().encode("name,email\nalice,alice@example.com\n"),
     );
-    const overlappingUploadB = new FormData();
-    overlappingUploadB.append(
-      "file",
-      new Blob(["name,email\ndave,dave@example.com\n"], { type: "text/csv" }),
-      "input-b.csv",
-    );
-    const [uploadedA, uploadedB] = (await Promise.all([
-      jsonFetch(`${firstScope}/files`, {
-        body: overlappingUploadA,
-        method: "POST",
-      }),
-      jsonFetch(`${firstScope}/files`, {
-        body: overlappingUploadB,
-        method: "POST",
-      }),
-    ])) as [SessionFile, SessionFile];
-    const [overlapA, overlapB] = (await Promise.all([
-      jsonFetch(`${firstScope}/runs`, {
-        body: JSON.stringify({
-          inputPath: uploadedA.filename,
-        }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      }),
-      jsonFetch(`${firstScope}/runs`, {
-        body: JSON.stringify({
-          inputPath: uploadedB.filename,
-        }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      }),
-    ])) as [RunResponse, RunResponse];
-
-    if (overlapA.outputPath === overlapB.outputPath) {
-      throw new Error(
-        "Overlapping runs for the same scope reused the same output path.",
-      );
-    }
-
-    logger.info("Local session smoke test passed.");
-  } finally {
     if (
-      apiProcess &&
-      apiProcess.exitCode === null &&
-      apiProcess.signalCode === null
+      !firstUpload.filePath.startsWith(
+        "workspaces/workspace-a/configs/config-v1/uploads/upl_",
+      )
     ) {
-      apiProcess.kill("SIGINT");
+      throw new Error("First upload path was not scoped under workspace-a/config-v1.");
     }
 
-    await downLocalDependencies({
-      stdio: "ignore",
-    }).catch(() => undefined);
+    const firstRun = await createRun(
+      "workspace-a",
+      "config-v1",
+      firstUpload.filePath,
+    );
+    if (firstRun.status !== "pending") {
+      throw new Error("First run was not accepted in the pending state.");
+    }
+
+    const firstDetail = await waitForRun(
+      "workspace-a",
+      "config-v1",
+      firstRun.runId,
+    );
+    if (
+      firstDetail.outputPath === null ||
+      firstDetail.outputPath === undefined ||
+      !firstDetail.outputPath.endsWith("/normalized.xlsx")
+    ) {
+      throw new Error("First run did not persist the expected output path.");
+    }
+    if (firstDetail.validationIssues.length !== 0) {
+      throw new Error("First run returned unexpected validation issues.");
+    }
+
+    const firstEvents = await fetchRunEvents(
+      "workspace-a",
+      "config-v1",
+      firstRun.runId,
+    );
+    if (
+      !firstEvents.includes("event: run.created") ||
+      !firstEvents.includes("event: run.result") ||
+      !firstEvents.includes("event: run.completed")
+    ) {
+      throw new Error("First run SSE replay was missing expected events.");
+    }
+
+    const resumedEvents = await fetchRunEvents(
+      "workspace-a",
+      "config-v1",
+      firstRun.runId,
+      2,
+    );
+    if (resumedEvents.includes("id: 1") || resumedEvents.includes("id: 2")) {
+      throw new Error("Run SSE resume replay did not honor the requested sequence.");
+    }
+
+    const firstOutputBytes = await readFile(
+      join(rootDir, ".ade-artifacts", firstDetail.outputPath),
+    );
+    if (firstOutputBytes.byteLength === 0) {
+      throw new Error("First run output artifact was empty.");
+    }
+
+    const secondUpload = await createUpload(
+      "workspace-b",
+      "config-v2",
+      "input-b.csv",
+      "text/csv",
+      new TextEncoder().encode("name,email\nbob,bob@example.com\n"),
+    );
+    if (
+      !secondUpload.filePath.startsWith(
+        "workspaces/workspace-b/configs/config-v2/uploads/upl_",
+      )
+    ) {
+      throw new Error("Second upload path was not scoped under workspace-b/config-v2.");
+    }
+
+    const secondRun = await createRun(
+      "workspace-b",
+      "config-v2",
+      secondUpload.filePath,
+    );
+    const secondDetail = await waitForRun(
+      "workspace-b",
+      "config-v2",
+      secondRun.runId,
+    );
+    if (
+      firstDetail.outputPath === secondDetail.outputPath ||
+      !secondDetail.outputPath?.startsWith(
+        "workspaces/workspace-b/configs/config-v2/runs/",
+      )
+    ) {
+      throw new Error("Scoped run outputs were not isolated per workspace/config.");
+    }
+
+    logger.info("Local session smoke passed.");
+  } catch (error) {
+    throw new Error(formatError(error), { cause: error });
+  } finally {
+    if (apiProcess !== undefined && apiProcess.exitCode === null) {
+      apiProcess.kill("SIGTERM");
+    }
+    await downLocalDependencies().catch(() => undefined);
   }
 }
 
 void runMain(async () => {
-  try {
-    await main();
-  } catch (error) {
-    console.error(formatError(error));
-    process.exit(1);
-  }
+  await main();
 });

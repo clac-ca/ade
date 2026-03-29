@@ -5,35 +5,25 @@ import os
 import subprocess
 import sys
 import threading
+import urllib.request
 from pathlib import Path
 
 CONFIG = json.loads({{CONFIG_JSON}})
-SESSION_ROOT = Path("/mnt/data")
-INPUT_PATH = Path(CONFIG["inputPath"])
-OUTPUT_DIR = Path(CONFIG["outputDir"])
 INSTALL_LOCK_PATH = Path(CONFIG["installLockPath"])
+LOCAL_INPUT_PATH = Path(CONFIG["localInputPath"])
+LOCAL_OUTPUT_DIR = Path(CONFIG["localOutputDir"])
+PROCESS_RESULT_PREFIX = "__ADE_PROCESS_RESULT__="
 
 
 def event_payload(payload):
     return json.dumps(payload, separators=(",", ":"))
 
 
-class StdoutEmitter:
-    def __init__(self):
-        self._lock = threading.Lock()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def ready(self):
-        return
-
-    def emit(self, payload):
-        with self._lock:
-            print(CONFIG["eventSentinelPrefix"] + event_payload(payload), flush=True)
+class AdePhaseError(Exception):
+    def __init__(self, phase, message, *, retriable=False):
+        super().__init__(str(message))
+        self.phase = phase
+        self.retriable = retriable
 
 
 class WebSocketEmitter:
@@ -99,22 +89,6 @@ def ensure_websockets():
         )
 
 
-def emitter():
-    if CONFIG.get("bridgeUrl"):
-        return WebSocketEmitter()
-    return StdoutEmitter()
-
-
-def emit_status(sink, phase, state):
-    sink.emit({"type": "status", "phase": phase, "state": state})
-
-
-def emit_log(sink, phase, level, message):
-    sink.emit(
-        {"type": "log", "phase": phase, "level": level, "message": message.rstrip("\n")}
-    )
-
-
 def emit_error(sink, phase, message, retriable):
     sink.emit(
         {
@@ -126,66 +100,46 @@ def emit_error(sink, phase, message, retriable):
     )
 
 
-def stream_subprocess(sink, phase, argv):
-    process = subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
+def emit_log(sink, phase, level, message):
+    sink.emit(
+        {"type": "log", "phase": phase, "level": level, "message": message.rstrip("\n")}
     )
-    pump_errors = []
 
-    def pump(stream, level):
-        try:
-            for line in iter(stream.readline, ""):
-                emit_log(sink, phase, level, line)
-        except Exception as error:
-            pump_errors.append(error)
-            process.kill()
-        finally:
-            stream.close()
 
-    stdout_thread = threading.Thread(
-        target=pump,
-        args=(process.stdout, "info"),
-        daemon=True,
+def emit_status(sink, phase, state):
+    sink.emit({"type": "status", "phase": phase, "state": state})
+
+
+def http_request(method, access, body=None):
+    request = urllib.request.Request(
+        access["url"],
+        data=body,
+        method=method,
     )
-    stderr_thread = threading.Thread(
-        target=pump,
-        args=(process.stderr, "error"),
-        daemon=True,
-    )
-    stdout_thread.start()
-    stderr_thread.start()
-    return_code = process.wait()
-    stdout_thread.join()
-    stderr_thread.join()
-    if pump_errors:
-        raise pump_errors[0]
-    if return_code != 0:
-        raise subprocess.CalledProcessError(return_code, argv)
+    for header_name, header_value in access.get("headers", {}).items():
+        request.add_header(header_name, header_value)
+
+    with urllib.request.urlopen(request) as response:
+        return response.read()
 
 
-def installed_version(package_name):
+def download_input():
     try:
-        return importlib.metadata.version(package_name)
-    except importlib.metadata.PackageNotFoundError:
-        return None
+        LOCAL_INPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        body = http_request("GET", CONFIG["inputDownload"])
+        LOCAL_INPUT_PATH.write_bytes(body)
+    except Exception as error:
+        raise AdePhaseError("executeRun", error) from error
 
 
 def ensure_package(sink, phase, package_name, expected_version, wheel_path, install_args):
-    if installed_version(package_name) == expected_version:
-        emit_log(
-            sink,
-            phase,
-            "info",
-            f"{package_name} {expected_version} already installed",
-        )
+    try:
+        installed_version = importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        installed_version = None
+    if installed_version == expected_version:
+        emit_log(sink, phase, "info", f"{package_name} {expected_version} already installed")
         return
-
     stream_subprocess(
         sink,
         phase,
@@ -197,49 +151,56 @@ def ensure_package(sink, phase, package_name, expected_version, wheel_path, inst
             *install_args,
             wheel_path,
         ],
+        expect_result=False,
     )
 
 
 def install_packages(sink):
     emit_status(sink, "installPackages", "started")
     INSTALL_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with INSTALL_LOCK_PATH.open("w") as install_lock_file:
-        fcntl.flock(install_lock_file.fileno(), fcntl.LOCK_EX)
-        ensure_package(
-            sink,
-            "installPackages",
-            CONFIG["enginePackageName"],
-            CONFIG["engineVersion"],
-            CONFIG["engineWheelPath"],
-            ["--force-reinstall"],
-        )
-        ensure_package(
-            sink,
-            "installPackages",
-            CONFIG["configPackageName"],
-            CONFIG["configVersion"],
-            CONFIG["configWheelPath"],
-            ["--no-deps", "--force-reinstall"],
-        )
+    try:
+        with INSTALL_LOCK_PATH.open("w") as install_lock_file:
+            fcntl.flock(install_lock_file.fileno(), fcntl.LOCK_EX)
+            ensure_package(
+                sink,
+                "installPackages",
+                CONFIG["enginePackageName"],
+                CONFIG["engineVersion"],
+                CONFIG["engineWheelPath"],
+                ["--force-reinstall"],
+            )
+            ensure_package(
+                sink,
+                "installPackages",
+                CONFIG["configPackageName"],
+                CONFIG["configVersion"],
+                CONFIG["configWheelPath"],
+                ["--no-deps", "--force-reinstall"],
+            )
+    except Exception as error:
+        raise AdePhaseError("installPackages", error, retriable=True) from error
     emit_status(sink, "installPackages", "completed")
 
 
-def execute_run(sink):
-    emit_status(sink, "executeRun", "started")
-    from ade_engine import load_config, process as run_process
+def processor_code():
+    return """
+import json
+import sys
+from pathlib import Path
+from ade_engine import load_config
+from ade_engine.runner import process
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    config = load_config("ade_config", name="ade-config")
-    result = run_process(
-        config=config,
-        input_path=INPUT_PATH,
-        output_dir=OUTPUT_DIR,
-    )
+PROCESS_RESULT_PREFIX = "__ADE_PROCESS_RESULT__="
 
-    sink.emit(
+input_path = Path(sys.argv[1])
+output_dir = Path(sys.argv[2])
+config = load_config("ade_config", name="ade-config")
+result = process(config=config, input_path=input_path, output_dir=output_dir)
+print(
+    PROCESS_RESULT_PREFIX
+    + json.dumps(
         {
-            "type": "result",
-            "outputPath": result.output_path.relative_to(SESSION_ROOT).as_posix(),
+            "localOutputPath": str(result.output_path),
             "validationIssues": [
                 {
                     "rowIndex": issue.row_index,
@@ -248,20 +209,123 @@ def execute_run(sink):
                 }
                 for issue in result.validation_issues
             ],
+        },
+        separators=(",", ":"),
+    ),
+    flush=True,
+)
+"""
+
+
+def stream_subprocess(sink, phase, argv, *, expect_result):
+    process = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    result_payload = None
+    pump_errors = []
+
+    def pump_stdout(stream):
+        nonlocal result_payload
+        try:
+            for line in iter(stream.readline, ""):
+                if line.startswith(PROCESS_RESULT_PREFIX):
+                    result_payload = json.loads(line[len(PROCESS_RESULT_PREFIX):])
+                    continue
+                emit_log(sink, phase, "info", line)
+        except Exception as error:
+            pump_errors.append(error)
+            process.kill()
+        finally:
+            stream.close()
+
+    def pump_stderr(stream):
+        try:
+            for line in iter(stream.readline, ""):
+                emit_log(sink, phase, "error", line)
+        except Exception as error:
+            pump_errors.append(error)
+            process.kill()
+        finally:
+            stream.close()
+
+    stdout_thread = threading.Thread(target=pump_stdout, args=(process.stdout,), daemon=True)
+    stderr_thread = threading.Thread(target=pump_stderr, args=(process.stderr,), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    return_code = process.wait()
+    stdout_thread.join()
+    stderr_thread.join()
+
+    if pump_errors:
+        raise pump_errors[0]
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, argv)
+    if expect_result and result_payload is None:
+        raise RuntimeError("ADE processor did not emit a structured result.")
+    return result_payload
+
+
+def execute_processor(sink):
+    emit_log(sink, "executeRun", "info", "Downloading input artifact")
+    download_input()
+    emit_status(sink, "executeRun", "started")
+    LOCAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        result = stream_subprocess(
+            sink,
+            "executeRun",
+            [
+                sys.executable,
+                "-c",
+                processor_code(),
+                str(LOCAL_INPUT_PATH),
+                str(LOCAL_OUTPUT_DIR),
+            ],
+            expect_result=True,
+        )
+    except Exception as error:
+        raise AdePhaseError("executeRun", error) from error
+    emit_status(sink, "executeRun", "completed")
+    return result
+
+
+def upload_output(sink, result):
+    emit_status(sink, "persistOutputs", "started")
+    try:
+        local_output_path = Path(result["localOutputPath"])
+        body = local_output_path.read_bytes()
+        http_request("PUT", CONFIG["outputUpload"], body)
+    except Exception as error:
+        raise AdePhaseError("persistOutputs", error) from error
+
+    sink.emit(
+        {
+            "type": "result",
+            "outputPath": CONFIG["outputPath"],
+            "validationIssues": result["validationIssues"],
         }
     )
+    emit_status(sink, "persistOutputs", "completed")
 
 
 def main():
-    with emitter() as sink:
+    with WebSocketEmitter() as sink:
         sink.ready()
         try:
             install_packages(sink)
-            execute_run(sink)
+            result = execute_processor(sink)
+            upload_output(sink, result)
+        except AdePhaseError as error:
+            emit_error(sink, error.phase, error, error.retriable)
+            raise
         except Exception as error:
-            phase = "installPackages" if installed_version(CONFIG["enginePackageName"]) != CONFIG["engineVersion"] else "executeRun"
-            retriable = phase == "installPackages"
-            emit_error(sink, phase, error, retriable)
+            emit_error(sink, "executeRun", error, False)
             raise
 
 

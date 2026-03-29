@@ -105,6 +105,7 @@ var mergedTags = union({
 var githubOidcSubject = 'repo:${githubOrganization}/${githubRepository}:environment:${githubEnvironmentName}'
 var sessionExecutorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0fb8eba5-a2bb-4abe-b1c1-49dfad359bb0')
 var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+var appPublicUrl = 'https://${appName}.${platform.outputs.defaultDomain}'
 
 resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: deploymentManagedIdentityName
@@ -165,6 +166,9 @@ module storage 'modules/storage-account.bicep' = {
   params: {
     accountName: storageAccountName
     blobContainerName: blobContainerName
+    corsAllowedOrigins: [
+      appPublicUrl
+    ]
     location: location
     tags: mergedTags
     virtualNetworkSubnetId: network.outputs.containerAppsSubnetId
@@ -190,8 +194,6 @@ resource storageAccountResource 'Microsoft.Storage/storageAccounts@2024-01-01' e
 
 var appSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
 var migrationSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};User ID=${deploymentManagedIdentity.properties.clientId};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
-var appPublicUrl = 'https://${appName}.${platform.outputs.defaultDomain}'
-
 module app 'modules/container-app.bicep' = {
   name: 'appContainerApp'
   params: {

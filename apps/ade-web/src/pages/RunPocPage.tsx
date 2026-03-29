@@ -11,60 +11,63 @@ type RunPocStatus =
   | "disconnected"
   | "error";
 
-type RunSocketEvent =
-  | {
-      type: "hello";
-      lastSeq: number;
-      runId: string;
-      sessionGuid?: string | null;
-      status: string;
-    }
-  | {
-      type: "status";
-      seq: number;
-      phase: string;
-      state: string;
-      sessionGuid?: string | null;
-      operationId?: string | null;
-    }
-  | {
-      type: "log";
-      seq: number;
-      level: string;
-      message: string;
-      phase: string;
-    }
-  | {
-      type: "result";
-      seq: number;
-      outputPath: string;
-      validationIssues: Array<{
-        field: string;
-        message: string;
-        rowIndex: number;
-      }>;
-    }
-  | {
-      type: "error";
-      seq: number;
-      message: string;
-      retriable: boolean;
-      phase?: string | null;
-    }
-  | {
-      type: "complete";
-      seq: number;
-      finalStatus: string;
-    };
-
-const STORAGE_KEY = "ade.run-poc";
-
 type PersistedState = {
   configVersionId: string;
   lastSeenSeq: number | null;
   runId: string;
   workspaceId: string;
 };
+
+type UploadInstruction = {
+  expiresAt: string;
+  headers: Record<string, string>;
+  method: string;
+  url: string;
+};
+
+type RunCreatedEvent = {
+  runId: string;
+  status: string;
+};
+
+type RunStatusEvent = {
+  operationId?: string | null;
+  phase: string;
+  runId: string;
+  sessionGuid?: string | null;
+  state: string;
+};
+
+type RunLogEvent = {
+  level: string;
+  message: string;
+  phase: string;
+  runId: string;
+};
+
+type RunErrorEvent = {
+  message: string;
+  phase?: string | null;
+  retriable: boolean;
+  runId: string;
+};
+
+type RunResultEvent = {
+  outputPath: string;
+  runId: string;
+  validationIssues: Array<{
+    field: string;
+    message: string;
+    rowIndex: number;
+  }>;
+};
+
+type RunCompletedEvent = {
+  finalStatus: string;
+  runId: string;
+};
+
+const STORAGE_KEY = "ade.run-poc";
 
 function loadPersistedState(): PersistedState {
   if (typeof window === "undefined") {
@@ -107,8 +110,16 @@ function buildEventsPath(
   workspaceId: string,
   configVersionId: string,
   runId: string,
+  after: number | null,
 ): string {
-  return `${buildRunsPath(workspaceId, configVersionId)}/${encodeURIComponent(runId)}/events`;
+  const url = new URL(
+    `${buildRunsPath(workspaceId, configVersionId)}/${encodeURIComponent(runId)}/events`,
+    window.location.origin,
+  );
+  if (after !== null) {
+    url.searchParams.set("after", String(after));
+  }
+  return url.toString();
 }
 
 function buildCancelPath(
@@ -119,30 +130,53 @@ function buildCancelPath(
   return `${buildRunsPath(workspaceId, configVersionId)}/${encodeURIComponent(runId)}/cancel`;
 }
 
-function buildFilesPath(workspaceId: string, configVersionId: string): string {
-  return `/api/workspaces/${encodeURIComponent(workspaceId)}/configs/${encodeURIComponent(configVersionId)}/files`;
+function buildUploadsPath(workspaceId: string, configVersionId: string): string {
+  return `/api/workspaces/${encodeURIComponent(workspaceId)}/configs/${encodeURIComponent(configVersionId)}/uploads`;
 }
 
-function buildWebSocketUrl(path: string): string {
-  const url = new URL(path, window.location.origin);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
+function isRunCreatedEvent(value: unknown): value is RunCreatedEvent {
+  return typeof value === "object" && value !== null && "runId" in value;
 }
 
-function isRunSocketEvent(value: unknown): value is RunSocketEvent {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const type = (value as { type?: unknown }).type;
+function isRunStatusEvent(value: unknown): value is RunStatusEvent {
   return (
-    type === "hello" ||
-    type === "status" ||
-    type === "log" ||
-    type === "result" ||
-    type === "error" ||
-    type === "complete"
+    typeof value === "object" &&
+    value !== null &&
+    "phase" in value &&
+    "state" in value
   );
+}
+
+function isRunLogEvent(value: unknown): value is RunLogEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "phase" in value &&
+    "level" in value &&
+    "message" in value
+  );
+}
+
+function isRunErrorEvent(value: unknown): value is RunErrorEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "message" in value &&
+    "retriable" in value
+  );
+}
+
+function isRunResultEvent(value: unknown): value is RunResultEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "outputPath" in value &&
+    "validationIssues" in value
+  );
+}
+
+function isRunCompletedEvent(value: unknown): value is RunCompletedEvent {
+  return typeof value === "object" && value !== null && "finalStatus" in value;
 }
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -164,7 +198,7 @@ async function readErrorMessage(response: Response): Promise<string> {
 
 export function RunPocPage() {
   const initialState = loadPersistedState();
-  const socketRef = useRef<WebSocket | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const logViewportRef = useRef<HTMLPreElement | null>(null);
   const statusRef = useRef<RunPocStatus>("idle");
@@ -177,11 +211,11 @@ export function RunPocPage() {
   const [outputPath, setOutputPath] = useState<string | null>(null);
   const [status, setStatus] = useState<RunPocStatus>("idle");
   const [statusMessage, setStatusMessage] = useState(
-    "Upload a file to start an async run.",
+    "Create an upload, send the file directly to storage, then stream run events over SSE.",
   );
   const [logLines, setLogLines] = useState([
     "Temporary ADE run proof of concept.",
-    "Uploads are durable. Use Resume to reattach to a live run stream.",
+    "The browser uploads directly to the returned artifact URL and listens over SSE.",
   ]);
 
   useEffect(() => {
@@ -205,19 +239,13 @@ export function RunPocPage() {
 
   useEffect(() => {
     return () => {
-      socketRef.current?.close();
-      socketRef.current = null;
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
     };
   }, []);
 
-  function isActiveSocket(socket: WebSocket | null): socket is WebSocket {
-    return socket !== null && socketRef.current === socket;
-  }
-
-  function setRunStatus(nextStatus: RunPocStatus, message: string) {
-    statusRef.current = nextStatus;
-    setStatus(nextStatus);
-    setStatusMessage(message);
+  function isActiveEventSource(source: EventSource | null): source is EventSource {
+    return source !== null && eventSourceRef.current === source;
   }
 
   function appendLogLine(line: string) {
@@ -227,129 +255,206 @@ export function RunPocPage() {
     });
   }
 
-  function closeSocket() {
-    const socket = socketRef.current;
-    socketRef.current = null;
-    socket?.close();
+  function closeEventSource() {
+    const current = eventSourceRef.current;
+    eventSourceRef.current = null;
+    current?.close();
   }
 
-  function noteSeq(seq: number) {
-    setLastSeenSeq(seq);
-  }
+  function noteSeq(value: string | null) {
+    if (value === null || value.trim() === "") {
+      return;
+    }
 
-  function handleRunEvent(event: RunSocketEvent) {
-    switch (event.type) {
-      case "hello":
-        setRunId(event.runId);
-        setRunStatus(
-          event.status === "succeeded" ||
-            event.status === "failed" ||
-            event.status === "cancelled"
-            ? "completed"
-            : "streaming",
-          `Attached to run ${event.runId}.`,
-        );
-        appendLogLine(
-          `[run] attached to ${event.runId} (status=${event.status}, lastSeq=${String(event.lastSeq)})`,
-        );
-        return;
-      case "status":
-        noteSeq(event.seq);
-        setRunStatus("streaming", `Run phase: ${event.phase}.`);
-        appendLogLine(`[${event.phase}] ${event.state}`);
-        return;
-      case "log":
-        noteSeq(event.seq);
-        appendLogLine(`[${event.phase}/${event.level}] ${event.message}`);
-        return;
-      case "result":
-        noteSeq(event.seq);
-        setOutputPath(event.outputPath);
-        appendLogLine(`[result] ${event.outputPath}`);
-        return;
-      case "error":
-        noteSeq(event.seq);
-        setRunStatus("error", event.message);
-        appendLogLine(
-          `[error${event.phase ? `/${event.phase}` : ""}] ${event.message}`,
-        );
-        return;
-      case "complete":
-        noteSeq(event.seq);
-        setRunStatus("completed", `Run ${event.finalStatus}.`);
-        appendLogLine(`[complete] ${event.finalStatus}`);
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isNaN(parsed)) {
+      setLastSeenSeq(parsed);
     }
   }
 
-  function connectToRun(
-    targetRunId: string,
-    attachSeq: number | null,
-    eventsPath = buildEventsPath(workspaceId, configVersionId, targetRunId),
-  ) {
-    closeSocket();
-    setRunStatus("connecting", "Connecting to the run events stream...");
+  function setRunStatus(nextStatus: RunPocStatus, message: string) {
+    statusRef.current = nextStatus;
+    setStatus(nextStatus);
+    setStatusMessage(message);
+  }
 
-    const socket = new WebSocket(buildWebSocketUrl(eventsPath));
-    socketRef.current = socket;
+  function parseEventData<T>(
+    data: string,
+    guard: (value: unknown) => value is T,
+  ): T | null {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return null;
+    }
 
-    socket.addEventListener("open", () => {
-      if (!isActiveSocket(socket)) {
+    return guard(payload) ? payload : null;
+  }
+
+  function connectToRun(targetRunId: string, after: number | null) {
+    closeEventSource();
+    setRunStatus("connecting", "Connecting to the run event stream...");
+
+    const source = new EventSource(
+      buildEventsPath(workspaceId, configVersionId, targetRunId, after),
+    );
+    eventSourceRef.current = source;
+
+    source.addEventListener("open", () => {
+      if (!isActiveEventSource(source)) {
+        return;
+      }
+      appendLogLine(`[run] connected to ${targetRunId}`);
+    });
+
+    source.addEventListener("run.created", (event) => {
+      if (!isActiveEventSource(source)) {
         return;
       }
 
-      socket.send(
-        JSON.stringify({
-          type: "attach",
-          lastSeenSeq: attachSeq,
-        }),
+      noteSeq((event as MessageEvent<string>).lastEventId);
+      const payload = parseEventData(
+        (event as MessageEvent<string>).data,
+        isRunCreatedEvent,
+      );
+      if (!payload) {
+        setRunStatus("error", "Received an invalid run.created payload.");
+        return;
+      }
+
+      setRunId(payload.runId);
+      setRunStatus("streaming", `Run ${payload.runId} created.`);
+      appendLogLine(`[run] created ${payload.runId} (${payload.status})`);
+    });
+
+    source.addEventListener("run.status", (event) => {
+      if (!isActiveEventSource(source)) {
+        return;
+      }
+
+      noteSeq((event as MessageEvent<string>).lastEventId);
+      const payload = parseEventData(
+        (event as MessageEvent<string>).data,
+        isRunStatusEvent,
+      );
+      if (!payload) {
+        setRunStatus("error", "Received an invalid run.status payload.");
+        return;
+      }
+
+      setRunStatus("streaming", `Run phase: ${payload.phase}.`);
+      appendLogLine(`[${payload.phase}] ${payload.state}`);
+    });
+
+    source.addEventListener("run.log", (event) => {
+      if (!isActiveEventSource(source)) {
+        return;
+      }
+
+      noteSeq((event as MessageEvent<string>).lastEventId);
+      const payload = parseEventData(
+        (event as MessageEvent<string>).data,
+        isRunLogEvent,
+      );
+      if (!payload) {
+        setRunStatus("error", "Received an invalid run.log payload.");
+        return;
+      }
+
+      appendLogLine(`[${payload.phase}/${payload.level}] ${payload.message}`);
+    });
+
+    source.addEventListener("run.error", (event) => {
+      if (!isActiveEventSource(source)) {
+        return;
+      }
+
+      noteSeq((event as MessageEvent<string>).lastEventId);
+      const payload = parseEventData(
+        (event as MessageEvent<string>).data,
+        isRunErrorEvent,
+      );
+      if (!payload) {
+        setRunStatus("error", "Received an invalid run.error payload.");
+        return;
+      }
+
+      setRunStatus("error", payload.message);
+      appendLogLine(
+        `[error${payload.phase ? `/${payload.phase}` : ""}] ${payload.message}`,
       );
     });
 
-    socket.addEventListener("message", (event) => {
-      if (!isActiveSocket(socket)) {
+    source.addEventListener("run.result", (event) => {
+      if (!isActiveEventSource(source)) {
         return;
       }
 
-      let payload: unknown;
-      try {
-        payload = JSON.parse(String(event.data));
-      } catch {
-        appendLogLine("[error] received an invalid websocket payload");
-        setRunStatus("error", "Received an invalid websocket payload.");
+      noteSeq((event as MessageEvent<string>).lastEventId);
+      const payload = parseEventData(
+        (event as MessageEvent<string>).data,
+        isRunResultEvent,
+      );
+      if (!payload) {
+        setRunStatus("error", "Received an invalid run.result payload.");
         return;
       }
 
-      if (!isRunSocketEvent(payload)) {
-        appendLogLine("[error] received an unknown websocket event");
-        setRunStatus("error", "Received an unknown websocket event.");
-        return;
-      }
-
-      handleRunEvent(payload);
+      setOutputPath(payload.outputPath);
+      appendLogLine(`[result] ${payload.outputPath}`);
     });
 
-    socket.addEventListener("close", () => {
-      if (!isActiveSocket(socket)) {
+    source.addEventListener("run.completed", (event) => {
+      if (!isActiveEventSource(source)) {
         return;
       }
 
-      socketRef.current = null;
+      noteSeq((event as MessageEvent<string>).lastEventId);
+      const payload = parseEventData(
+        (event as MessageEvent<string>).data,
+        isRunCompletedEvent,
+      );
+      if (!payload) {
+        setRunStatus("error", "Received an invalid run.completed payload.");
+        return;
+      }
+
+      setRunStatus("completed", `Run ${payload.finalStatus}.`);
+      appendLogLine(`[complete] ${payload.finalStatus}`);
+      source.close();
+      if (eventSourceRef.current === source) {
+        eventSourceRef.current = null;
+      }
+    });
+
+    source.onerror = () => {
+      if (!isActiveEventSource(source)) {
+        return;
+      }
+
+      source.close();
+      eventSourceRef.current = null;
       if (
         statusRef.current === "connecting" ||
         statusRef.current === "streaming"
       ) {
         setRunStatus("disconnected", "Stream closed. Use Resume to reattach.");
       }
+    };
+  }
+
+  async function uploadToStorage(file: File, upload: UploadInstruction) {
+    const headers = new Headers(upload.headers);
+    const response = await fetch(upload.url, {
+      method: upload.method,
+      headers,
+      body: file,
     });
 
-    socket.addEventListener("error", () => {
-      if (!isActiveSocket(socket)) {
-        return;
-      }
-
-      appendLogLine("[error] websocket closed unexpectedly");
-      setRunStatus("error", "The run events websocket closed unexpectedly.");
-    });
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
+    }
   }
 
   async function startRun() {
@@ -359,7 +464,7 @@ export function RunPocPage() {
       return;
     }
 
-    closeSocket();
+    closeEventSource();
     setRunId("");
     setLastSeenSeq(null);
     setOutputPath(null);
@@ -368,39 +473,54 @@ export function RunPocPage() {
       `Selected input: ${file.name}`,
     ]);
 
-    setRunStatus("uploading", "Uploading input file...");
-    const uploadBody = new FormData();
-    uploadBody.set("file", file);
-
-    const uploadResponse = await fetch(
-      buildFilesPath(workspaceId, configVersionId),
-      {
-        method: "POST",
-        body: uploadBody,
+    setRunStatus("uploading", "Requesting upload instructions...");
+    const uploadResponse = await fetch(buildUploadsPath(workspaceId, configVersionId), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
       },
-    );
+      body: JSON.stringify({
+        filename: file.name,
+        contentType: file.type || undefined,
+        size: file.size,
+      }),
+    });
+
     if (!uploadResponse.ok) {
       setRunStatus("error", await readErrorMessage(uploadResponse));
       return;
     }
 
-    const uploaded = (await uploadResponse.json()) as { filename: string };
-    appendLogLine(`[upload] stored ${uploaded.filename}`);
-    setRunStatus("starting", "Starting async run...");
+    const uploadPayload = (await uploadResponse.json()) as {
+      filePath: string;
+      upload: UploadInstruction;
+      uploadId: string;
+    };
+    appendLogLine(`[upload] reserved ${uploadPayload.filePath}`);
 
-    const runResponse = await fetch(
-      buildRunsPath(workspaceId, configVersionId),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Prefer: "respond-async",
-        },
-        body: JSON.stringify({
-          inputPath: uploaded.filename,
-        }),
+    try {
+      await uploadToStorage(file, uploadPayload.upload);
+    } catch (error) {
+      setRunStatus(
+        "error",
+        error instanceof Error ? error.message : "Direct upload failed.",
+      );
+      return;
+    }
+
+    appendLogLine(`[upload] completed ${uploadPayload.uploadId}`);
+    setRunStatus("starting", "Creating run...");
+
+    const runResponse = await fetch(buildRunsPath(workspaceId, configVersionId), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
       },
-    );
+      body: JSON.stringify({
+        inputPath: uploadPayload.filePath,
+      }),
+    });
+
     if (!runResponse.ok) {
       setRunStatus("error", await readErrorMessage(runResponse));
       return;
@@ -414,7 +534,7 @@ export function RunPocPage() {
 
     setRunId(payload.runId);
     appendLogLine(`[run] accepted ${payload.runId} (${payload.status})`);
-    connectToRun(payload.runId, null, payload.eventsUrl);
+    connectToRun(payload.runId, null);
   }
 
   async function cancelRun() {
@@ -423,12 +543,9 @@ export function RunPocPage() {
       return;
     }
 
-    const response = await fetch(
-      buildCancelPath(workspaceId, configVersionId, runId),
-      {
-        method: "POST",
-      },
-    );
+    const response = await fetch(buildCancelPath(workspaceId, configVersionId, runId), {
+      method: "POST",
+    });
     if (!response.ok) {
       setRunStatus("error", await readErrorMessage(response));
       return;
@@ -442,13 +559,14 @@ export function RunPocPage() {
       <div className="hero">
         <p className="eyebrow">Temporary async run POC</p>
         <h2 className="hero__title">
-          Stream config install and run output over `/runs`.
+          Direct upload, async runs, and one-way SSE logs.
         </h2>
         <p className="hero__summary">
-          This page validates the unified async run flow: durable file upload,
-          `Prefer: respond-async`, and resumable event replay on
-          <code>{"/runs/{runId}/events"}</code>. Runs still inherit the built-in
-          session execution cap of about 220 seconds.
+          This page validates the new public split: the browser negotiates a
+          single-file upload, sends bytes directly to the returned storage URL,
+          creates a run over HTTP, and listens on
+          <code>{"/runs/{runId}/events"}</code> over server-sent events. The
+          terminal stays on its own WebSocket.
         </p>
       </div>
 
@@ -535,49 +653,53 @@ export function RunPocPage() {
           </div>
         </div>
 
-        <p className="terminal-poc__status" data-state={status}>
+        <div className="status-grid">
+          <section className="status-card">
+            <p className="status-card__label">State</p>
+            <p className="status-card__value">{status}</p>
+          </section>
+          <section className="status-card">
+            <p className="status-card__label">Run</p>
+            <p className="status-card__value status-card__value--mono">
+              {runId || "Not started"}
+            </p>
+          </section>
+          <section className="status-card">
+            <p className="status-card__label">Last Event</p>
+            <p className="status-card__value status-card__value--mono">
+              {lastSeenSeq ?? "None"}
+            </p>
+          </section>
+          <section className="status-card">
+            <p className="status-card__label">Output</p>
+            <p className="status-card__value status-card__value--mono">
+              {outputPath ?? "Pending"}
+            </p>
+          </section>
+        </div>
+
+        <p
+          className={
+            status === "error"
+              ? "status-note status-note--error"
+              : "status-note"
+          }
+        >
           {statusMessage}
+        </p>
+
+        <p className="status-note">
+          Need the bidirectional shell bridge? Open the{" "}
+          <Link className="inline-link" to="/terminal-poc">
+            terminal POC
+          </Link>
+          .
         </p>
       </div>
 
-      <div className="status-grid">
-        <section className="status-card">
-          <p className="status-card__label">Run ID</p>
-          <p className="status-card__value status-card__value--mono">
-            {runId || "Not started"}
-          </p>
-        </section>
-        <section className="status-card">
-          <p className="status-card__label">Last Seq</p>
-          <p className="status-card__value status-card__value--mono">
-            {lastSeenSeq === null ? "None" : String(lastSeenSeq)}
-          </p>
-        </section>
-        <section className="status-card">
-          <p className="status-card__label">Output Path</p>
-          <p className="status-card__value status-card__value--mono">
-            {outputPath ?? "Pending"}
-          </p>
-        </section>
-      </div>
-
-      <div className="run-log">
-        <pre className="run-log__viewport" ref={logViewportRef}>
-          {logLines.join("\n")}
-        </pre>
-      </div>
-
-      <p className="status-note">
-        This proof page is temporary. Keep the{" "}
-        <Link className="inline-link" to="/terminal-poc">
-          terminal POC
-        </Link>{" "}
-        for raw shell debugging, and return to the{" "}
-        <Link className="inline-link" to="/">
-          home page
-        </Link>{" "}
-        when you are done testing.
-      </p>
+      <pre className="terminal-poc__viewport run-poc__viewport" ref={logViewportRef}>
+        {logLines.join("\n")}
+      </pre>
     </section>
   );
 }

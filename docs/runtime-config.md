@@ -3,6 +3,7 @@
 ADE has two runtime concerns:
 
 - SQL connectivity
+- artifact storage for uploads and run outputs
 - the hosted ADE Python session-pool backend
 
 ## SQL Runtime Config
@@ -19,9 +20,33 @@ ADE keeps SQL authentication inside that connection string. Supported values are
 
 ADE does not add any extra runtime environment variables of its own for that chain, and production infra still uses explicit managed identity mode rather than `ActiveDirectoryDefault`.
 
+## Artifact Storage Config
+
+ADE stores user uploads and persisted run outputs in one durable blob container per environment.
+
+The running API is the trusted component. It chooses blob paths, validates scoped input paths, and mints short-lived exact-blob access grants.
+
+The runtime storage settings are:
+
+| Name                   | Required | Used by | Notes                                                                                                   |
+| ---------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------- |
+| `ADE_BLOB_ACCOUNT_URL` | Yes      | API     | Blob service endpoint for direct browser upload and session-side run input/output access.               |
+| `ADE_BLOB_CONTAINER`   | Yes      | API     | Private blob container that stores scoped uploads and run outputs.                                      |
+| `ADE_ARTIFACTS_ROOT`   | Local    | API     | Filesystem fallback for local development and tests when blob env vars are omitted.                     |
+
+Local development and tests use `ADE_ARTIFACTS_ROOT` when `ADE_BLOB_ACCOUNT_URL` and `ADE_BLOB_CONTAINER` are not configured together.
+
+Deployed environments use Azure Blob Storage with user delegation SAS:
+
+- browser upload grants are exact-blob `PUT` URLs
+- session download grants are exact-blob read-only URLs
+- session output grants are exact-blob create/write URLs
+- the browser and session never receive container-wide credentials
+- the API does not proxy upload or output bytes
+
 ## Hosted Session Config
 
-ADE uses one shared Azure Container Apps PythonLTS session-pool resource per environment. Local development uses a Dockerized session-pool emulator that exposes the same execution and file routes.
+ADE uses one shared Azure Container Apps PythonLTS session-pool resource per environment. Local development uses a Dockerized session-pool emulator that exposes the same internal execution and file routes.
 
 The ADE API requires that session-pool config to be present at startup. Azure auth behavior is inferred from `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT`:
 
@@ -95,66 +120,70 @@ The server listen address is not environment-driven.
 
 Deployed environments follow the same pattern. Bicep injects one shared session-pool endpoint plus an explicit `ADE_CONFIG_TARGETS` JSON string into the app container. That keeps config artifact resolution request-scoped without adding a separate registry service.
 
-The runtime proxy routes are workspace/config scoped and mirror the Azure session-pool nouns:
+## Public Runtime API
 
-- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/executions`
-- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/files`
-- `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/files`
-- `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/files/{filename}/content`
+The public runtime routes are workspace/config scoped:
 
-ADE's document-processing route sits above the generic session API:
-
+- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/uploads`
 - `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/runs`
+- `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}`
+- `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/events`
+- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/cancel`
+- `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/terminal`
 
-`/executions` accepts only:
-
-- `{ "shellCommand": "pwd" }`
-
-Each request may also include `timeoutInSeconds`. ADE injects the Azure-required `Inline` and `Synchronous` execution settings internally. For command executions, ADE translates the request server-side into Python `subprocess.run(...)` because the shared pool uses `PythonLTS`, not the Azure `Shell` container type. Raw Python execution stays internal to the `/runs` flow.
-
-`/files` is the only upload surface. `POST /files` returns a flat file object:
+`POST /uploads` is the only public upload entrypoint. It returns a server-chosen scoped file path plus direct upload instructions:
 
 ```json
 {
-  "filename": "uploads/input.csv",
-  "size": 31,
-  "lastModifiedTime": "2026-03-29T12:00:00Z"
+  "uploadId": "upl_123",
+  "filePath": "workspaces/workspace-a/configs/config-v1/uploads/upl_123/input.xlsx",
+  "upload": {
+    "method": "PUT",
+    "url": "https://<account>.blob.core.windows.net/<container>/workspaces/workspace-a/configs/config-v1/uploads/upl_123/input.xlsx?<sas>",
+    "headers": {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "x-ms-blob-type": "BlockBlob",
+      "x-ms-version": "<version>"
+    },
+    "expiresAt": "2026-03-29T21:15:00Z"
+  }
 }
 ```
 
-`GET /files` returns a flat array of those same objects.
+`POST /runs` is always async and returns `202 Accepted` with a `Location` header:
 
-`/runs` no longer accepts multipart uploads. The product flow is:
+```json
+{
+  "runId": "run_123",
+  "status": "pending",
+  "inputPath": "workspaces/workspace-a/configs/config-v1/uploads/upl_123/input.xlsx",
+  "outputPath": null,
+  "eventsUrl": "/api/workspaces/workspace-a/configs/config-v1/runs/run_123/events"
+}
+```
 
-1. Upload the input file through `POST /files`.
+`GET /runs/{runId}/events` returns `text/event-stream` and replays persisted events by sequence. SSE event ids are the run event sequence numbers, so clients can resume with `Last-Event-ID` or the `after` query parameter.
+
+`GET /terminal` is the only public WebSocket route. Terminal traffic is bidirectional. Run events are not multiplexed onto the terminal socket.
+
+The product flow is:
+
+1. Request upload instructions through `POST /uploads`.
+2. Upload the file directly to Blob Storage with the returned `PUT` URL and headers.
 2. Run ADE against that existing session file through:
 
 ```json
 {
-  "inputPath": "uploads/input.csv",
-  "timeoutInSeconds": 220
+  "inputPath": "workspaces/workspace-a/configs/config-v1/uploads/upl_123/input.xlsx",
+  "timeoutInSeconds": 900
 }
 ```
 
-`/runs` returns only:
+3. Poll `GET /runs/{runId}` for current state or reconnect safety.
+4. Stream logs and lifecycle changes from `GET /runs/{runId}/events` over SSE.
+5. Read the final `outputPath` from the run resource when the run succeeds.
 
-```json
-{
-  "outputPath": "runs/<generated>/output/input.normalized.xlsx",
-  "validationIssues": []
-}
-```
-
-`/executions` returns flat ADE-shaped command output:
-
-```json
-{
-  "stdout": "/mnt/data\n",
-  "stderr": "",
-  "exitCode": 0,
-  "durationMs": 14
-}
-```
+Public `/files` and `/executions` routes are removed. The session-pool `/files` and `/executions` endpoints remain internal implementation details for wheel staging and Python bootstrap execution.
 
 ## Network Egress
 

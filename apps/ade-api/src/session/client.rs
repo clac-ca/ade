@@ -159,27 +159,6 @@ impl SessionPoolClient {
         })
     }
 
-    pub(crate) async fn download_file_detailed(
-        &self,
-        identifier: &str,
-        filename: &str,
-    ) -> Result<SessionOperationResult<(String, Vec<u8>)>, AppError> {
-        let (directory, name) = split_session_file_path(filename);
-        let query_pairs = directory
-            .as_deref()
-            .map(|path| vec![("path", path)])
-            .unwrap_or_default();
-        let request = self
-            .data_plane_request(
-                Method::GET,
-                &["files", name.as_ref(), "content"],
-                identifier,
-                &query_pairs,
-            )
-            .await?;
-        parse_bytes_response(request, "download a session pool file").await
-    }
-
     async fn json_request<T, B>(
         &self,
         method: Method,
@@ -380,40 +359,6 @@ where
     })?;
 
     Ok(SessionOperationResult { metadata, value })
-}
-
-async fn parse_bytes_response(
-    builder: reqwest::RequestBuilder,
-    operation: &str,
-) -> Result<SessionOperationResult<(String, Vec<u8>)>, AppError> {
-    let response = builder.send().await.map_err(|error| {
-        AppError::internal_with_source(format!("Failed to {operation}."), error)
-    })?;
-    let status = response.status();
-
-    if !status.is_success() {
-        let message = error_message(response).await?;
-        return Err(map_session_pool_http_error(status, message));
-    }
-
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string();
-    let metadata = session_operation_metadata(response.headers());
-    let body = response.bytes().await.map_err(|error| {
-        AppError::internal_with_source(
-            format!("Failed to read the session-pool response while trying to {operation}."),
-            error,
-        )
-    })?;
-
-    Ok(SessionOperationResult {
-        metadata,
-        value: (content_type, body.to_vec()),
-    })
 }
 
 fn session_operation_metadata(headers: &reqwest::header::HeaderMap) -> SessionOperationMetadata {
