@@ -64,12 +64,12 @@ class SessionPoolEmulator:
         target = self._resolve_file_path(data_dir, filename)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
-        return {"properties": self._file_metadata(target, data_dir)}
+        return self._file_metadata(target, data_dir)
 
     def list_files(self, *, identifier: str) -> dict[str, Any]:
         data_dir = self._job_session(identifier).data_dir
         files = [
-            {"properties": self._file_metadata(path, data_dir)}
+            self._file_metadata(path, data_dir)
             for path in sorted(path for path in data_dir.rglob("*") if path.is_file())
         ]
         return {"value": files}
@@ -162,10 +162,14 @@ class SessionPoolEmulator:
 
     def _file_metadata(self, path: Path, data_dir: Path) -> dict[str, Any]:
         stat = path.stat()
+        relative_path = path.relative_to(data_dir)
+        directory = relative_path.parent.as_posix()
         return {
-            "filename": str(path.relative_to(data_dir)),
-            "size": stat.st_size,
-            "lastModifiedTime": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
+            "directory": "." if directory == "" else directory,
+            "lastModifiedAt": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
+            "name": relative_path.name,
+            "sizeInBytes": stat.st_size,
+            "type": "file",
         }
 
 

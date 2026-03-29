@@ -110,9 +110,9 @@ impl SessionPoolClient {
             .data_plane_request(Method::POST, &["files"], identifier)
             .await?
             .multipart(Form::new().part("file", part));
-        let envelope: FileRecordEnvelope =
+        let record: AzureFileRecord =
             parse_json_response(request, "upload a session pool file").await?;
-        Ok(envelope.properties)
+        Ok(record.into_session_file())
     }
 
     pub(crate) async fn list_files(&self, identifier: &str) -> Result<Vec<SessionFile>, AppError> {
@@ -122,7 +122,7 @@ impl SessionPoolClient {
         Ok(envelope
             .value
             .into_iter()
-            .map(|record| record.properties)
+            .map(AzureFileRecord::into_session_file)
             .collect())
     }
 
@@ -203,13 +203,33 @@ struct ExecutionResultEnvelope {
 }
 
 #[derive(Deserialize)]
-struct FileRecordEnvelope {
-    properties: SessionFile,
+#[serde(rename_all = "camelCase")]
+struct AzureFileRecord {
+    directory: Option<String>,
+    name: String,
+    #[serde(default)]
+    last_modified_at: Option<String>,
+    size_in_bytes: usize,
 }
 
 #[derive(Deserialize)]
 struct FilesEnvelope {
-    value: Vec<FileRecordEnvelope>,
+    value: Vec<AzureFileRecord>,
+}
+
+impl AzureFileRecord {
+    fn into_session_file(self) -> SessionFile {
+        let filename = match self.directory.as_deref() {
+            Some("") | Some(".") | None => self.name,
+            Some(directory) => format!("{directory}/{}", self.name),
+        };
+
+        SessionFile {
+            filename,
+            last_modified_time: self.last_modified_at,
+            size: self.size_in_bytes,
+        }
+    }
 }
 
 #[derive(Serialize)]

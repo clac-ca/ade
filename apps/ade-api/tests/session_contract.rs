@@ -78,10 +78,15 @@ async fn stub_upload_file(
         .insert(format!("{}::{filename}", query.identifier), bytes.to_vec());
 
     Json(json!({
-        "properties": {
-            "filename": filename,
-            "size": bytes.len(),
-        }
+        "directory": filename
+            .rsplit_once('/')
+            .map(|(directory, _)| directory)
+            .unwrap_or("."),
+        "name": filename
+            .rsplit_once('/')
+            .map(|(_, name)| name)
+            .unwrap_or(filename.as_str()),
+        "sizeInBytes": bytes.len(),
     }))
 }
 
@@ -98,10 +103,15 @@ async fn stub_list_files(
         .filter_map(|(key, content)| key.strip_prefix(&prefix).map(|name| (name, content)))
         .map(|(filename, content)| {
             json!({
-                "properties": {
-                    "filename": filename,
-                    "size": content.len(),
-                }
+                "directory": filename
+                    .rsplit_once('/')
+                    .map(|(directory, _)| directory)
+                    .unwrap_or("."),
+                "name": filename
+                    .rsplit_once('/')
+                    .map(|(_, name)| name)
+                    .unwrap_or(filename),
+                "sizeInBytes": content.len(),
             })
         })
         .collect::<Vec<_>>();
