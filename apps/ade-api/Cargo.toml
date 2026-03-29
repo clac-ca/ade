@@ -45,3 +45,7 @@ path = "src/main.rs"
 [[bin]]
 name = "ade-migrate"
 path = "src/bin/migrate.rs"
+
+[[bin]]
+name = "ade-openapi"
+path = "src/bin/openapi.rs"

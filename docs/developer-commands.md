@@ -29,6 +29,8 @@ Normal local development:
 pnpm dev
 pnpm dev --port 8100
 pnpm dev --no-open
+pnpm --filter @ade/web gen:api
+pnpm --filter @ade/web gen:api:check
 pnpm typecheck
 pnpm lint
 pnpm format
@@ -42,6 +44,10 @@ pnpm clean
 ```
 
 `pnpm lint` and `pnpm test` require Azure CLI 2.53+ with Bicep support.
+
+`pnpm --filter @ade/web gen:api` regenerates the committed frontend API schema from the backend OpenAPI contract.
+
+`pnpm --filter @ade/web gen:api:check` verifies that the committed frontend schema is up to date without rewriting files. The generated schema keeps the real `/api/...` routes.
 
 Dependency-only commands:
 

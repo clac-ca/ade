@@ -4,7 +4,7 @@ import { getVersion } from "../api/system";
 export function HomePage() {
   const versionQuery = useQuery({
     queryKey: ["system", "version"],
-    queryFn: getVersion,
+    queryFn: () => getVersion(),
   });
 
   return (

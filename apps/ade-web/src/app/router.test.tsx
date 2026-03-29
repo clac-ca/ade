@@ -2,11 +2,16 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getVersion } from "../api/system";
 import { AppRouter } from "./router";
 import { createTestQueryClient } from "../test/query-client";
 
+vi.mock("../api/system", () => ({
+  getVersion: vi.fn(),
+}));
+
 afterEach(() => {
-  vi.restoreAllMocks();
+  vi.mocked(getVersion).mockReset();
 });
 
 describe("AppRouter", () => {
@@ -25,16 +30,10 @@ describe("AppRouter", () => {
   });
 
   it("renders the home page and loads version metadata", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          service: "ade",
-          version: "0.1.0",
-        }),
-      }),
-    );
+    vi.mocked(getVersion).mockResolvedValue({
+      service: "ade",
+      version: "0.1.0",
+    });
 
     render(
       <QueryClientProvider client={createTestQueryClient()}>
@@ -50,5 +49,6 @@ describe("AppRouter", () => {
       }),
     ).toBeInTheDocument();
     expect(await screen.findByText("0.1.0")).toBeInTheDocument();
+    expect(getVersion).toHaveBeenCalledTimes(1);
   });
 });

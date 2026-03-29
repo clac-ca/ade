@@ -31,6 +31,8 @@ Use these for normal local development:
 pnpm dev
 pnpm dev --port 8100
 pnpm dev --no-open
+pnpm --filter @ade/web gen:api
+pnpm --filter @ade/web gen:api:check
 pnpm typecheck
 pnpm lint
 pnpm lint:python
@@ -45,6 +47,10 @@ pnpm clean
 ```
 
 `pnpm lint` and `pnpm test` require Azure CLI 2.53+ with Bicep support.
+
+`pnpm --filter @ade/web gen:api` regenerates the committed frontend OpenAPI types from the backend contract when API shapes change.
+
+`pnpm --filter @ade/web gen:api:check` verifies that the committed frontend schema matches the backend OpenAPI contract without rewriting files. The generated schema keeps the real `/api/...` routes.
 
 If you only need the local infrastructure dependencies:
 
