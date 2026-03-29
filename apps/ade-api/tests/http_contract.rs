@@ -3,9 +3,8 @@ use std::{fs, path::PathBuf, sync::Arc};
 use ade_api::{
     config::SERVICE_VERSION,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
-    router::{create_app, normalize_app},
+    router::{AppState, create_app, normalize_app},
     session::SessionService,
-    state::AppState,
     unix_time_ms,
 };
 use axum::{
@@ -72,7 +71,7 @@ fn fixture_session_service() -> Arc<SessionService> {
     .into_iter()
     .collect();
 
-    SessionService::from_env(&env).unwrap()
+    Arc::new(SessionService::from_env(&env).unwrap())
 }
 
 fn app_state(readiness: ReadinessController) -> AppState {

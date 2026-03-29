@@ -1,13 +1,14 @@
-use std::process;
+use std::{process, sync::Arc};
 
 use ade_api::{
-    ServerOptions,
     config::{
         AppConfig, DEFAULT_DEV_HOST, DEFAULT_PORT, DEFAULT_PROBE_INTERVAL_MS,
-        DEFAULT_READINESS_STALE_AFTER_MS, DEFAULT_RUNTIME_HOST, ReadConfigOptions, current_env,
-        default_runtime_paths, is_production, read_config,
+        DEFAULT_READINESS_STALE_AFTER_MS, DEFAULT_RUNTIME_HOST, EnvBag, default_web_root,
+        is_production,
     },
+    error::AppError,
     init_tracing, run_server_until_shutdown,
+    server::ServerOptions,
     session::SessionService,
 };
 use clap::Parser;
@@ -34,23 +35,16 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), ade_api::error::AppError> {
-    let env = current_env();
-    let config = read_config(&env, ReadConfigOptions { require_sql: true })?;
+async fn run() -> Result<(), AppError> {
+    let env: EnvBag = std::env::vars().collect();
+    let config = AppConfig::from_env(&env)?;
     let args = ServerArgs::parse();
-    let runtime_paths = default_runtime_paths();
     let production = is_production(&env);
-    let session_service = SessionService::from_env(&env)?;
-
-    let AppConfig {
-        sql_connection_string,
-    } = config;
-    let sql_connection_string =
-        sql_connection_string.expect("required SQL connection string missing");
-    let web_root = runtime_paths
-        .web_root
-        .exists()
-        .then_some(runtime_paths.web_root);
+    let session_service = Arc::new(SessionService::from_env(&env)?);
+    let web_root = {
+        let web_root = default_web_root();
+        web_root.exists().then_some(web_root)
+    };
 
     run_server_until_shutdown(ServerOptions {
         host: args.host.unwrap_or_else(|| {
@@ -63,12 +57,12 @@ async fn run() -> Result<(), ade_api::error::AppError> {
         port: args.port.unwrap_or(DEFAULT_PORT),
         probe_interval_ms: args.probe_interval_ms.unwrap_or(DEFAULT_PROBE_INTERVAL_MS),
         session_service,
-        sql_connection_string,
+        sql_connection_string: config.sql_connection_string,
         stale_after_ms: args
             .stale_after_ms
             .unwrap_or(DEFAULT_READINESS_STALE_AFTER_MS),
         web_root,
-        database_connector: None,
+        database: None,
     })
     .await
 }

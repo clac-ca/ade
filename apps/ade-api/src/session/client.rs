@@ -254,7 +254,7 @@ impl AzureFileRecord {
 
     fn into_session_file(self) -> SessionFile {
         let filename = match self.directory.as_deref() {
-            Some("") | Some(".") | None => self.name,
+            Some("" | ".") | None => self.name,
             Some(directory) => format!("{directory}/{}", self.name),
         };
 
@@ -277,7 +277,7 @@ struct InlinePythonExecutionRequest {
 }
 
 async fn data_plane_token() -> Result<String, AppError> {
-    let scope = format!("{}/.default", DEFAULT_AZURE_SESSION_AUDIENCE);
+    let scope = format!("{DEFAULT_AZURE_SESSION_AUDIENCE}/.default");
 
     if let Ok(credential) = ManagedIdentityCredential::new(None)
         && let Ok(token) = credential.get_token(&[scope.as_str()], None).await

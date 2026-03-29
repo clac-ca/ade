@@ -1,9 +1,9 @@
-use std::path::Path;
+use std::{path::Path, path::PathBuf, sync::Arc};
 
 use axum::{
     Router,
     body::Body,
-    extract::{OriginalUri, Request as AxumRequest, State},
+    extract::{FromRef, OriginalUri, Request as AxumRequest, State},
     http::{HeaderMap, Method, Request as HttpRequest, StatusCode, Version},
     response::Response,
     routing::get,
@@ -18,9 +18,29 @@ use tower_http::{
 
 use crate::{
     error::AppError,
+    readiness::ReadinessController,
     routes::{session, system},
-    state::AppState,
+    session::SessionService,
 };
+
+#[derive(Clone)]
+pub struct AppState {
+    pub readiness: ReadinessController,
+    pub session_service: Arc<SessionService>,
+    pub web_root: Option<PathBuf>,
+}
+
+impl FromRef<AppState> for ReadinessController {
+    fn from_ref(state: &AppState) -> Self {
+        state.readiness.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<SessionService> {
+    fn from_ref(state: &AppState) -> Self {
+        Arc::clone(&state.session_service)
+    }
+}
 
 pub fn create_app(state: AppState) -> Router {
     let api_router = Router::new()
@@ -41,6 +61,7 @@ pub fn create_app(state: AppState) -> Router {
         .with_state(state)
 }
 
+#[must_use]
 pub fn normalize_app(app: Router) -> NormalizePath<Router> {
     NormalizePathLayer::trim_trailing_slash().layer(app)
 }

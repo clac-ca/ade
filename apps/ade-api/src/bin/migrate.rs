@@ -1,8 +1,9 @@
 use std::process;
 
 use ade_api::{
-    config::{current_env, read_migration_config},
+    config::{AppConfig, EnvBag},
     db::run_migrations,
+    error::AppError,
     init_tracing,
 };
 
@@ -16,9 +17,9 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), ade_api::error::AppError> {
-    let env = current_env();
-    let config = read_migration_config(&env)?;
+async fn run() -> Result<(), AppError> {
+    let env: EnvBag = std::env::vars().collect();
+    let config = AppConfig::from_env(&env)?;
     let applied = run_migrations(&config.sql_connection_string).await?;
 
     if applied.is_empty() {

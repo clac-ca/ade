@@ -3,8 +3,7 @@ use serde::Serialize;
 
 use crate::{
     config::{SERVICE_NAME, SERVICE_VERSION},
-    readiness::is_application_ready,
-    state::AppState,
+    readiness::{ReadinessController, is_application_ready},
 };
 
 #[derive(Debug, Serialize)]
@@ -41,8 +40,8 @@ pub async fn healthz() -> Json<ServiceStatusResponse> {
     })
 }
 
-pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
-    let snapshot = state.readiness.snapshot();
+pub async fn readyz(State(readiness): State<ReadinessController>) -> impl IntoResponse {
+    let snapshot = readiness.snapshot();
     let now = crate::unix_time_ms();
 
     if !is_application_ready(&snapshot, now) {

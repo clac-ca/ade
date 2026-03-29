@@ -1,13 +1,12 @@
 mod client;
+mod python;
 
 use std::{
     collections::HashMap,
     fs,
     path::{Component, Path, PathBuf},
-    sync::Arc,
 };
 
-use axum::http::StatusCode;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -17,20 +16,24 @@ use crate::{
     error::AppError,
 };
 
-use self::client::{PythonExecution, SessionFile, SessionPoolClient};
+use self::{
+    client::SessionPoolClient,
+    python::{
+        RunPythonConfig, build_run_code, command_execution_code, ensure_successful_execution,
+        extract_command_response, extract_run_response,
+    },
+};
 
-const COMMAND_SENTINEL_PREFIX: &str = "__ADE_COMMAND_META__=";
+pub(crate) use self::client::SessionFile;
+
 const CONFIG_PACKAGE_NAME: &str = "ade-config";
 const CONFIG_TARGETS_ENV_NAME: &str = "ADE_CONFIG_TARGETS";
 const ENGINE_PACKAGE_NAME: &str = "ade-engine";
 const ENGINE_WHEEL_ENV_NAME: &str = "ADE_ENGINE_WHEEL_PATH";
-const RUN_SENTINEL_PREFIX: &str = "__ADE_RUN_RESULT__=";
-const RUNS_ROOT: &str = "runs";
-const SESSION_SECRET_ENV_NAME: &str = "ADE_SESSION_SECRET";
-const SESSION_ROOT: &str = "/mnt/data";
 const INSTALL_LOCK_SESSION_FILENAME: &str = ".ade-session-install.lock";
-const COMMAND_TEMPLATE: &str = include_str!("session/command.py.tmpl");
-const RUN_TEMPLATE: &str = include_str!("session/run.py.tmpl");
+const RUNS_ROOT: &str = "runs";
+const SESSION_ROOT: &str = "/mnt/data";
+const SESSION_SECRET_ENV_NAME: &str = "ADE_SESSION_SECRET";
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub(crate) struct Scope {
@@ -93,7 +96,7 @@ pub struct SessionService {
 }
 
 impl SessionService {
-    pub fn from_env(env: &EnvBag) -> Result<Arc<Self>, AppError> {
+    pub fn from_env(env: &EnvBag) -> Result<Self, AppError> {
         let session_secret = read_optional_trimmed_string(env, SESSION_SECRET_ENV_NAME)
             .ok_or_else(|| {
                 AppError::config(format!(
@@ -101,12 +104,12 @@ impl SessionService {
                 ))
             })?;
 
-        Ok(Arc::new(Self {
+        Ok(Self {
             client: SessionPoolClient::from_env(env)?,
             config_targets: resolve_config_targets(env)?,
             engine: resolve_required_wheel(env, ENGINE_WHEEL_ENV_NAME, "ade_engine")?,
             session_secret,
-        }))
+        })
     }
 
     pub(crate) async fn execute_command(
@@ -163,7 +166,7 @@ impl SessionService {
         let config = self.config_for(scope)?;
         let normalized_path = public_session_path(filename)?;
         if is_internal_session_file(&self.engine, config, &normalized_path) {
-            return Err(AppError::not_found("Session file not found.".to_string()));
+            return Err(AppError::not_found("Session file not found."));
         }
         self.client
             .download_file(&self.session_identifier(scope), &normalized_path)
@@ -179,8 +182,9 @@ impl SessionService {
         let config = self.config_for(scope)?;
         let session_identifier = self.session_identifier(scope);
         let normalized_input_path = public_session_path(input_path)?;
+
         if is_internal_session_file(&self.engine, config, &normalized_input_path) {
-            return Err(AppError::not_found("Session file not found.".to_string()));
+            return Err(AppError::not_found("Session file not found."));
         }
 
         self.client
@@ -203,13 +207,24 @@ impl SessionService {
         let execution = self
             .execute_python(
                 &session_identifier,
-                build_run_code(&self.engine, config, &normalized_input_path)?,
+                build_run_code(&RunPythonConfig {
+                    config_package_name: CONFIG_PACKAGE_NAME,
+                    config_version: config.version.clone(),
+                    config_wheel_path: session_file_path(&config.filename),
+                    engine_package_name: ENGINE_PACKAGE_NAME,
+                    engine_version: self.engine.version.clone(),
+                    engine_wheel_path: session_file_path(&self.engine.filename),
+                    input_path: session_file_path(&normalized_input_path),
+                    install_lock_path: session_file_path(INSTALL_LOCK_SESSION_FILENAME),
+                    runs_root: session_file_path(RUNS_ROOT),
+                    sentinel_prefix: python::RUN_SENTINEL_PREFIX,
+                })?,
                 timeout_in_seconds,
             )
             .await?;
 
         ensure_successful_execution(&execution)?;
-        extract_run_response(execution)
+        extract_run_response(&execution)
     }
 
     async fn execute_python(
@@ -217,7 +232,7 @@ impl SessionService {
         session_identifier: &str,
         code: String,
         timeout_in_seconds: Option<u64>,
-    ) -> Result<PythonExecution, AppError> {
+    ) -> Result<client::PythonExecution, AppError> {
         self.client
             .execute(session_identifier, code, timeout_in_seconds)
             .await
@@ -242,194 +257,21 @@ impl SessionService {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CommandMetadata {
-    exit_code: i64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ConfigTargetEntry {
     workspace_id: String,
     config_version_id: String,
     wheel_path: PathBuf,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CommandTemplateConfig<'a> {
-    command: &'a str,
-    sentinel_prefix: &'a str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RunTemplateConfig {
-    config_package_name: &'static str,
-    config_version: String,
-    config_wheel_path: String,
-    engine_package_name: &'static str,
-    engine_version: String,
-    engine_wheel_path: String,
-    input_path: String,
-    install_lock_path: String,
-    runs_root: String,
-    sentinel_prefix: &'static str,
-}
-
-fn command_execution_code(shell_command: &str) -> Result<String, AppError> {
-    render_python_template(
-        COMMAND_TEMPLATE,
-        &CommandTemplateConfig {
-            command: shell_command,
-            sentinel_prefix: COMMAND_SENTINEL_PREFIX,
-        },
-    )
-}
-
-fn extract_command_response(
-    execution: PythonExecution,
-) -> Result<ExecuteCommandResponse, AppError> {
-    let Some((stdout, exit_code)) = strip_command_metadata(&execution.stdout)? else {
-        let message = if !execution.stderr.trim().is_empty() {
-            execution.stderr.trim().to_string()
-        } else if !execution.stdout.trim().is_empty() {
-            execution.stdout.trim().to_string()
-        } else {
-            format!(
-                "Session pool command execution failed with status {}.",
-                execution.status
-            )
-        };
-        return Err(AppError::status(
-            StatusCode::BAD_GATEWAY,
-            format!("ADE command execution failed: {message}"),
-        ));
-    };
-
-    Ok(ExecuteCommandResponse {
-        duration_ms: execution.duration_ms,
-        exit_code,
-        stderr: execution.stderr,
-        stdout,
-    })
-}
-
-fn strip_command_metadata(stdout: &str) -> Result<Option<(String, i64)>, AppError> {
-    let Some(marker_index) = stdout.rfind(COMMAND_SENTINEL_PREFIX) else {
-        return Ok(None);
-    };
-
-    let metadata = serde_json::from_str::<CommandMetadata>(
-        stdout[marker_index + COMMAND_SENTINEL_PREFIX.len()..].trim(),
-    )
-    .map_err(|error| {
-        AppError::internal_with_source(
-            "Failed to decode the command execution metadata.".to_string(),
-            error,
-        )
-    })?;
-
-    Ok(Some((
-        stdout[..marker_index].trim_end_matches('\n').to_string(),
-        metadata.exit_code,
-    )))
-}
-
-fn build_run_code(
-    engine: &PackageWheel,
-    config: &PackageWheel,
-    input_path: &str,
-) -> Result<String, AppError> {
-    render_python_template(
-        RUN_TEMPLATE,
-        &RunTemplateConfig {
-            config_package_name: CONFIG_PACKAGE_NAME,
-            config_version: config.version.clone(),
-            config_wheel_path: session_file_path(&config.filename),
-            engine_package_name: ENGINE_PACKAGE_NAME,
-            engine_version: engine.version.clone(),
-            engine_wheel_path: session_file_path(&engine.filename),
-            input_path: session_file_path(input_path),
-            install_lock_path: session_file_path(INSTALL_LOCK_SESSION_FILENAME),
-            runs_root: session_file_path(RUNS_ROOT),
-            sentinel_prefix: RUN_SENTINEL_PREFIX,
-        },
-    )
-}
-
-fn render_python_template(template: &str, config: &impl Serialize) -> Result<String, AppError> {
-    if !template.contains("{{CONFIG_JSON}}") {
-        return Err(AppError::internal(
-            "Python execution template is missing the CONFIG_JSON placeholder.".to_string(),
-        ));
-    }
-
-    let config_json = serde_json::to_string(config).map_err(|error| {
-        AppError::internal_with_source(
-            "Failed to encode a Python template value.".to_string(),
-            error,
-        )
-    })?;
-
-    Ok(template.replace("{{CONFIG_JSON}}", &json_string(&config_json)?))
-}
-
-fn json_string(value: &str) -> Result<String, AppError> {
-    serde_json::to_string(value).map_err(|error| {
-        AppError::internal_with_source(
-            "Failed to encode a Python template value.".to_string(),
-            error,
-        )
-    })
-}
-
-fn ensure_successful_execution(execution: &PythonExecution) -> Result<(), AppError> {
-    if matches!(execution.status.as_str(), "Success" | "Succeeded" | "0") {
-        return Ok(());
-    }
-
-    let message = if !execution.stderr.trim().is_empty() {
-        execution.stderr.trim().to_string()
-    } else if !execution.stdout.trim().is_empty() {
-        execution.stdout.trim().to_string()
-    } else {
-        format!(
-            "Session pool execution failed with status {}.",
-            execution.status
-        )
-    };
-
-    Err(AppError::status(
-        StatusCode::BAD_GATEWAY,
-        format!("ADE run execution failed: {message}"),
-    ))
-}
-
-fn extract_run_response(execution: PythonExecution) -> Result<RunResponse, AppError> {
-    let marker_index = execution.stdout.rfind(RUN_SENTINEL_PREFIX).ok_or_else(|| {
-        AppError::internal(
-            "ADE run execution did not emit the structured result metadata.".to_string(),
-        )
-    })?;
-    serde_json::from_str::<RunResponse>(
-        execution.stdout[marker_index + RUN_SENTINEL_PREFIX.len()..].trim(),
-    )
-    .map_err(|error| {
-        AppError::internal_with_source("Failed to decode the ADE run metadata.".to_string(), error)
-    })
-}
-
 fn uploaded_filename(filename: &str) -> Result<String, AppError> {
     let name = Path::new(filename.trim())
         .file_name()
         .and_then(|value| value.to_str())
-        .ok_or_else(|| {
-            AppError::request("Uploaded file must include a valid filename.".to_string())
-        })?;
+        .ok_or_else(|| AppError::request("Uploaded file must include a valid filename."))?;
 
     if name.is_empty() {
         return Err(AppError::request(
-            "Uploaded file must include a valid filename.".to_string(),
+            "Uploaded file must include a valid filename.",
         ));
     }
 
@@ -440,7 +282,7 @@ fn public_session_path(path: &str) -> Result<String, AppError> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err(AppError::request(
-            "Session file path must be a non-empty relative path.".to_string(),
+            "Session file path must be a non-empty relative path.",
         ));
     }
 
@@ -451,7 +293,7 @@ fn public_session_path(path: &str) -> Result<String, AppError> {
             Component::Normal(segment) => segments.push(segment.to_string_lossy().to_string()),
             Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
                 return Err(AppError::request(
-                    "Session file path must be a relative path inside the session.".to_string(),
+                    "Session file path must be a relative path inside the session.",
                 ));
             }
         }
@@ -459,13 +301,13 @@ fn public_session_path(path: &str) -> Result<String, AppError> {
 
     if segments.is_empty() {
         return Err(AppError::request(
-            "Session file path must be a non-empty relative path.".to_string(),
+            "Session file path must be a non-empty relative path.",
         ));
     }
 
     let normalized = segments.join("/");
     if normalized == INSTALL_LOCK_SESSION_FILENAME {
-        return Err(AppError::not_found("Session file not found.".to_string()));
+        return Err(AppError::not_found("Session file not found."));
     }
 
     Ok(normalized)
@@ -507,7 +349,7 @@ fn resolve_config_targets(env: &EnvBag) -> Result<HashMap<Scope, PackageWheel>, 
             config_version_id: target.config_version_id,
         };
         let wheel =
-            resolve_wheel_from_path(CONFIG_TARGETS_ENV_NAME, "ade_config", target.wheel_path)?;
+            resolve_wheel_from_path(CONFIG_TARGETS_ENV_NAME, "ade_config", &target.wheel_path)?;
         if resolved.insert(scope.clone(), wheel).is_some() {
             return Err(AppError::config(format!(
                 "Duplicate config target '{}:{}' in {CONFIG_TARGETS_ENV_NAME}.",
@@ -531,13 +373,13 @@ fn resolve_required_wheel(
             ))
         })?,
     );
-    resolve_wheel_from_path(wheel_path_env_name, wheel_prefix, wheel_path)
+    resolve_wheel_from_path(wheel_path_env_name, wheel_prefix, &wheel_path)
 }
 
 fn resolve_wheel_from_path(
     wheel_path_env_name: &str,
     wheel_prefix: &str,
-    wheel_path: PathBuf,
+    wheel_path: &Path,
 ) -> Result<PackageWheel, AppError> {
     if !wheel_path.is_file() {
         return Err(AppError::config(format!(
@@ -546,7 +388,7 @@ fn resolve_wheel_from_path(
         )));
     }
 
-    let resolved_wheel_path = fs::canonicalize(&wheel_path).map_err(|error| {
+    let resolved_wheel_path = fs::canonicalize(wheel_path).map_err(|error| {
         AppError::io_with_source(
             format!(
                 "Failed to resolve the Python package wheel from '{}'.",
@@ -562,7 +404,7 @@ fn resolve_wheel_from_path(
             wheel_path.display()
         ))
     })?;
-    let bytes = fs::read(&wheel_path).map_err(|error| {
+    let bytes = fs::read(wheel_path).map_err(|error| {
         AppError::io_with_source(
             format!(
                 "Failed to read the Python package wheel from '{}'.",
@@ -614,13 +456,15 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        COMMAND_SENTINEL_PREFIX, CreateRunRequest, ExecuteCommandRequest, ExecuteCommandResponse,
-        RUN_SENTINEL_PREFIX, RunResponse, RunValidationIssue, Scope, build_run_code,
+        CONFIG_PACKAGE_NAME, CreateRunRequest, ENGINE_PACKAGE_NAME, ExecuteCommandRequest,
+        ExecuteCommandResponse, RunResponse, RunValidationIssue, Scope, build_run_code,
+        client::PythonExecution,
         command_execution_code, derive_session_identifier, ensure_successful_execution,
         extract_command_response, extract_run_response, parse_wheel_version, public_session_path,
-        strip_command_metadata,
+        python::{
+            COMMAND_SENTINEL_PREFIX, RUN_SENTINEL_PREFIX, RunPythonConfig, strip_command_metadata,
+        },
     };
-    use crate::session::client::PythonExecution;
 
     #[test]
     fn parses_wheel_versions_from_standard_filenames() {
@@ -715,7 +559,7 @@ mod tests {
         };
 
         assert_eq!(
-            extract_run_response(response).unwrap(),
+            extract_run_response(&response).unwrap(),
             RunResponse {
                 output_path: "runs/run-1/output/input.normalized.xlsx".to_string(),
                 validation_issues: vec![RunValidationIssue {
@@ -764,19 +608,18 @@ mod tests {
 
     #[test]
     fn run_template_uses_a_package_install_lock_and_runs_root() {
-        let code = build_run_code(
-            &super::PackageWheel {
-                bytes: Vec::new(),
-                filename: "ade_engine-1.0.0-py3-none-any.whl".to_string(),
-                version: "1.0.0".to_string(),
-            },
-            &super::PackageWheel {
-                bytes: Vec::new(),
-                filename: "ade_config-2.0.0-py3-none-any.whl".to_string(),
-                version: "2.0.0".to_string(),
-            },
-            "input.csv",
-        )
+        let code = build_run_code(&RunPythonConfig {
+            config_package_name: CONFIG_PACKAGE_NAME,
+            config_version: "2.0.0".to_string(),
+            config_wheel_path: "/mnt/data/ade_config-2.0.0-py3-none-any.whl".to_string(),
+            engine_package_name: ENGINE_PACKAGE_NAME,
+            engine_version: "1.0.0".to_string(),
+            engine_wheel_path: "/mnt/data/ade_engine-1.0.0-py3-none-any.whl".to_string(),
+            input_path: "/mnt/data/input.csv".to_string(),
+            install_lock_path: "/mnt/data/.ade-session-install.lock".to_string(),
+            runs_root: "/mnt/data/runs".to_string(),
+            sentinel_prefix: RUN_SENTINEL_PREFIX,
+        })
         .unwrap();
 
         assert!(code.contains("json.loads"));

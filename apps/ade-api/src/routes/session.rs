@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use axum::{
     Json, Router,
     body::Body,
     extract::{Multipart, Path, State, rejection::JsonRejection},
-    http::{StatusCode, header},
+    http::header,
     response::{IntoResponse, Response},
     routing::post,
 };
@@ -11,10 +13,10 @@ use serde::Deserialize;
 use crate::{
     error::AppError,
     session::{CreateRunRequest, ExecuteCommandRequest, RunResponse, Scope},
-    state::AppState,
+    session::{SessionFile, SessionService},
 };
 
-pub fn router() -> Router<AppState> {
+pub fn router() -> Router<crate::router::AppState> {
     Router::new()
         .route("/executions", post(execute_command))
         .route("/files", post(upload_file).get(list_files))
@@ -23,76 +25,54 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn execute_command(
-    State(state): State<AppState>,
+    State(session_service): State<Arc<SessionService>>,
     Path(scope): Path<Scope>,
     request: Result<Json<ExecuteCommandRequest>, JsonRejection>,
-) -> Result<Response, AppError> {
-    let Json(request) = request.map_err(|error| AppError::request(error.body_text()))?;
-    Ok((
-        StatusCode::OK,
-        Json(
-            state
-                .session_service
-                .execute_command(&scope, &request.shell_command, request.timeout_in_seconds)
-                .await?,
-        ),
-    )
-        .into_response())
+) -> Result<Json<crate::session::ExecuteCommandResponse>, AppError> {
+    let request = parse_json(request)?;
+    Ok(Json(
+        session_service
+            .execute_command(&scope, &request.shell_command, request.timeout_in_seconds)
+            .await?,
+    ))
 }
 
 async fn upload_file(
-    State(state): State<AppState>,
+    State(session_service): State<Arc<SessionService>>,
     Path(scope): Path<Scope>,
     multipart: Multipart,
-) -> Result<Response, AppError> {
+) -> Result<Json<SessionFile>, AppError> {
     let (filename, content_type, content) = read_uploaded_file(multipart).await?;
-    Ok((
-        StatusCode::OK,
-        Json(
-            state
-                .session_service
-                .upload_file(&scope, filename, content_type, content)
-                .await?,
-        ),
-    )
-        .into_response())
+    Ok(Json(
+        session_service
+            .upload_file(&scope, filename, content_type, content)
+            .await?,
+    ))
 }
 
 async fn list_files(
-    State(state): State<AppState>,
+    State(session_service): State<Arc<SessionService>>,
     Path(scope): Path<Scope>,
-) -> Result<Response, AppError> {
-    Ok((
-        StatusCode::OK,
-        Json(state.session_service.list_files(&scope).await?),
-    )
-        .into_response())
+) -> Result<Json<Vec<SessionFile>>, AppError> {
+    Ok(Json(session_service.list_files(&scope).await?))
 }
 
 async fn download_file(
-    State(state): State<AppState>,
+    State(session_service): State<Arc<SessionService>>,
     Path(path): Path<ContentFilePath>,
 ) -> Result<Response, AppError> {
-    let Some(filename) = path.filename() else {
-        return Err(AppError::not_found("Route not found".to_string()));
-    };
-    bytes_response(
-        state
-            .session_service
-            .download_file(&path.scope(), filename)
-            .await,
-    )
+    let (scope, filename) = path.into_parts()?;
+    bytes_response(session_service.download_file(&scope, &filename).await)
 }
 
 async fn create_run(
-    State(state): State<AppState>,
+    State(session_service): State<Arc<SessionService>>,
     Path(scope): Path<Scope>,
     request: Result<Json<CreateRunRequest>, JsonRejection>,
 ) -> Result<Json<RunResponse>, AppError> {
-    let Json(request) = request.map_err(|error| AppError::request(error.body_text()))?;
+    let request = parse_json(request)?;
     Ok(Json(
-        state
-            .session_service
+        session_service
             .run(&scope, &request.input_path, request.timeout_in_seconds)
             .await?,
     ))
@@ -108,16 +88,26 @@ struct ContentFilePath {
 }
 
 impl ContentFilePath {
-    fn scope(&self) -> Scope {
-        Scope {
-            workspace_id: self.workspace_id.clone(),
-            config_version_id: self.config_version_id.clone(),
-        }
+    fn into_parts(self) -> Result<(Scope, String), AppError> {
+        let filename = self
+            .path
+            .strip_suffix("/content")
+            .ok_or_else(|| AppError::not_found("Route not found"))?
+            .to_string();
+        Ok((
+            Scope {
+                workspace_id: self.workspace_id,
+                config_version_id: self.config_version_id,
+            },
+            filename,
+        ))
     }
+}
 
-    fn filename(&self) -> Option<&str> {
-        self.path.strip_suffix("/content")
-    }
+fn parse_json<T>(request: Result<Json<T>, JsonRejection>) -> Result<T, AppError> {
+    request
+        .map(|Json(value)| value)
+        .map_err(|error| AppError::request(error.body_text()))
 }
 
 async fn read_uploaded_file(
@@ -147,10 +137,5 @@ async fn read_uploaded_file(
 
 fn bytes_response(response: Result<(String, Vec<u8>), AppError>) -> Result<Response, AppError> {
     let (content_type, body) = response?;
-    Ok((
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, content_type)],
-        Body::from(body),
-    )
-        .into_response())
+    Ok(([(header::CONTENT_TYPE, content_type)], Body::from(body)).into_response())
 }

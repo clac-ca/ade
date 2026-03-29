@@ -37,6 +37,7 @@ pub struct ReadinessController {
 }
 
 impl ReadinessController {
+    #[must_use]
     pub fn new(options: CreateReadinessControllerOptions) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ReadinessSnapshot {
@@ -97,21 +98,23 @@ impl ReadinessController {
         state.database.ok = true;
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> ReadinessSnapshot {
         self.inner.lock().expect("readiness lock poisoned").clone()
     }
 }
 
+#[must_use]
 pub fn is_readiness_stale(readiness: &ReadinessSnapshot, now: u64) -> bool {
     readiness
         .database
         .last_checked_at
-        .map(|last_checked_at| {
+        .is_none_or(|last_checked_at| {
             now.saturating_sub(last_checked_at) > readiness.database.stale_after_ms
         })
-        .unwrap_or(true)
 }
 
+#[must_use]
 pub fn is_application_ready(readiness: &ReadinessSnapshot, now: u64) -> bool {
     readiness.phase == ReadinessPhase::Ready
         && readiness.database.ok

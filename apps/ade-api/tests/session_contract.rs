@@ -6,9 +6,8 @@ use std::{
 
 use ade_api::{
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
-    router::create_app,
+    router::{AppState, create_app},
     session::SessionService,
-    state::AppState,
     unix_time_ms,
 };
 use axum::{
@@ -241,7 +240,7 @@ fn app_with_session(
     .into_iter()
     .collect();
 
-    let session_service = SessionService::from_env(&env).unwrap();
+    let session_service = Arc::new(SessionService::from_env(&env).unwrap());
 
     create_app(AppState {
         readiness: ready_state(),

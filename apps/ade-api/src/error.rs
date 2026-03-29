@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, fmt};
+use std::error::Error as StdError;
 
 use axum::{
     Json,
@@ -6,27 +6,50 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+use thiserror::Error;
 
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 
-#[derive(Debug)]
-pub struct AppError {
-    kind: AppErrorKind,
-    message: String,
-    source: Option<BoxError>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AppErrorKind {
-    Config,
-    Database,
-    Internal,
-    Io,
-    NotFound,
-    Request,
-    Response(StatusCode),
-    Startup,
-    Unavailable,
+#[derive(Debug, Error)]
+pub enum AppError {
+    #[error("{message}")]
+    Config {
+        message: String,
+        #[source]
+        source: Option<BoxError>,
+    },
+    #[error("{message}")]
+    Database {
+        message: String,
+        #[source]
+        source: Option<BoxError>,
+    },
+    #[error("{message}")]
+    Internal {
+        message: String,
+        #[source]
+        source: Option<BoxError>,
+    },
+    #[error("{message}")]
+    Io {
+        message: String,
+        #[source]
+        source: BoxError,
+    },
+    #[error("{0}")]
+    NotFound(String),
+    #[error("{0}")]
+    Request(String),
+    #[error("{message}")]
+    Response { status: StatusCode, message: String },
+    #[error("{message}")]
+    Startup {
+        message: String,
+        #[source]
+        source: Option<BoxError>,
+    },
+    #[error("{0}")]
+    Unavailable(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -38,88 +61,113 @@ struct ApiErrorBody {
 }
 
 impl AppError {
-    pub fn config(message: String) -> Self {
-        Self::new(AppErrorKind::Config, message, None)
-    }
-
-    pub fn config_with_source(
-        message: String,
-        source: impl StdError + Send + Sync + 'static,
-    ) -> Self {
-        Self::new(AppErrorKind::Config, message, Some(Box::new(source)))
-    }
-
-    pub fn database(message: String) -> Self {
-        Self::new(AppErrorKind::Database, message, None)
-    }
-
-    pub fn database_with_source(
-        message: String,
-        source: impl StdError + Send + Sync + 'static,
-    ) -> Self {
-        Self::new(AppErrorKind::Database, message, Some(Box::new(source)))
-    }
-
-    pub fn internal(message: String) -> Self {
-        Self::new(AppErrorKind::Internal, message, None)
-    }
-
-    pub fn internal_with_source(
-        message: String,
-        source: impl StdError + Send + Sync + 'static,
-    ) -> Self {
-        Self::new(AppErrorKind::Internal, message, Some(Box::new(source)))
-    }
-
-    pub fn io_with_source(message: String, source: impl StdError + Send + Sync + 'static) -> Self {
-        Self::new(AppErrorKind::Io, message, Some(Box::new(source)))
-    }
-
-    pub fn not_found(message: String) -> Self {
-        Self::new(AppErrorKind::NotFound, message, None)
-    }
-
-    pub fn request(message: String) -> Self {
-        Self::new(AppErrorKind::Request, message, None)
-    }
-
-    pub fn status(status: StatusCode, message: String) -> Self {
-        Self::new(AppErrorKind::Response(status), message, None)
-    }
-
-    pub fn startup(message: String) -> Self {
-        Self::new(AppErrorKind::Startup, message, None)
-    }
-
-    pub fn startup_with_source(
-        message: String,
-        source: impl StdError + Send + Sync + 'static,
-    ) -> Self {
-        Self::new(AppErrorKind::Startup, message, Some(Box::new(source)))
-    }
-
-    pub fn unavailable(message: String) -> Self {
-        Self::new(AppErrorKind::Unavailable, message, None)
-    }
-
-    fn new(kind: AppErrorKind, message: String, source: Option<BoxError>) -> Self {
-        Self {
-            kind,
-            message,
-            source,
+    pub fn config(message: impl Into<String>) -> Self {
+        Self::Config {
+            message: message.into(),
+            source: None,
         }
     }
 
+    pub fn config_with_source(
+        message: impl Into<String>,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::Config {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+
+    pub fn database(message: impl Into<String>) -> Self {
+        Self::Database {
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    pub fn database_with_source(
+        message: impl Into<String>,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::Database {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::Internal {
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    pub fn internal_with_source(
+        message: impl Into<String>,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::Internal {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+
+    pub fn io_with_source(
+        message: impl Into<String>,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::Io {
+            message: message.into(),
+            source: Box::new(source),
+        }
+    }
+
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::NotFound(message.into())
+    }
+
+    pub fn request(message: impl Into<String>) -> Self {
+        Self::Request(message.into())
+    }
+
+    pub fn status(status: StatusCode, message: impl Into<String>) -> Self {
+        Self::Response {
+            status,
+            message: message.into(),
+        }
+    }
+
+    pub fn startup(message: impl Into<String>) -> Self {
+        Self::Startup {
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    pub fn startup_with_source(
+        message: impl Into<String>,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::Startup {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::Unavailable(message.into())
+    }
+
     fn status_code(&self) -> StatusCode {
-        match self.kind {
-            AppErrorKind::NotFound => StatusCode::NOT_FOUND,
-            AppErrorKind::Request | AppErrorKind::Config => StatusCode::BAD_REQUEST,
-            AppErrorKind::Response(status) => status,
-            AppErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
-            AppErrorKind::Database
-            | AppErrorKind::Internal
-            | AppErrorKind::Io
-            | AppErrorKind::Startup => StatusCode::INTERNAL_SERVER_ERROR,
+        match self {
+            Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Request(_) | Self::Config { .. } => StatusCode::BAD_REQUEST,
+            Self::Response { status, .. } => *status,
+            Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Database { .. }
+            | Self::Internal { .. }
+            | Self::Io { .. }
+            | Self::Startup { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
@@ -133,30 +181,17 @@ impl AppError {
     }
 
     fn response_message(&self) -> String {
-        match self.kind {
-            AppErrorKind::Database
-            | AppErrorKind::Internal
-            | AppErrorKind::Io
-            | AppErrorKind::Startup => "Internal Server Error".to_string(),
-            AppErrorKind::Response(StatusCode::INTERNAL_SERVER_ERROR) => {
-                "Internal Server Error".to_string()
-            }
-            _ => self.message.clone(),
+        match self {
+            Self::Database { .. }
+            | Self::Internal { .. }
+            | Self::Io { .. }
+            | Self::Startup { .. }
+            | Self::Response {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                ..
+            } => "Internal Server Error".to_string(),
+            _ => self.to_string(),
         }
-    }
-}
-
-impl fmt::Display for AppError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl StdError for AppError {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        self.source
-            .as_deref()
-            .map(|source| source as &(dyn StdError + 'static))
     }
 }
 
@@ -181,7 +216,7 @@ mod tests {
 
     #[test]
     fn internal_errors_hide_internal_details() {
-        let response = AppError::internal("boom".to_string()).into_response();
+        let response = AppError::internal("boom").into_response();
 
         assert_eq!(response.status().as_u16(), 500);
     }
