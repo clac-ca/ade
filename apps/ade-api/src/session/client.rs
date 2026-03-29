@@ -5,6 +5,7 @@ use reqwest::{
     multipart::{Form, Part},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::borrow::Cow;
 
 use crate::{
     config::{EnvBag, read_optional_trimmed_string},
@@ -75,6 +76,7 @@ impl SessionPoolClient {
                 Method::POST,
                 &["executions"],
                 identifier,
+                &[],
                 Some(InlinePythonExecutionRequest {
                     code,
                     code_input_type: "Inline",
@@ -99,15 +101,20 @@ impl SessionPoolClient {
         content_type: Option<String>,
         content: Vec<u8>,
     ) -> Result<SessionFile, AppError> {
-        let mut part = Part::bytes(content).file_name(filename);
+        let (directory, name) = split_session_file_path(&filename);
+        let mut part = Part::bytes(content).file_name(name.to_string());
         if let Some(content_type) = content_type {
             part = part.mime_str(&content_type).map_err(|error| {
                 AppError::request(format!("Invalid uploaded file content type: {error}"))
             })?;
         }
+        let query_pairs = directory
+            .as_deref()
+            .map(|path| vec![("path", path)])
+            .unwrap_or_default();
 
         let request = self
-            .data_plane_request(Method::POST, &["files"], identifier)
+            .data_plane_request(Method::POST, &["files"], identifier, &query_pairs)
             .await?
             .multipart(Form::new().part("file", part));
         let record: AzureFileRecord =
@@ -117,11 +124,18 @@ impl SessionPoolClient {
 
     pub(crate) async fn list_files(&self, identifier: &str) -> Result<Vec<SessionFile>, AppError> {
         let envelope: FilesEnvelope = self
-            .json_request(Method::GET, &["files"], identifier, None::<()>)
+            .json_request(
+                Method::GET,
+                &["files"],
+                identifier,
+                &[("recursive", "true")],
+                None::<()>,
+            )
             .await?;
         Ok(envelope
             .value
             .into_iter()
+            .filter(AzureFileRecord::is_file)
             .map(AzureFileRecord::into_session_file)
             .collect())
     }
@@ -131,11 +145,18 @@ impl SessionPoolClient {
         identifier: &str,
         filename: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
-        let mut path_segments = vec!["files"];
-        path_segments.extend(filename.split('/').filter(|segment| !segment.is_empty()));
-        path_segments.push("content");
+        let (directory, name) = split_session_file_path(filename);
+        let query_pairs = directory
+            .as_deref()
+            .map(|path| vec![("path", path)])
+            .unwrap_or_default();
         let request = self
-            .data_plane_request(Method::GET, &path_segments, identifier)
+            .data_plane_request(
+                Method::GET,
+                &["files", name.as_ref(), "content"],
+                identifier,
+                &query_pairs,
+            )
             .await?;
         parse_bytes_response(request, "download a session pool file").await
     }
@@ -145,6 +166,7 @@ impl SessionPoolClient {
         method: Method,
         path_segments: &[&str],
         identifier: &str,
+        query_pairs: &[(&str, &str)],
         body: Option<B>,
     ) -> Result<T, AppError>
     where
@@ -152,7 +174,7 @@ impl SessionPoolClient {
         B: Serialize,
     {
         let mut request = self
-            .data_plane_request(method, path_segments, identifier)
+            .data_plane_request(method, path_segments, identifier, query_pairs)
             .await?;
         if let Some(body) = body {
             request = request.json(&body);
@@ -165,12 +187,14 @@ impl SessionPoolClient {
         method: Method,
         path_segments: &[&str],
         identifier: &str,
+        query_pairs: &[(&str, &str)],
     ) -> Result<reqwest::RequestBuilder, AppError> {
         let url = session_pool_url(
             &self.pool_management_endpoint,
             path_segments,
             identifier,
             DEFAULT_AZURE_SESSION_API_VERSION,
+            query_pairs,
         )?;
         let request = self.client.request(method, url);
         if self.uses_azure_auth {
@@ -210,6 +234,8 @@ struct AzureFileRecord {
     #[serde(default)]
     last_modified_at: Option<String>,
     size_in_bytes: usize,
+    #[serde(rename = "type")]
+    record_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -218,6 +244,14 @@ struct FilesEnvelope {
 }
 
 impl AzureFileRecord {
+    fn is_file(&self) -> bool {
+        !self
+            .record_type
+            .as_deref()
+            .unwrap_or("file")
+            .eq_ignore_ascii_case("directory")
+    }
+
     fn into_session_file(self) -> SessionFile {
         let filename = match self.directory.as_deref() {
             Some("") | Some(".") | None => self.name,
@@ -278,6 +312,7 @@ fn session_pool_url(
     path_segments: &[&str],
     identifier: &str,
     api_version: &str,
+    query_pairs: &[(&str, &str)],
 ) -> Result<Url, AppError> {
     let mut url =
         Url::parse(&format!("{}/", base_endpoint.trim_end_matches('/'))).map_err(|error| {
@@ -299,8 +334,20 @@ fn session_pool_url(
         let mut query = url.query_pairs_mut();
         query.append_pair("identifier", identifier);
         query.append_pair("api-version", api_version);
+        for (name, value) in query_pairs {
+            query.append_pair(name, value);
+        }
     }
     Ok(url)
+}
+
+fn split_session_file_path(path: &str) -> (Option<Cow<'_, str>>, Cow<'_, str>) {
+    match path.rsplit_once('/') {
+        Some((directory, name)) if !directory.is_empty() => {
+            (Some(Cow::Borrowed(directory)), Cow::Borrowed(name))
+        }
+        _ => (None, Cow::Borrowed(path)),
+    }
 }
 
 async fn parse_json_response<T>(
@@ -395,7 +442,10 @@ mod tests {
     use axum::response::IntoResponse;
     use reqwest::StatusCode as ReqwestStatusCode;
 
-    use super::{is_dynamicsessions_host, map_session_pool_http_error, session_pool_url};
+    use super::{
+        is_dynamicsessions_host, map_session_pool_http_error, session_pool_url,
+        split_session_file_path,
+    };
 
     #[test]
     fn session_pool_http_errors_preserve_upstream_status_codes() {
@@ -412,23 +462,45 @@ mod tests {
     fn file_download_urls_encode_path_segments_without_losing_slashes() {
         let url = session_pool_url(
             "https://example.com/session-pool",
-            &[
-                "files",
-                "runs",
-                "run 1",
-                "output",
-                "input #1.xlsx",
-                "content",
-            ],
+            &["files", "input #1.xlsx", "content"],
             "cfg-123",
             "2025-10-02-preview",
+            &[("path", "runs/run 1/output")],
         )
         .unwrap();
 
         assert_eq!(
             url.as_str(),
-            "https://example.com/session-pool/files/runs/run%201/output/input%20%231.xlsx/content?identifier=cfg-123&api-version=2025-10-02-preview"
+            "https://example.com/session-pool/files/input%20%231.xlsx/content?identifier=cfg-123&api-version=2025-10-02-preview&path=runs%2Frun+1%2Foutput"
         );
+    }
+
+    #[test]
+    fn list_file_urls_append_recursive_query_parameters() {
+        let url = session_pool_url(
+            "https://example.com/session-pool",
+            &["files"],
+            "cfg-123",
+            "2025-10-02-preview",
+            &[("recursive", "true")],
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://example.com/session-pool/files?identifier=cfg-123&api-version=2025-10-02-preview&recursive=true"
+        );
+    }
+
+    #[test]
+    fn split_session_file_paths_into_directory_and_name() {
+        let (directory, name) = split_session_file_path("runs/run-1/output/file.xlsx");
+        assert_eq!(directory.as_deref(), Some("runs/run-1/output"));
+        assert_eq!(name.as_ref(), "file.xlsx");
+
+        let (directory, name) = split_session_file_path("notes.txt");
+        assert_eq!(directory.as_deref(), None);
+        assert_eq!(name.as_ref(), "notes.txt");
     }
 
     #[test]

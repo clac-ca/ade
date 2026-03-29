@@ -45,6 +45,9 @@ struct IdentifierQuery {
     #[allow(dead_code)]
     api_version: Option<String>,
     identifier: String,
+    path: Option<String>,
+    #[allow(dead_code)]
+    recursive: Option<bool>,
 }
 
 fn ready_state() -> ReadinessController {
@@ -70,23 +73,29 @@ async fn stub_upload_file(
         .expect("multipart file");
     let filename = field.file_name().unwrap().to_string();
     let bytes = field.bytes().await.unwrap();
+    let stored_name = match query.path.as_deref() {
+        Some(path) if !path.is_empty() && path != "." => format!("{path}/{filename}"),
+        _ => filename.clone(),
+    };
     let mut state = stub.state.lock().unwrap();
     state.identifiers.push(query.identifier.clone());
-    state.uploaded_names.push(filename.clone());
-    state
-        .uploaded_files
-        .insert(format!("{}::{filename}", query.identifier), bytes.to_vec());
+    state.uploaded_names.push(stored_name.clone());
+    state.uploaded_files.insert(
+        format!("{}::{stored_name}", query.identifier),
+        bytes.to_vec(),
+    );
 
     Json(json!({
-        "directory": filename
+        "directory": stored_name
             .rsplit_once('/')
             .map(|(directory, _)| directory)
             .unwrap_or("."),
-        "name": filename
+        "name": stored_name
             .rsplit_once('/')
             .map(|(_, name)| name)
-            .unwrap_or(filename.as_str()),
+            .unwrap_or(stored_name.as_str()),
         "sizeInBytes": bytes.len(),
+        "type": "file",
     }))
 }
 
@@ -112,6 +121,7 @@ async fn stub_list_files(
                     .map(|(_, name)| name)
                     .unwrap_or(filename),
                 "sizeInBytes": content.len(),
+                "type": "file",
             })
         })
         .collect::<Vec<_>>();
@@ -128,13 +138,17 @@ async fn stub_get_file(
     let filename = path
         .strip_suffix("/content")
         .unwrap_or_else(|| panic!("missing /content suffix: {path}"));
-    state.downloaded_names.push(filename.to_string());
-    let key = format!("{}::{filename}", query.identifier);
+    let stored_name = match query.path.as_deref() {
+        Some(path) if !path.is_empty() && path != "." => format!("{path}/{filename}"),
+        _ => filename.to_string(),
+    };
+    state.downloaded_names.push(stored_name.clone());
+    let key = format!("{}::{stored_name}", query.identifier);
     let content = state
         .uploaded_files
         .get(&key)
         .cloned()
-        .unwrap_or_else(|| panic!("missing file: {filename}"));
+        .unwrap_or_else(|| panic!("missing file: {stored_name}"));
     (StatusCode::OK, Bytes::from(content)).into_response()
 }
 
@@ -306,10 +320,7 @@ async fn session_routes_proxy_flat_files_and_preserve_scope_isolation() {
     let listed =
         serde_json::from_slice::<Value>(&to_bytes(list.into_body(), usize::MAX).await.unwrap())
             .unwrap();
-    assert_eq!(
-        listed,
-        json!([{ "filename": "notes.txt", "size": 5 }])
-    );
+    assert_eq!(listed, json!([{ "filename": "notes.txt", "size": 5 }]));
 
     let isolated_list = app
         .clone()
@@ -332,9 +343,7 @@ async fn session_routes_proxy_flat_files_and_preserve_scope_isolation() {
     let download = app
         .oneshot(
             Request::builder()
-                .uri(
-                    "/api/workspaces/workspace-a/configs/config-v1/files/notes.txt/content",
-                )
+                .uri("/api/workspaces/workspace-a/configs/config-v1/files/notes.txt/content")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -607,12 +616,7 @@ async fn run_route_uses_scoped_config_artifacts_and_existing_session_files() {
     {
         let state = state.lock().unwrap();
         assert_eq!(state.downloaded_names, Vec::<String>::new());
-        assert!(
-            state
-                .uploaded_names
-                .iter()
-                .any(|name| name == "input.csv")
-        );
+        assert!(state.uploaded_names.iter().any(|name| name == "input.csv"));
         assert!(
             state
                 .uploaded_names

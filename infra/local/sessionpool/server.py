@@ -59,24 +59,56 @@ class SessionPoolEmulator:
         identifier: str,
         filename: str,
         content: bytes,
+        directory: str | None = None,
     ) -> dict[str, Any]:
         data_dir = self._job_session(identifier).data_dir
-        target = self._resolve_file_path(data_dir, filename)
+        target = self._resolve_file_path(
+            data_dir,
+            _session_relative_path(directory, filename),
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
         return self._file_metadata(target, data_dir)
 
-    def list_files(self, *, identifier: str) -> dict[str, Any]:
+    def list_files(
+        self,
+        *,
+        identifier: str,
+        directory: str | None = None,
+        recursive: bool = False,
+    ) -> dict[str, Any]:
         data_dir = self._job_session(identifier).data_dir
+        target_dir = self._resolve_file_path(data_dir, directory or ".")
+        if not target_dir.exists():
+            return {"value": []}
+        if not target_dir.is_dir():
+            raise ValueError("path must refer to a directory.")
+
+        if recursive:
+            paths = sorted(
+                path for path in target_dir.rglob("*") if path.is_file() or path.is_dir()
+            )
+        else:
+            paths = sorted(target_dir.iterdir())
+
         files = [
             self._file_metadata(path, data_dir)
-            for path in sorted(path for path in data_dir.rglob("*") if path.is_file())
+            for path in paths
         ]
         return {"value": files}
 
-    def download_file(self, *, identifier: str, filename: str) -> tuple[str, bytes]:
+    def download_file(
+        self,
+        *,
+        identifier: str,
+        filename: str,
+        directory: str | None = None,
+    ) -> tuple[str, bytes]:
         data_dir = self._job_session(identifier).data_dir
-        path = self._resolve_file_path(data_dir, filename)
+        path = self._resolve_file_path(
+            data_dir,
+            _session_relative_path(directory, filename),
+        )
         if not path.is_file():
             raise FileNotFoundError(f"File not found: {filename}")
         return "application/octet-stream", path.read_bytes()
@@ -169,7 +201,7 @@ class SessionPoolEmulator:
             "lastModifiedAt": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
             "name": relative_path.name,
             "sizeInBytes": stat.st_size,
-            "type": "file",
+            "type": "directory" if path.is_dir() else "file",
         }
 
 
@@ -180,15 +212,22 @@ class SessionPoolRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
 
         try:
+            query = parse_qs(parsed.query)
+
             if parsed.path == "/healthz":
                 self._write_json(HTTPStatus.OK, self.server.emulator.health())
                 return
 
-            identifier = _identifier(parse_qs(parsed.query))
+            identifier = _identifier(query)
+            directory = _optional_path(query)
             if parsed.path == "/files":
                 self._write_json(
                     HTTPStatus.OK,
-                    self.server.emulator.list_files(identifier=identifier),
+                    self.server.emulator.list_files(
+                        identifier=identifier,
+                        directory=directory,
+                        recursive=_coerce_recursive(query),
+                    ),
                 )
                 return
 
@@ -199,6 +238,7 @@ class SessionPoolRequestHandler(BaseHTTPRequestHandler):
                 content_type, content = self.server.emulator.download_file(
                     identifier=identifier,
                     filename=filename,
+                    directory=directory,
                 )
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", content_type)
@@ -220,7 +260,9 @@ class SessionPoolRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
 
         try:
-            identifier = _identifier(parse_qs(parsed.query))
+            query = parse_qs(parsed.query)
+            identifier = _identifier(query)
+            directory = _optional_path(query)
 
             if parsed.path == "/executions":
                 body = self._read_json_body()
@@ -249,6 +291,7 @@ class SessionPoolRequestHandler(BaseHTTPRequestHandler):
                     identifier=identifier,
                     filename=filename,
                     content=content,
+                    directory=directory,
                 )
                 self._write_json(HTTPStatus.OK, payload)
                 return
@@ -321,11 +364,23 @@ def _coerce_timeout(value: Any, default: int, maximum: int) -> int:
     return max(1, min(timeout, maximum))
 
 
+def _coerce_recursive(query: dict[str, list[str]]) -> bool:
+    value = query.get("recursive", ["false"])[0].strip().lower()
+    return value in {"1", "true", "yes"}
+
+
 def _identifier(query: dict[str, list[str]]) -> str:
     identifier = query.get("identifier", [""])[0].strip()
     if identifier == "":
         raise ValueError("identifier is required.")
     return identifier
+
+
+def _optional_path(query: dict[str, list[str]]) -> str | None:
+    value = query.get("path", [""])[0].strip().strip("/")
+    if value in {"", "."}:
+        return None
+    return value
 
 
 def _multipart_file(content_type: str, body: bytes) -> tuple[str, bytes]:
@@ -349,6 +404,15 @@ def _multipart_file(content_type: str, body: bytes) -> tuple[str, bytes]:
         return filename, part.get_payload(decode=True) or b""
 
     raise ValueError("Multipart body must include a file field.")
+
+
+def _session_relative_path(directory: str | None, filename: str) -> str:
+    cleaned_name = filename.strip().strip("/")
+    if cleaned_name == "":
+        raise ValueError("A filename is required.")
+    if directory is None:
+        return cleaned_name
+    return f"{directory}/{cleaned_name}"
 
 
 def _python_executable(venv_dir: Path) -> Path:
