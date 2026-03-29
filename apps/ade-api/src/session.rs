@@ -26,10 +26,9 @@ const ENGINE_PACKAGE_NAME: &str = "ade-engine";
 const ENGINE_WHEEL_ENV_NAME: &str = "ADE_ENGINE_WHEEL_PATH";
 const RUN_SENTINEL_PREFIX: &str = "__ADE_RUN_RESULT__=";
 const RUNS_ROOT: &str = "runs";
-const SESSION_PREFIX: &str = "session/";
 const SESSION_SECRET_ENV_NAME: &str = "ADE_SESSION_SECRET";
 const SESSION_ROOT: &str = "/mnt/data";
-const UPLOADS_ROOT: &str = "uploads";
+const INSTALL_LOCK_SESSION_FILENAME: &str = ".ade-session-install.lock";
 const COMMAND_TEMPLATE: &str = include_str!("session/command.py.tmpl");
 const RUN_TEMPLATE: &str = include_str!("session/run.py.tmpl");
 
@@ -136,7 +135,7 @@ impl SessionService {
         self.client
             .upload_file(
                 &self.session_identifier(scope),
-                format!("{UPLOADS_ROOT}/{}", uploaded_filename(&filename)?),
+                uploaded_filename(&filename)?,
                 content_type,
                 content,
             )
@@ -144,12 +143,13 @@ impl SessionService {
     }
 
     pub(crate) async fn list_files(&self, scope: &Scope) -> Result<Vec<SessionFile>, AppError> {
+        let config = self.config_for(scope)?;
         let mut files = self
             .client
             .list_files(&self.session_identifier(scope))
             .await?
             .into_iter()
-            .filter(|file| !file.filename.starts_with(SESSION_PREFIX))
+            .filter(|file| !is_internal_session_file(&self.engine, config, &file.filename))
             .collect::<Vec<_>>();
         files.sort_by(|left, right| left.filename.cmp(&right.filename));
         Ok(files)
@@ -160,11 +160,13 @@ impl SessionService {
         scope: &Scope,
         filename: &str,
     ) -> Result<(String, Vec<u8>), AppError> {
+        let config = self.config_for(scope)?;
+        let normalized_path = public_session_path(filename)?;
+        if is_internal_session_file(&self.engine, config, &normalized_path) {
+            return Err(AppError::not_found("Session file not found.".to_string()));
+        }
         self.client
-            .download_file(
-                &self.session_identifier(scope),
-                &public_session_path(filename)?,
-            )
+            .download_file(&self.session_identifier(scope), &normalized_path)
             .await
     }
 
@@ -177,11 +179,14 @@ impl SessionService {
         let config = self.config_for(scope)?;
         let session_identifier = self.session_identifier(scope);
         let normalized_input_path = public_session_path(input_path)?;
+        if is_internal_session_file(&self.engine, config, &normalized_input_path) {
+            return Err(AppError::not_found("Session file not found.".to_string()));
+        }
 
         self.client
             .upload_file(
                 &session_identifier,
-                format!("session/engine/{}", self.engine.filename),
+                self.engine.filename.clone(),
                 Some("application/octet-stream".to_string()),
                 self.engine.bytes.clone(),
             )
@@ -189,7 +194,7 @@ impl SessionService {
         self.client
             .upload_file(
                 &session_identifier,
-                format!("session/config/{}", config.filename),
+                config.filename.clone(),
                 Some("application/octet-stream".to_string()),
                 config.bytes.clone(),
             )
@@ -340,12 +345,12 @@ fn build_run_code(
         &RunTemplateConfig {
             config_package_name: CONFIG_PACKAGE_NAME,
             config_version: config.version.clone(),
-            config_wheel_path: session_file_path(&format!("session/config/{}", config.filename)),
+            config_wheel_path: session_file_path(&config.filename),
             engine_package_name: ENGINE_PACKAGE_NAME,
             engine_version: engine.version.clone(),
-            engine_wheel_path: session_file_path(&format!("session/engine/{}", engine.filename)),
+            engine_wheel_path: session_file_path(&engine.filename),
             input_path: session_file_path(input_path),
-            install_lock_path: session_file_path("session/install.lock"),
+            install_lock_path: session_file_path(INSTALL_LOCK_SESSION_FILENAME),
             runs_root: session_file_path(RUNS_ROOT),
             sentinel_prefix: RUN_SENTINEL_PREFIX,
         },
@@ -459,7 +464,7 @@ fn public_session_path(path: &str) -> Result<String, AppError> {
     }
 
     let normalized = segments.join("/");
-    if normalized.starts_with(SESSION_PREFIX) {
+    if normalized == INSTALL_LOCK_SESSION_FILENAME {
         return Err(AppError::not_found("Session file not found.".to_string()));
     }
 
@@ -468,6 +473,10 @@ fn public_session_path(path: &str) -> Result<String, AppError> {
 
 fn session_file_path(relative_path: &str) -> String {
     format!("{SESSION_ROOT}/{}", relative_path.trim_start_matches('/'))
+}
+
+fn is_internal_session_file(engine: &PackageWheel, config: &PackageWheel, path: &str) -> bool {
+    path == engine.filename || path == config.filename || path == INSTALL_LOCK_SESSION_FILENAME
 }
 
 fn resolve_config_targets(env: &EnvBag) -> Result<HashMap<Scope, PackageWheel>, AppError> {
@@ -743,13 +752,14 @@ mod tests {
 
     #[test]
     fn public_session_paths_must_be_relative_and_not_internal() {
+        assert_eq!(public_session_path("input.csv").unwrap(), "input.csv");
         assert_eq!(
-            public_session_path("uploads/input.csv").unwrap(),
-            "uploads/input.csv"
+            public_session_path("runs/run-1/output/input.xlsx").unwrap(),
+            "runs/run-1/output/input.xlsx"
         );
-        assert!(public_session_path("/uploads/input.csv").is_err());
+        assert!(public_session_path("/input.csv").is_err());
         assert!(public_session_path("../input.csv").is_err());
-        assert!(public_session_path("session/install.lock").is_err());
+        assert!(public_session_path(".ade-session-install.lock").is_err());
     }
 
     #[test]
@@ -765,7 +775,7 @@ mod tests {
                 filename: "ade_config-2.0.0-py3-none-any.whl".to_string(),
                 version: "2.0.0".to_string(),
             },
-            "uploads/input.csv",
+            "input.csv",
         )
         .unwrap();
 

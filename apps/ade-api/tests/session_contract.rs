@@ -289,7 +289,7 @@ async fn session_routes_proxy_flat_files_and_preserve_scope_isolation() {
     let uploaded =
         serde_json::from_slice::<Value>(&to_bytes(upload.into_body(), usize::MAX).await.unwrap())
             .unwrap();
-    assert_eq!(uploaded["filename"], "uploads/notes.txt");
+    assert_eq!(uploaded["filename"], "notes.txt");
     assert_eq!(uploaded["size"], 5);
 
     let list = app
@@ -308,7 +308,7 @@ async fn session_routes_proxy_flat_files_and_preserve_scope_isolation() {
             .unwrap();
     assert_eq!(
         listed,
-        json!([{ "filename": "uploads/notes.txt", "size": 5 }])
+        json!([{ "filename": "notes.txt", "size": 5 }])
     );
 
     let isolated_list = app
@@ -333,7 +333,7 @@ async fn session_routes_proxy_flat_files_and_preserve_scope_isolation() {
         .oneshot(
             Request::builder()
                 .uri(
-                    "/api/workspaces/workspace-a/configs/config-v1/files/uploads/notes.txt/content",
+                    "/api/workspaces/workspace-a/configs/config-v1/files/notes.txt/content",
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -385,7 +385,7 @@ async fn removed_session_endpoints_return_not_found() {
     let file_metadata = app
         .oneshot(
             Request::builder()
-                .uri("/api/workspaces/workspace-a/configs/config-v1/files/uploads/notes.txt")
+                .uri("/api/workspaces/workspace-a/configs/config-v1/files/notes.txt")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -611,19 +611,19 @@ async fn run_route_uses_scoped_config_artifacts_and_existing_session_files() {
             state
                 .uploaded_names
                 .iter()
-                .any(|name| name == "uploads/input.csv")
+                .any(|name| name == "input.csv")
         );
         assert!(
             state
                 .uploaded_names
                 .iter()
-                .any(|name| name == "session/engine/ade_engine-0.1.0-py3-none-any.whl")
+                .any(|name| name == "ade_engine-0.1.0-py3-none-any.whl")
         );
         assert!(
             state
                 .uploaded_names
                 .iter()
-                .any(|name| name == "session/config/ade_config-0.1.0-py3-none-any.whl")
+                .any(|name| name == "ade_config-0.1.0-py3-none-any.whl")
         );
         assert!(
             state
@@ -683,7 +683,7 @@ async fn run_route_uses_scoped_config_artifacts_and_existing_session_files() {
             state
                 .uploaded_names
                 .iter()
-                .any(|name| name == "session/config/ade_config-0.2.0-py3-none-any.whl")
+                .any(|name| name == "ade_config-0.2.0-py3-none-any.whl")
         );
     }
 
@@ -742,7 +742,7 @@ async fn run_route_returns_not_found_for_unknown_config_targets() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "inputPath": "uploads/input.csv",
+                        "inputPath": "input.csv",
                     })
                     .to_string(),
                 ))

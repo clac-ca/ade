@@ -134,7 +134,7 @@ async function main(logger = createConsoleLogger()): Promise<void> {
       body: uploadForm,
       method: "POST",
     })) as SessionFile;
-    if (uploadedNotes.filename !== "uploads/notes.txt") {
+    if (uploadedNotes.filename !== "notes.txt") {
       throw new Error("Session file upload did not return the expected path.");
     }
 
