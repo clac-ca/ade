@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::Serialize;
 use thiserror::Error;
+use utoipa::ToSchema;
 
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 
@@ -52,8 +53,8 @@ pub enum AppError {
     Unavailable(String),
 }
 
-#[derive(Debug, Serialize)]
-struct ApiErrorBody {
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorResponse {
     error: String,
     message: String,
     #[serde(rename = "statusCode")]
@@ -198,7 +199,7 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = self.status_code();
-        let body = ApiErrorBody {
+        let body = ErrorResponse {
             error: self.response_error_label().to_string(),
             message: self.response_message(),
             status_code: status.as_u16(),

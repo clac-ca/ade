@@ -24,7 +24,20 @@ pub fn router() -> Router<crate::router::AppState> {
         .route("/runs", post(create_run))
 }
 
-async fn execute_command(
+#[utoipa::path(
+    post,
+    path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/executions",
+    tag = "session",
+    params(Scope),
+    request_body = ExecuteCommandRequest,
+    responses(
+        (status = 200, description = "Command result", body = crate::session::ExecuteCommandResponse),
+        (status = 400, description = "Invalid request", body = crate::error::ErrorResponse),
+        (status = 404, description = "Scope not found", body = crate::error::ErrorResponse),
+        (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
+    )
+)]
+pub(crate) async fn execute_command(
     State(session_service): State<Arc<SessionService>>,
     Path(scope): Path<Scope>,
     request: Result<Json<ExecuteCommandRequest>, JsonRejection>,
@@ -37,7 +50,22 @@ async fn execute_command(
     ))
 }
 
-async fn upload_file(
+#[utoipa::path(
+    post,
+    path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/files",
+    tag = "session",
+    params(Scope),
+    request_body(
+        content = crate::api_docs::UploadFileBody,
+        content_type = "multipart/form-data"
+    ),
+    responses(
+        (status = 200, description = "Uploaded file metadata", body = SessionFile),
+        (status = 400, description = "Invalid upload", body = crate::error::ErrorResponse),
+        (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
+    )
+)]
+pub(crate) async fn upload_file(
     State(session_service): State<Arc<SessionService>>,
     Path(scope): Path<Scope>,
     multipart: Multipart,
@@ -50,14 +78,39 @@ async fn upload_file(
     ))
 }
 
-async fn list_files(
+#[utoipa::path(
+    get,
+    path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/files",
+    tag = "session",
+    params(Scope),
+    responses(
+        (status = 200, description = "Session files", body = [SessionFile]),
+        (status = 404, description = "Scope not found", body = crate::error::ErrorResponse),
+        (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
+    )
+)]
+pub(crate) async fn list_files(
     State(session_service): State<Arc<SessionService>>,
     Path(scope): Path<Scope>,
 ) -> Result<Json<Vec<SessionFile>>, AppError> {
     Ok(Json(session_service.list_files(&scope).await?))
 }
 
-async fn download_file(
+#[utoipa::path(
+    get,
+    path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/files/{path}/content",
+    tag = "session",
+    params(
+        Scope,
+        ("path" = String, Path, description = "Session-relative file path")
+    ),
+    responses(
+        (status = 200, description = "Raw file bytes"),
+        (status = 404, description = "File not found", body = crate::error::ErrorResponse),
+        (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
+    )
+)]
+pub(crate) async fn download_file(
     State(session_service): State<Arc<SessionService>>,
     Path(path): Path<ContentFilePath>,
 ) -> Result<Response, AppError> {
@@ -65,7 +118,20 @@ async fn download_file(
     bytes_response(session_service.download_file(&scope, &filename).await)
 }
 
-async fn create_run(
+#[utoipa::path(
+    post,
+    path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs",
+    tag = "session",
+    params(Scope),
+    request_body = CreateRunRequest,
+    responses(
+        (status = 200, description = "ADE run result", body = RunResponse),
+        (status = 400, description = "Invalid request", body = crate::error::ErrorResponse),
+        (status = 404, description = "Scope or input file not found", body = crate::error::ErrorResponse),
+        (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
+    )
+)]
+pub(crate) async fn create_run(
     State(session_service): State<Arc<SessionService>>,
     Path(scope): Path<Scope>,
     request: Result<Json<CreateRunRequest>, JsonRejection>,
@@ -79,7 +145,7 @@ async fn create_run(
 }
 
 #[derive(Deserialize)]
-struct ContentFilePath {
+pub(crate) struct ContentFilePath {
     path: String,
     #[serde(rename = "workspaceId")]
     workspace_id: String,

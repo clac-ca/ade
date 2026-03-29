@@ -6,6 +6,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::borrow::Cow;
+use utoipa::ToSchema;
 
 use crate::{
     config::{EnvBag, read_optional_trimmed_string},
@@ -15,7 +16,7 @@ use crate::{
 const DEFAULT_AZURE_SESSION_API_VERSION: &str = "2025-10-02-preview";
 const DEFAULT_AZURE_SESSION_AUDIENCE: &str = "https://dynamicsessions.io";
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionFile {
     pub(crate) filename: String,

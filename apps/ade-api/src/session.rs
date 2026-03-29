@@ -10,6 +10,7 @@ use std::{
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::{
     config::{EnvBag, read_optional_trimmed_string},
@@ -35,22 +36,25 @@ const RUNS_ROOT: &str = "runs";
 const SESSION_ROOT: &str = "/mnt/data";
 const SESSION_SECRET_ENV_NAME: &str = "ADE_SESSION_SECRET";
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, ToSchema, IntoParams)]
+#[into_params(parameter_in = Path)]
 pub(crate) struct Scope {
+    /// Workspace id.
     #[serde(rename = "workspaceId")]
     pub(crate) workspace_id: String,
+    /// Config version id.
     #[serde(rename = "configVersionId")]
     pub(crate) config_version_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExecuteCommandRequest {
     pub(crate) shell_command: String,
     pub(crate) timeout_in_seconds: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ExecuteCommandResponse {
     pub(crate) duration_ms: u64,
@@ -59,21 +63,21 @@ pub(crate) struct ExecuteCommandResponse {
     pub(crate) stdout: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CreateRunRequest {
     pub(crate) input_path: String,
     pub(crate) timeout_in_seconds: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RunResponse {
     pub(crate) output_path: String,
     pub(crate) validation_issues: Vec<RunValidationIssue>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RunValidationIssue {
     pub(crate) row_index: usize,

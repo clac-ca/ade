@@ -15,8 +15,11 @@ use tower_http::{
     services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
+    api_docs::ApiDoc,
     error::AppError,
     readiness::ReadinessController,
     routes::{session, system},
@@ -43,6 +46,7 @@ impl FromRef<AppState> for Arc<SessionService> {
 }
 
 pub fn create_app(state: AppState) -> Router {
+    let openapi = ApiDoc::openapi();
     let api_router = Router::new()
         .route("/", get(system::api_root))
         .route("/healthz", get(system::healthz))
@@ -56,6 +60,7 @@ pub fn create_app(state: AppState) -> Router {
 
     Router::new()
         .nest("/api", api_router)
+        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi))
         .fallback(spa_or_not_found)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

@@ -190,6 +190,47 @@ async fn version_route_exposes_minimal_runtime_metadata() {
 }
 
 #[tokio::test]
+async fn openapi_route_serves_generated_spec() {
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
+
+    let response = app.oneshot(request("/api/openapi.json")).await.unwrap();
+    let payload = json_body(response).await;
+
+    assert_eq!(payload["openapi"], "3.1.0");
+    assert!(payload["paths"]["/api/healthz"].is_object());
+    assert!(
+        payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/executions"]
+            .is_object()
+    );
+}
+
+#[tokio::test]
+async fn docs_route_serves_swagger_ui() {
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
+
+    let redirect = app.clone().oneshot(request("/api/docs")).await.unwrap();
+    assert_eq!(redirect.status(), StatusCode::SEE_OTHER);
+    assert_eq!(redirect.headers().get("location").unwrap(), "/api/docs/");
+
+    let response = app.oneshot(request("/api/docs/index.html")).await.unwrap();
+    let status = response.status();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Swagger UI"));
+}
+
+#[tokio::test]
 async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
     let app = normalize_app(create_app(app_state(ReadinessController::new(
         CreateReadinessControllerOptions::default(),
