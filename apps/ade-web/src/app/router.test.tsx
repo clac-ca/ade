@@ -6,6 +6,29 @@ import { getVersion } from "../api/system";
 import { AppRouter } from "./router";
 import { createTestQueryClient } from "../test/query-client";
 
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class {
+    cols = 120;
+    rows = 32;
+
+    clear() {}
+    dispose() {}
+    loadAddon() {}
+    open() {}
+    onData() {
+      return { dispose() {} };
+    }
+    write() {}
+    writeln() {}
+  },
+}));
+
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: class {
+    fit() {}
+  },
+}));
+
 vi.mock("../api/system", () => ({
   getVersion: vi.fn(),
 }));
@@ -50,5 +73,28 @@ describe("AppRouter", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText("0.1.0")).toBeInTheDocument();
     expect(getVersion).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByRole("link", { name: "temporary terminal POC" }),
+    ).toHaveAttribute("href", "/terminal-poc");
+  });
+
+  it("renders the temporary terminal route", () => {
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter initialEntries={["/terminal-poc"]}>
+          <AppRouter />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Interactive shell over the session bridge.",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Sessions hard-stop after about 220 seconds/),
+    ).toBeInTheDocument();
   });
 });

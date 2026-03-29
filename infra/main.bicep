@@ -185,6 +185,7 @@ resource sessionPoolResource 'Microsoft.App/sessionPools@2025-10-02-preview' exi
 
 var appSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
 var migrationSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};User ID=${deploymentManagedIdentity.properties.clientId};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
+var appPublicUrl = 'https://${appName}.${platform.outputs.defaultDomain}'
 
 module app 'modules/container-app.bicep' = {
   name: 'appContainerApp'
@@ -207,6 +208,10 @@ module app 'modules/container-app.bicep' = {
       {
         name: 'ADE_SESSION_POOL_MANAGEMENT_ENDPOINT'
         value: sessionPool.outputs.poolManagementEndpoint
+      }
+      {
+        name: 'ADE_APP_URL'
+        value: appPublicUrl
       }
     ]
     probes: [

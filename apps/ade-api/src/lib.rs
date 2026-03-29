@@ -6,10 +6,12 @@ pub mod readiness;
 pub mod router;
 pub mod server;
 pub mod session;
+pub mod terminal;
 
 pub mod routes {
     pub mod session;
     pub mod system;
+    pub mod terminal;
 }
 
 pub use server::{

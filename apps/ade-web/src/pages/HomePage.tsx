@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { getVersion } from "../api/system";
 
 export function HomePage() {
@@ -50,6 +51,14 @@ export function HomePage() {
             This first slice keeps the client contract intentionally small: a
             minimal version endpoint for application identity and explicit
             health endpoints for service status.
+          </p>
+
+          <p className="status-note">
+            Need to validate the interactive terminal bridge manually? Open the{" "}
+            <Link className="inline-link" to="/terminal-poc">
+              temporary terminal POC
+            </Link>
+            .
           </p>
         </>
       ) : null}

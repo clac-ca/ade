@@ -201,6 +201,98 @@ body {
   line-height: 1.6;
 }
 
+.terminal-poc {
+  gap: 24px;
+}
+
+.terminal-poc__toolbar {
+  display: grid;
+  gap: 16px;
+}
+
+.terminal-poc__form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.terminal-poc__field {
+  display: grid;
+  gap: 8px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.terminal-poc__input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #10212c;
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.terminal-poc__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.terminal-poc__button {
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: #12495f;
+  color: #f7fbfc;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.terminal-poc__button--secondary {
+  background: rgba(18, 73, 95, 0.12);
+  color: #12495f;
+}
+
+.terminal-poc__status {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.terminal-poc__status[data-state="connected"] {
+  color: #0f6d4f;
+}
+
+.terminal-poc__status[data-state="session-expired"],
+.terminal-poc__status[data-state="error"] {
+  color: #8f3c35;
+}
+
+.terminal-surface {
+  min-height: 440px;
+  padding: 12px;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top, rgba(54, 100, 122, 0.26), transparent 44%),
+    linear-gradient(180deg, #111c24 0%, #0b1319 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.terminal-surface__viewport {
+  height: 416px;
+}
+
+.terminal-surface .xterm {
+  height: 100%;
+}
+
 @media (max-width: 720px) {
   .app-shell {
     padding-inline: 16px;
@@ -213,5 +305,13 @@ body {
   .panel {
     padding: 24px;
     border-radius: 22px;
+  }
+
+  .terminal-poc__form {
+    grid-template-columns: 1fr;
+  }
+
+  .terminal-poc__actions {
+    flex-wrap: wrap;
   }
 }

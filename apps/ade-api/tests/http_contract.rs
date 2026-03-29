@@ -5,6 +5,7 @@ use ade_api::{
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{AppState, create_app},
     session::SessionService,
+    terminal::TerminalService,
     unix_time_ms,
 };
 use axum::{
@@ -74,10 +75,23 @@ fn fixture_session_service() -> Arc<SessionService> {
     Arc::new(SessionService::from_env(&env).unwrap())
 }
 
+fn fixture_terminal_service(session_service: Arc<SessionService>) -> Arc<TerminalService> {
+    let env = [(
+        "ADE_APP_URL".to_string(),
+        "http://127.0.0.1:8000".to_string(),
+    )]
+    .into_iter()
+    .collect();
+
+    Arc::new(TerminalService::from_env(&env, session_service).unwrap())
+}
+
 fn app_state(readiness: ReadinessController) -> AppState {
+    let session_service = fixture_session_service();
     AppState {
         readiness,
-        session_service: fixture_session_service(),
+        terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
+        session_service,
         web_root: Some(fixture_web_root()),
     }
 }

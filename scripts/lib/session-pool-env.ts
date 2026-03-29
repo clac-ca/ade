@@ -5,10 +5,12 @@ import { fileURLToPath } from "node:url";
 import {
   createLocalContainerSessionPoolManagementEndpoint,
   createLocalSessionPoolManagementEndpoint,
+  localContainerAppUrl,
   localSessionPoolSecret,
 } from "./dev-config";
 import { readOptionalTrimmedString } from "./runtime";
 
+const appUrlEnvName = "ADE_APP_URL";
 const configTargetsEnvName = "ADE_CONFIG_TARGETS";
 const engineWheelEnvName = "ADE_ENGINE_WHEEL_PATH";
 const managementEndpointEnvName = "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT";
@@ -65,6 +67,7 @@ function createHostSessionPoolEnv(): Record<string, string> {
   );
 
   return {
+    [appUrlEnvName]: localContainerAppUrl,
     [configTargetsEnvName]: createConfigTargetsValue(configWheelPath),
     [sessionSecretEnvName]: localSessionPoolSecret,
     [managementEndpointEnvName]: createLocalSessionPoolManagementEndpoint(),
@@ -91,6 +94,7 @@ function createContainerSessionPoolEnv(env: NodeJS.ProcessEnv = process.env): {
       usesManagedLocalSessionPool: true,
       values: {
         ...values,
+        [appUrlEnvName]: localContainerAppUrl,
         [configTargetsEnvName]: createConfigTargetsValue(
           "/app/python/ade_config.whl",
         ),
@@ -105,6 +109,7 @@ function createContainerSessionPoolEnv(env: NodeJS.ProcessEnv = process.env): {
     usesManagedLocalSessionPool: false,
     values: {
       ...values,
+      [appUrlEnvName]: readRequiredEnv(env, appUrlEnvName),
       [configTargetsEnvName]: readRequiredEnv(env, configTargetsEnvName),
       [managementEndpointEnvName]: configuredManagementEndpoint,
       [sessionSecretEnvName]: readRequiredEnv(env, sessionSecretEnvName),

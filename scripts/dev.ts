@@ -7,6 +7,7 @@ import {
   createLocalSqlConnectionString,
   localApiHost,
   localApiPort,
+  localWebHost,
 } from "./lib/dev-config";
 import { createHostSessionPoolEnv } from "./lib/session-pool-env";
 import { createConsoleLogger, formatError, runMain } from "./lib/runtime";
@@ -113,7 +114,7 @@ async function main(logger = createConsoleLogger()): Promise<void> {
         "@ade/web",
         "dev",
         "--host",
-        localApiHost,
+        localWebHost,
         "--port",
         String(port),
         "--strictPort",

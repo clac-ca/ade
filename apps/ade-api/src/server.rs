@@ -22,6 +22,7 @@ use crate::{
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{AppState, create_app},
     session::SessionService,
+    terminal::TerminalService,
 };
 
 pub struct ServerOptions {
@@ -29,6 +30,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub probe_interval_ms: u64,
     pub session_service: Arc<SessionService>,
+    pub terminal_service: Arc<TerminalService>,
     pub sql_connection_string: String,
     pub stale_after_ms: u64,
     pub web_root: Option<PathBuf>,
@@ -58,6 +60,7 @@ impl ServerInstance {
         let app = create_app(AppState {
             readiness: readiness.clone(),
             session_service: options.session_service,
+            terminal_service: options.terminal_service,
             web_root: options.web_root,
         });
 
@@ -270,7 +273,10 @@ mod tests {
     use tokio::time::sleep;
 
     use super::*;
-    use crate::{config::DEFAULT_READINESS_STALE_AFTER_MS, session::SessionService};
+    use crate::{
+        config::DEFAULT_READINESS_STALE_AFTER_MS, session::SessionService,
+        terminal::TerminalService,
+    };
 
     #[derive(Debug, Default)]
     struct FakeDatabase {
@@ -349,15 +355,27 @@ mod tests {
         Arc::new(SessionService::from_env(&env).unwrap())
     }
 
+    fn fixture_terminal_service(session_service: Arc<SessionService>) -> Arc<TerminalService> {
+        let env = [(
+            "ADE_APP_URL".to_string(),
+            "http://127.0.0.1:8000".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        Arc::new(TerminalService::from_env(&env, session_service).unwrap())
+    }
+
     #[tokio::test]
     async fn startup_fails_when_initial_probe_fails() {
         let database: Arc<dyn DatabaseProbe> =
             Arc::new(FakeDatabase::new(vec![Err("sql unavailable".to_string())]));
+        let session_service = fixture_session_service();
         let mut server = ServerInstance::new(ServerOptions {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
-            session_service: fixture_session_service(),
+            terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
+            session_service,
             sql_connection_string: "unused".to_string(),
             stale_after_ms: DEFAULT_READINESS_STALE_AFTER_MS,
             web_root: None,
@@ -380,11 +398,13 @@ mod tests {
             Ok(()),
             Ok(()),
         ]));
+        let session_service = fixture_session_service();
         let mut server = ServerInstance::new(ServerOptions {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
-            session_service: fixture_session_service(),
+            terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
+            session_service,
             sql_connection_string: "unused".to_string(),
             stale_after_ms: DEFAULT_READINESS_STALE_AFTER_MS,
             web_root: None,

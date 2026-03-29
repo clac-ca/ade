@@ -20,14 +20,16 @@ use crate::{
     api_docs::ApiDoc,
     error::AppError,
     readiness::ReadinessController,
-    routes::{session, system},
+    routes::{session, system, terminal},
     session::SessionService,
+    terminal::TerminalService,
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub readiness: ReadinessController,
     pub session_service: Arc<SessionService>,
+    pub terminal_service: Arc<TerminalService>,
     pub web_root: Option<PathBuf>,
 }
 
@@ -43,6 +45,12 @@ impl FromRef<AppState> for Arc<SessionService> {
     }
 }
 
+impl FromRef<AppState> for Arc<TerminalService> {
+    fn from_ref(state: &AppState) -> Self {
+        Arc::clone(&state.terminal_service)
+    }
+}
+
 pub fn create_app(state: AppState) -> Router {
     let openapi = ApiDoc::openapi();
     let api_router = Router::new()
@@ -50,9 +58,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/healthz", get(system::healthz))
         .route("/readyz", get(system::readyz))
         .route("/version", get(system::version))
+        .nest("/internal", terminal::internal_router())
         .nest(
             "/workspaces/{workspaceId}/configs/{configVersionId}",
-            session::router(),
+            session::router().merge(terminal::workspace_router()),
         )
         .fallback(api_not_found);
 

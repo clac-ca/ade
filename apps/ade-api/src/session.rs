@@ -25,6 +25,7 @@ use self::{
     },
 };
 
+pub(crate) use self::client::PythonExecution;
 pub(crate) use self::client::SessionFile;
 
 const CONFIG_PACKAGE_NAME: &str = "ade-config";
@@ -229,6 +230,20 @@ impl SessionService {
 
         ensure_successful_execution(&execution)?;
         extract_run_response(&execution)
+    }
+
+    pub(crate) async fn execute_inline_python(
+        &self,
+        scope: &Scope,
+        code: String,
+        timeout_in_seconds: Option<u64>,
+    ) -> Result<PythonExecution, AppError> {
+        self.execute_python(&self.session_identifier(scope), code, timeout_in_seconds)
+            .await
+    }
+
+    pub(crate) fn session_secret(&self) -> &str {
+        &self.session_secret
     }
 
     async fn execute_python(

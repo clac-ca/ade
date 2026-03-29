@@ -2,12 +2,14 @@ use std::{
     collections::HashMap,
     path::Path as FsPath,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use ade_api::{
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{AppState, create_app},
     session::SessionService,
+    terminal::TerminalService,
     unix_time_ms,
 };
 use axum::{
@@ -18,8 +20,10 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tempfile::tempdir;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tower::util::ServiceExt;
 
 const RUN_SENTINEL_PREFIX: &str = "__ADE_RUN_RESULT__=";
@@ -35,7 +39,25 @@ struct PoolStubState {
 
 #[derive(Clone)]
 struct PoolStub {
+    options: PoolStubOptions,
     state: Arc<Mutex<PoolStubState>>,
+}
+
+#[derive(Clone, Copy)]
+struct PoolStubOptions {
+    auto_connect_terminal_bridge: bool,
+    terminal_bridge_delay_ms: u64,
+    terminal_execution_delay_ms: u64,
+}
+
+impl Default for PoolStubOptions {
+    fn default() -> Self {
+        Self {
+            auto_connect_terminal_bridge: true,
+            terminal_bridge_delay_ms: 0,
+            terminal_execution_delay_ms: 0,
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -157,9 +179,53 @@ async fn stub_execute(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let code = body["code"].as_str().unwrap().to_string();
-    let mut state = stub.state.lock().unwrap();
-    state.identifiers.push(query.identifier);
-    state.execution_codes.push(code.clone());
+    {
+        let mut state = stub.state.lock().unwrap();
+        state.identifiers.push(query.identifier);
+        state.execution_codes.push(code.clone());
+    }
+
+    if code.contains("pty.openpty()") && code.contains("websockets.connect") {
+        if let Some(bridge_url) = extract_bridge_url(&code) {
+            if stub.options.terminal_bridge_delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(stub.options.terminal_bridge_delay_ms))
+                    .await;
+            }
+
+            if stub.options.auto_connect_terminal_bridge {
+                if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
+                    let _ = socket
+                        .send(Message::Text(r#"{"type":"ready"}"#.into()))
+                        .await;
+                    let _ = socket
+                        .send(Message::Text(
+                            r#"{"type":"output","data":"terminal-ok\r\n"}"#.into(),
+                        ))
+                        .await;
+                    let _ = socket
+                        .send(Message::Text(r#"{"type":"exit","code":0}"#.into()))
+                        .await;
+                    let _ = socket.close(None).await;
+                }
+            }
+
+            if stub.options.terminal_execution_delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(
+                    stub.options.terminal_execution_delay_ms,
+                ))
+                .await;
+            }
+
+            return Json(json!({
+                "status": "Succeeded",
+                "result": {
+                    "stdout": "",
+                    "stderr": "",
+                    "executionTimeInMilliseconds": 4,
+                }
+            }));
+        }
+    }
 
     let stdout = if code.contains(RUN_SENTINEL_PREFIX) {
         format!(
@@ -186,8 +252,19 @@ async fn start_stub_server() -> (
     Arc<Mutex<PoolStubState>>,
     tokio::task::JoinHandle<()>,
 ) {
+    start_stub_server_with_options(PoolStubOptions::default()).await
+}
+
+async fn start_stub_server_with_options(
+    options: PoolStubOptions,
+) -> (
+    String,
+    Arc<Mutex<PoolStubState>>,
+    tokio::task::JoinHandle<()>,
+) {
     let state = Arc::new(Mutex::new(PoolStubState::default()));
     let stub = PoolStub {
+        options,
         state: state.clone(),
     };
     let app = Router::new()
@@ -209,6 +286,35 @@ fn app_with_session(
     config_targets: &[(&str, &str, &FsPath)],
     engine_wheel_path: &FsPath,
 ) -> axum::Router {
+    app_with_session_and_url(
+        endpoint,
+        "http://127.0.0.1:8000",
+        config_targets,
+        engine_wheel_path,
+    )
+}
+
+fn app_with_session_and_url(
+    endpoint: &str,
+    app_url: &str,
+    config_targets: &[(&str, &str, &FsPath)],
+    engine_wheel_path: &FsPath,
+) -> axum::Router {
+    app_with_session_and_url_and_terminal_service(
+        endpoint,
+        app_url,
+        config_targets,
+        engine_wheel_path,
+    )
+    .0
+}
+
+fn app_with_session_and_url_and_terminal_service(
+    endpoint: &str,
+    app_url: &str,
+    config_targets: &[(&str, &str, &FsPath)],
+    engine_wheel_path: &FsPath,
+) -> (axum::Router, Arc<TerminalService>) {
     let config_targets = config_targets
         .iter()
         .map(|(workspace_id, config_version_id, wheel_path)| {
@@ -236,17 +342,36 @@ fn app_with_session(
             "ADE_SESSION_SECRET".to_string(),
             "test-session-secret".to_string(),
         ),
+        ("ADE_APP_URL".to_string(), app_url.to_string()),
     ]
     .into_iter()
     .collect();
 
     let session_service = Arc::new(SessionService::from_env(&env).unwrap());
+    let terminal_service =
+        Arc::new(TerminalService::from_env(&env, Arc::clone(&session_service)).unwrap());
 
-    create_app(AppState {
+    let app = create_app(AppState {
         readiness: ready_state(),
+        terminal_service: Arc::clone(&terminal_service),
         session_service,
         web_root: None,
-    })
+    });
+
+    (app, terminal_service)
+}
+
+fn extract_bridge_url(code: &str) -> Option<String> {
+    let config_line = code
+        .lines()
+        .find(|line| line.trim_start().starts_with("CONFIG = json.loads("))?;
+    let encoded_json = config_line
+        .trim()
+        .strip_prefix("CONFIG = json.loads(")?
+        .strip_suffix(")")?;
+    let config_json = serde_json::from_str::<String>(encoded_json).ok()?;
+    let config = serde_json::from_str::<Value>(&config_json).ok()?;
+    config["bridgeUrl"].as_str().map(str::to_string)
 }
 
 fn create_wheels() -> (
@@ -455,6 +580,145 @@ async fn shell_command_requests_return_flat_results_and_session_ids_stay_private
     assert!(execution_codes[0].contains("subprocess.run"));
 
     handle.abort();
+}
+
+#[tokio::test]
+async fn terminal_route_starts_bootstrap_code_and_streams_bridge_events() {
+    let (endpoint, state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let terminal_url =
+        format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/terminal");
+    let (mut socket, _response) = connect_async(&terminal_url).await.unwrap();
+
+    let ready = socket.next().await.unwrap().unwrap();
+    let output = socket.next().await.unwrap().unwrap();
+    let maybe_terminal_end = tokio::time::timeout(Duration::from_millis(250), socket.next())
+        .await
+        .ok()
+        .flatten();
+
+    assert_eq!(ready.into_text().unwrap(), r#"{"type":"ready"}"#);
+    assert_eq!(
+        output.into_text().unwrap(),
+        r#"{"type":"output","data":"terminal-ok\r\n"}"#
+    );
+    if let Some(Ok(Message::Text(exit))) = maybe_terminal_end {
+        assert_eq!(exit, r#"{"type":"exit","code":0}"#);
+    }
+
+    let execution_codes = state.lock().unwrap().execution_codes.clone();
+    assert_eq!(execution_codes.len(), 1);
+    assert!(execution_codes[0].contains("pty.openpty()"));
+    assert!(execution_codes[0].contains("websockets.connect"));
+    assert!(!execution_codes[0].contains("capture_output=True"));
+
+    let _ = socket.close(None).await;
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn internal_bridge_route_can_only_attach_once() {
+    let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        auto_connect_terminal_bridge: false,
+        terminal_bridge_delay_ms: 0,
+        terminal_execution_delay_ms: 300,
+    })
+    .await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let terminal_url =
+        format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/terminal");
+    let (mut browser_socket, _response) = connect_async(&terminal_url).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let bridge_url = {
+        let execution_codes = state.lock().unwrap().execution_codes.clone();
+        extract_bridge_url(&execution_codes[0]).unwrap()
+    };
+
+    let (mut bridge_socket, _response) = connect_async(&bridge_url).await.unwrap();
+    bridge_socket
+        .send(Message::Text(r#"{"type":"ready"}"#.into()))
+        .await
+        .unwrap();
+    bridge_socket
+        .send(Message::Text(r#"{"type":"exit","code":0}"#.into()))
+        .await
+        .unwrap();
+
+    let ready = browser_socket.next().await.unwrap().unwrap();
+    let exit = browser_socket.next().await.unwrap().unwrap();
+    assert_eq!(ready.into_text().unwrap(), r#"{"type":"ready"}"#);
+    assert_eq!(exit.into_text().unwrap(), r#"{"type":"exit","code":0}"#);
+
+    assert!(connect_async(&bridge_url).await.is_err());
+
+    let _ = bridge_socket.close(None).await;
+    let _ = browser_socket.close(None).await;
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
+    let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        auto_connect_terminal_bridge: false,
+        terminal_bridge_delay_ms: 0,
+        terminal_execution_delay_ms: 300,
+    })
+    .await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (app, terminal_service) = app_with_session_and_url_and_terminal_service(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let terminal_url =
+        format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/terminal");
+    let (mut browser_socket, _response) = connect_async(&terminal_url).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(terminal_service.pending_count(), 1);
+
+    browser_socket.close(None).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(terminal_service.pending_count(), 0);
+
+    app_handle.abort();
+    stub_handle.abort();
 }
 
 #[tokio::test]

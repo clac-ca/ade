@@ -10,6 +10,7 @@ use ade_api::{
     init_tracing, run_server_until_shutdown,
     server::ServerOptions,
     session::SessionService,
+    terminal::TerminalService,
 };
 use clap::Parser;
 
@@ -41,6 +42,10 @@ async fn run() -> Result<(), AppError> {
     let args = ServerArgs::parse();
     let production = is_production(&env);
     let session_service = Arc::new(SessionService::from_env(&env)?);
+    let terminal_service = Arc::new(TerminalService::from_env(
+        &env,
+        Arc::clone(&session_service),
+    )?);
     let web_root = {
         let web_root = default_web_root();
         web_root.exists().then_some(web_root)
@@ -56,6 +61,7 @@ async fn run() -> Result<(), AppError> {
         }),
         port: args.port.unwrap_or(DEFAULT_PORT),
         probe_interval_ms: args.probe_interval_ms.unwrap_or(DEFAULT_PROBE_INTERVAL_MS),
+        terminal_service,
         session_service,
         sql_connection_string: config.sql_connection_string,
         stale_after_ms: args

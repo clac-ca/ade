@@ -6,11 +6,13 @@ import {
   createLocalSqlConnectionString,
   localApiHost,
   localApiPort,
+  localContainerAppUrl,
   localComposeProjectName,
   localSessionPoolPort,
   localSessionPoolSecret,
   localSqlPassword,
   localSqlPort,
+  localWebHost,
   localWebPort,
 } from "../lib/dev-config";
 import { readOptionalTrimmedString } from "../lib/runtime";
@@ -19,10 +21,12 @@ test("local development defaults are fixed and predictable", () => {
   assert.equal(localApiHost, "127.0.0.1");
   assert.equal(localApiPort, 8000);
   assert.equal(localComposeProjectName, "ade-local");
+  assert.equal(localContainerAppUrl, "http://host.docker.internal:5173");
   assert.equal(localSessionPoolPort, 8014);
   assert.equal(localSessionPoolSecret, "ade-local-session-secret");
   assert.equal(localSqlPort, 8013);
   assert.equal(localSqlPassword, "AdeLocal1!adeclean");
+  assert.equal(localWebHost, "0.0.0.0");
   assert.equal(localWebPort, 5173);
   assert.equal(
     createLocalSqlConnectionString(),
