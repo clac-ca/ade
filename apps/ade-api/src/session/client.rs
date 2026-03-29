@@ -11,7 +11,7 @@ use crate::{
     error::AppError,
 };
 
-const DEFAULT_AZURE_SESSION_API_VERSION: &str = "2024-02-02-preview";
+const DEFAULT_AZURE_SESSION_API_VERSION: &str = "2025-10-02-preview";
 const DEFAULT_AZURE_SESSION_AUDIENCE: &str = "https://dynamicsessions.io";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -401,13 +401,13 @@ mod tests {
                 "content",
             ],
             "cfg-123",
-            "2024-02-02-preview",
+            "2025-10-02-preview",
         )
         .unwrap();
 
         assert_eq!(
             url.as_str(),
-            "https://example.com/session-pool/files/runs/run%201/output/input%20%231.xlsx/content?identifier=cfg-123&api-version=2024-02-02-preview"
+            "https://example.com/session-pool/files/runs/run%201/output/input%20%231.xlsx/content?identifier=cfg-123&api-version=2025-10-02-preview"
         );
     }
 
