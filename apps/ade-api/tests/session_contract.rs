@@ -185,46 +185,46 @@ async fn stub_execute(
         state.execution_codes.push(code.clone());
     }
 
-    if code.contains("pty.openpty()") && code.contains("websockets.connect") {
-        if let Some(bridge_url) = extract_bridge_url(&code) {
-            if stub.options.terminal_bridge_delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(stub.options.terminal_bridge_delay_ms))
-                    .await;
-            }
+    if code.contains("pty.openpty()")
+        && code.contains("websockets.connect")
+        && let Some(bridge_url) = extract_bridge_url(&code)
+    {
+        if stub.options.terminal_bridge_delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(stub.options.terminal_bridge_delay_ms)).await;
+        }
 
-            if stub.options.auto_connect_terminal_bridge {
-                if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
-                    let _ = socket
-                        .send(Message::Text(r#"{"type":"ready"}"#.into()))
-                        .await;
-                    let _ = socket
-                        .send(Message::Text(
-                            r#"{"type":"output","data":"terminal-ok\r\n"}"#.into(),
-                        ))
-                        .await;
-                    let _ = socket
-                        .send(Message::Text(r#"{"type":"exit","code":0}"#.into()))
-                        .await;
-                    let _ = socket.close(None).await;
-                }
-            }
-
-            if stub.options.terminal_execution_delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(
-                    stub.options.terminal_execution_delay_ms,
+        if stub.options.auto_connect_terminal_bridge
+            && let Ok((mut socket, _response)) = connect_async(&bridge_url).await
+        {
+            let _ = socket
+                .send(Message::Text(r#"{"type":"ready"}"#.into()))
+                .await;
+            let _ = socket
+                .send(Message::Text(
+                    r#"{"type":"output","data":"terminal-ok\r\n"}"#.into(),
                 ))
                 .await;
-            }
-
-            return Json(json!({
-                "status": "Succeeded",
-                "result": {
-                    "stdout": "",
-                    "stderr": "",
-                    "executionTimeInMilliseconds": 4,
-                }
-            }));
+            let _ = socket
+                .send(Message::Text(r#"{"type":"exit","code":0}"#.into()))
+                .await;
+            let _ = socket.close(None).await;
         }
+
+        if stub.options.terminal_execution_delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(
+                stub.options.terminal_execution_delay_ms,
+            ))
+            .await;
+        }
+
+        return Json(json!({
+            "status": "Succeeded",
+            "result": {
+                "stdout": "",
+                "stderr": "",
+                "executionTimeInMilliseconds": 4,
+            }
+        }));
     }
 
     let stdout = if code.contains(RUN_SENTINEL_PREFIX) {
