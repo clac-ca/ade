@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use bb8::{ManageConnection, Pool};
 use bb8_tiberius::ConnectionManager;
 use thiserror::Error;
-use tiberius::AuthMethod;
+use tiberius::{AuthMethod, Row, ToSql};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
@@ -48,6 +48,41 @@ impl Database {
             })?;
 
         Ok(Self { pool })
+    }
+
+    pub async fn execute(&self, query: &str, params: &[&dyn ToSql]) -> Result<(), AppError> {
+        let mut connection = self.pool.get().await.map_err(|error| {
+            AppError::database_with_source("Failed to acquire SQL connection.", error)
+        })?;
+        connection.execute(query, params).await.map_err(|error| {
+            AppError::database_with_source("Failed to execute a SQL statement.", error)
+        })?;
+        Ok(())
+    }
+
+    pub async fn query_all(
+        &self,
+        query: &str,
+        params: &[&dyn ToSql],
+    ) -> Result<Vec<Row>, AppError> {
+        let mut connection = self.pool.get().await.map_err(|error| {
+            AppError::database_with_source("Failed to acquire SQL connection.", error)
+        })?;
+        let stream = connection.query(query, params).await.map_err(|error| {
+            AppError::database_with_source("Failed to execute a SQL query.", error)
+        })?;
+        stream.into_first_result().await.map_err(|error| {
+            AppError::database_with_source("Failed to read SQL query results.", error)
+        })
+    }
+
+    pub async fn query_optional(
+        &self,
+        query: &str,
+        params: &[&dyn ToSql],
+    ) -> Result<Option<Row>, AppError> {
+        let mut rows = self.query_all(query, params).await?;
+        Ok(rows.drain(..).next())
     }
 }
 

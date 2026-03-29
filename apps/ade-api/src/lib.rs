@@ -1,14 +1,18 @@
 pub mod api_docs;
+pub mod artifacts;
 pub mod config;
 pub mod db;
 pub mod error;
 pub mod readiness;
 pub mod router;
+pub mod run_store;
+pub mod runs;
 pub mod server;
 pub mod session;
 pub mod terminal;
 
 pub mod routes {
+    pub mod runs;
     pub mod session;
     pub mod system;
     pub mod terminal;

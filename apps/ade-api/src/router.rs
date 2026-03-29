@@ -20,7 +20,8 @@ use crate::{
     api_docs::ApiDoc,
     error::AppError,
     readiness::ReadinessController,
-    routes::{session, system, terminal},
+    routes::{runs, session, system, terminal},
+    runs::RunService,
     session::SessionService,
     terminal::TerminalService,
 };
@@ -28,6 +29,7 @@ use crate::{
 #[derive(Clone)]
 pub struct AppState {
     pub readiness: ReadinessController,
+    pub run_service: Arc<RunService>,
     pub session_service: Arc<SessionService>,
     pub terminal_service: Arc<TerminalService>,
     pub web_root: Option<PathBuf>,
@@ -45,6 +47,12 @@ impl FromRef<AppState> for Arc<SessionService> {
     }
 }
 
+impl FromRef<AppState> for Arc<RunService> {
+    fn from_ref(state: &AppState) -> Self {
+        Arc::clone(&state.run_service)
+    }
+}
+
 impl FromRef<AppState> for Arc<TerminalService> {
     fn from_ref(state: &AppState) -> Self {
         Arc::clone(&state.terminal_service)
@@ -58,10 +66,15 @@ pub fn create_app(state: AppState) -> Router {
         .route("/healthz", get(system::healthz))
         .route("/readyz", get(system::readyz))
         .route("/version", get(system::version))
-        .nest("/internal", terminal::internal_router())
+        .nest(
+            "/internal",
+            terminal::internal_router().merge(runs::internal_router()),
+        )
         .nest(
             "/workspaces/{workspaceId}/configs/{configVersionId}",
-            session::router().merge(terminal::workspace_router()),
+            session::router()
+                .merge(runs::workspace_router())
+                .merge(terminal::workspace_router()),
         )
         .fallback(api_not_found);
 

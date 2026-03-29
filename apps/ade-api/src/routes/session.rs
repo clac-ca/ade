@@ -12,7 +12,8 @@ use serde::Deserialize;
 
 use crate::{
     error::AppError,
-    session::{CreateRunRequest, ExecuteCommandRequest, RunResponse, Scope},
+    runs::RunService,
+    session::{ExecuteCommandRequest, Scope},
     session::{SessionFile, SessionService},
 };
 
@@ -21,7 +22,6 @@ pub fn router() -> Router<crate::router::AppState> {
         .route("/executions", post(execute_command))
         .route("/files", post(upload_file).get(list_files))
         .route("/files/{*path}", axum::routing::get(download_file))
-        .route("/runs", post(create_run))
 }
 
 #[utoipa::path(
@@ -66,13 +66,13 @@ pub(crate) async fn execute_command(
     )
 )]
 pub(crate) async fn upload_file(
-    State(session_service): State<Arc<SessionService>>,
+    State(run_service): State<Arc<RunService>>,
     Path(scope): Path<Scope>,
     multipart: Multipart,
 ) -> Result<Json<SessionFile>, AppError> {
     let (filename, content_type, content) = read_uploaded_file(multipart).await?;
     Ok(Json(
-        session_service
+        run_service
             .upload_file(&scope, filename, content_type, content)
             .await?,
     ))
@@ -90,10 +90,10 @@ pub(crate) async fn upload_file(
     )
 )]
 pub(crate) async fn list_files(
-    State(session_service): State<Arc<SessionService>>,
+    State(run_service): State<Arc<RunService>>,
     Path(scope): Path<Scope>,
 ) -> Result<Json<Vec<SessionFile>>, AppError> {
-    Ok(Json(session_service.list_files(&scope).await?))
+    Ok(Json(run_service.list_files(&scope).await?))
 }
 
 #[utoipa::path(
@@ -111,37 +111,11 @@ pub(crate) async fn list_files(
     )
 )]
 pub(crate) async fn download_file(
-    State(session_service): State<Arc<SessionService>>,
+    State(run_service): State<Arc<RunService>>,
     Path(path): Path<ContentFilePath>,
 ) -> Result<Response, AppError> {
     let (scope, filename) = path.into_parts()?;
-    bytes_response(session_service.download_file(&scope, &filename).await)
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs",
-    tag = "session",
-    params(Scope),
-    request_body = CreateRunRequest,
-    responses(
-        (status = 200, description = "ADE run result", body = RunResponse),
-        (status = 400, description = "Invalid request", body = crate::error::ErrorResponse),
-        (status = 404, description = "Scope or input file not found", body = crate::error::ErrorResponse),
-        (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
-    )
-)]
-pub(crate) async fn create_run(
-    State(session_service): State<Arc<SessionService>>,
-    Path(scope): Path<Scope>,
-    request: Result<Json<CreateRunRequest>, JsonRejection>,
-) -> Result<Json<RunResponse>, AppError> {
-    let request = parse_json(request)?;
-    Ok(Json(
-        session_service
-            .run(&scope, &request.input_path, request.timeout_in_seconds)
-            .await?,
-    ))
+    bytes_response(run_service.download_file(&scope, &filename).await)
 }
 
 #[derive(Deserialize)]

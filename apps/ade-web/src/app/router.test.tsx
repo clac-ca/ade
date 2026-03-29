@@ -74,8 +74,33 @@ describe("AppRouter", () => {
     expect(await screen.findByText("0.1.0")).toBeInTheDocument();
     expect(getVersion).toHaveBeenCalledTimes(1);
     expect(
+      await screen.findByRole("link", { name: "temporary run POC" }),
+    ).toHaveAttribute("href", "/run-poc");
+    expect(
       await screen.findByRole("link", { name: "temporary terminal POC" }),
     ).toHaveAttribute("href", "/terminal-poc");
+  });
+
+  it("renders the temporary run route", () => {
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter initialEntries={["/run-poc"]}>
+          <AppRouter />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Stream config install and run output over `/runs`.",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Start Run" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/execution cap of about 220 seconds/),
+    ).toBeInTheDocument();
   });
 
   it("renders the temporary terminal route", () => {

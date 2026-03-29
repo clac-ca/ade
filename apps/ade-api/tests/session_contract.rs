@@ -8,6 +8,8 @@ use std::{
 use ade_api::{
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{AppState, create_app},
+    run_store::InMemoryRunStore,
+    runs::RunService,
     session::SessionService,
     terminal::TerminalService,
     unix_time_ms,
@@ -21,12 +23,17 @@ use axum::{
     routing::{get, post},
 };
 use futures_util::{SinkExt, StreamExt};
+use reqwest::{
+    Client,
+    multipart::{Form, Part},
+};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tower::util::ServiceExt;
 
 const RUN_SENTINEL_PREFIX: &str = "__ADE_RUN_RESULT__=";
+const RUN_EVENT_SENTINEL_PREFIX: &str = "__ADE_RUN_EVENT__=";
 
 #[derive(Default)]
 struct PoolStubState {
@@ -179,9 +186,10 @@ async fn stub_execute(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let code = body["code"].as_str().unwrap().to_string();
+    let identifier = query.identifier.clone();
     {
         let mut state = stub.state.lock().unwrap();
-        state.identifiers.push(query.identifier);
+        state.identifiers.push(identifier.clone());
         state.execution_codes.push(code.clone());
     }
 
@@ -227,7 +235,81 @@ async fn stub_execute(
         }));
     }
 
-    let stdout = if code.contains(RUN_SENTINEL_PREFIX) {
+    if code.contains("websockets.connect")
+        && let Some(bridge_url) = extract_bridge_url(&code)
+    {
+        let config = extract_execution_config(&code).expect("run config");
+        let output_dir = config["outputDir"].as_str().expect("output dir");
+        let output_path = format!(
+            "{}/input.normalized.xlsx",
+            output_dir.trim_start_matches("/mnt/data/")
+        );
+        {
+            let mut state = stub.state.lock().unwrap();
+            state.uploaded_files.insert(
+                format!("{identifier}::{output_path}"),
+                b"normalized-output".to_vec(),
+            );
+        }
+
+        if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
+            let _ = socket
+                .send(Message::Text(r#"{"type":"ready"}"#.into()))
+                .await;
+            let _ = socket
+                .send(Message::Text(
+                    r#"{"type":"status","phase":"installPackages","state":"started"}"#.into(),
+                ))
+                .await;
+            let _ = socket
+                .send(Message::Text(
+                    r#"{"type":"status","phase":"installPackages","state":"completed"}"#.into(),
+                ))
+                .await;
+            let _ = socket
+                .send(Message::Text(
+                    r#"{"type":"status","phase":"executeRun","state":"started"}"#.into(),
+                ))
+                .await;
+            let _ = socket
+                .send(Message::Text(
+                    format!(
+                        r#"{{"type":"result","outputPath":"{output_path}","validationIssues":[]}}"#
+                    )
+                    .into(),
+                ))
+                .await;
+            let _ = socket.close(None).await;
+        }
+
+        return Json(json!({
+            "status": "Succeeded",
+            "result": {
+                "stdout": "",
+                "stderr": "",
+                "executionTimeInMilliseconds": 4,
+            }
+        }));
+    }
+
+    let stdout = if code.contains(RUN_EVENT_SENTINEL_PREFIX) {
+        let config = extract_execution_config(&code).expect("run config");
+        let output_dir = config["outputDir"].as_str().expect("output dir");
+        let output_path = format!(
+            "{}/input.normalized.xlsx",
+            output_dir.trim_start_matches("/mnt/data/")
+        );
+        {
+            let mut state = stub.state.lock().unwrap();
+            state.uploaded_files.insert(
+                format!("{identifier}::{output_path}"),
+                b"normalized-output".to_vec(),
+            );
+        }
+        format!(
+            "{RUN_EVENT_SENTINEL_PREFIX}{{\"type\":\"status\",\"phase\":\"installPackages\",\"state\":\"started\"}}\n{RUN_EVENT_SENTINEL_PREFIX}{{\"type\":\"status\",\"phase\":\"installPackages\",\"state\":\"completed\"}}\n{RUN_EVENT_SENTINEL_PREFIX}{{\"type\":\"status\",\"phase\":\"executeRun\",\"state\":\"started\"}}\n{RUN_EVENT_SENTINEL_PREFIX}{{\"type\":\"result\",\"outputPath\":\"{output_path}\",\"validationIssues\":[]}}\n"
+        )
+    } else if code.contains(RUN_SENTINEL_PREFIX) {
         format!(
             "run log\n{RUN_SENTINEL_PREFIX}{{\"outputPath\":\"runs/run-1/output/input.normalized.xlsx\",\"validationIssues\":[]}}\n"
         )
@@ -348,11 +430,33 @@ fn app_with_session_and_url_and_terminal_service(
     .collect();
 
     let session_service = Arc::new(SessionService::from_env(&env).unwrap());
+    let run_service = Arc::new(
+        RunService::from_env(
+            &[
+                ("ADE_APP_URL".to_string(), app_url.to_string()),
+                (
+                    "ADE_ARTIFACTS_ROOT".to_string(),
+                    engine_wheel_path
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .join("artifacts")
+                        .display()
+                        .to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            Arc::clone(&session_service),
+            Arc::new(InMemoryRunStore::default()),
+        )
+        .unwrap(),
+    );
     let terminal_service =
         Arc::new(TerminalService::from_env(&env, Arc::clone(&session_service)).unwrap());
 
     let app = create_app(AppState {
         readiness: ready_state(),
+        run_service,
         terminal_service: Arc::clone(&terminal_service),
         session_service,
         web_root: None,
@@ -361,7 +465,7 @@ fn app_with_session_and_url_and_terminal_service(
     (app, terminal_service)
 }
 
-fn extract_bridge_url(code: &str) -> Option<String> {
+fn extract_execution_config(code: &str) -> Option<Value> {
     let config_line = code
         .lines()
         .find(|line| line.trim_start().starts_with("CONFIG = json.loads("))?;
@@ -370,7 +474,11 @@ fn extract_bridge_url(code: &str) -> Option<String> {
         .strip_prefix("CONFIG = json.loads(")?
         .strip_suffix(")")?;
     let config_json = serde_json::from_str::<String>(encoded_json).ok()?;
-    let config = serde_json::from_str::<Value>(&config_json).ok()?;
+    serde_json::from_str::<Value>(&config_json).ok()
+}
+
+fn extract_bridge_url(code: &str) -> Option<String> {
+    let config = extract_execution_config(code)?;
     config["bridgeUrl"].as_str().map(str::to_string)
 }
 
@@ -911,19 +1019,16 @@ async fn run_route_uses_scoped_config_artifacts_and_existing_session_files() {
     let payload =
         serde_json::from_slice::<Value>(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
             .unwrap();
-    assert_eq!(
-        payload,
-        json!({
-            "outputPath": "runs/run-1/output/input.normalized.xlsx",
-            "validationIssues": [],
-        })
-    );
-    assert!(payload.get("runId").is_none());
+    let run_id = payload["runId"].as_str().expect("run id");
+    let output_path = payload["outputPath"].as_str().expect("output path");
+    assert_eq!(payload["validationIssues"], json!([]));
+    assert!(output_path.starts_with(&format!("runs/{run_id}/output/")));
+    assert!(output_path.ends_with("input.normalized.xlsx"));
     assert!(payload.get("resultPath").is_none());
 
     {
         let state = state.lock().unwrap();
-        assert_eq!(state.downloaded_names, Vec::<String>::new());
+        assert_eq!(state.downloaded_names, vec![output_path.to_string()]);
         assert!(state.uploaded_names.iter().any(|name| name == "input.csv"));
         assert!(
             state
@@ -1000,6 +1105,151 @@ async fn run_route_uses_scoped_config_artifacts_and_existing_session_files() {
     }
 
     handle.abort();
+}
+
+#[tokio::test]
+async fn async_runs_return_accepted_and_replay_events() {
+    let (endpoint, _state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let upload = client
+        .post(format!(
+            "http://{address}/api/workspaces/workspace-a/configs/config-v1/files"
+        ))
+        .multipart(
+            Form::new().part(
+                "file",
+                Part::bytes(b"name,email\nalice,alice@example.com\n".to_vec())
+                    .file_name("input.csv")
+                    .mime_str("text/csv")
+                    .unwrap(),
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(upload.status(), reqwest::StatusCode::OK);
+    let uploaded = upload.json::<Value>().await.unwrap();
+
+    let response = client
+        .post(format!(
+            "http://{address}/api/workspaces/workspace-a/configs/config-v1/runs"
+        ))
+        .header("Prefer", "respond-async")
+        .json(&json!({
+            "inputPath": uploaded["filename"],
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+    assert_eq!(
+        response
+            .headers()
+            .get("preference-applied")
+            .and_then(|value| value.to_str().ok()),
+        Some("respond-async")
+    );
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .to_string();
+    let payload = response.json::<Value>().await.unwrap();
+    let run_id = payload["runId"].as_str().expect("run id");
+    assert!(location.ends_with(&format!("/runs/{run_id}")));
+    assert_eq!(
+        payload["eventsUrl"],
+        Value::String(format!(
+            "/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
+        ))
+    );
+    assert_eq!(payload["status"], "pending");
+
+    let detail_url = format!("http://{address}{location}");
+    let mut detail = Value::Null;
+    for _ in 0..20 {
+        detail = client
+            .get(&detail_url)
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        if detail["status"] == "succeeded" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(detail["status"], "succeeded");
+
+    let events_url =
+        format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events");
+    let (mut socket, _response) = connect_async(events_url).await.unwrap();
+    socket
+        .send(Message::Text(
+            r#"{"type":"attach","lastSeenSeq":null}"#.into(),
+        ))
+        .await
+        .unwrap();
+
+    let mut messages = Vec::new();
+    while let Some(message) = tokio::time::timeout(Duration::from_millis(250), socket.next())
+        .await
+        .ok()
+        .flatten()
+    {
+        let message = message.unwrap();
+        if let Message::Text(text) = message {
+            messages.push(text.to_string());
+        }
+    }
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains(r#""type":"hello""#))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains(r#""type":"result""#))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains(r#""type":"complete""#))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains(r#""phase":"uploadArtifacts""#))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains(r#""phase":"persistOutputs""#))
+    );
+
+    let _ = socket.close(None).await;
+    app_handle.abort();
+    stub_handle.abort();
 }
 
 #[tokio::test]

@@ -54,6 +54,14 @@ export function HomePage() {
           </p>
 
           <p className="status-note">
+            Need to validate the async run stream manually? Open the{" "}
+            <Link className="inline-link" to="/run-poc">
+              temporary run POC
+            </Link>
+            .
+          </p>
+
+          <p className="status-note">
             Need to validate the interactive terminal bridge manually? Open the{" "}
             <Link className="inline-link" to="/terminal-poc">
               temporary terminal POC

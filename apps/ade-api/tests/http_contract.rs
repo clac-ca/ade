@@ -4,6 +4,8 @@ use ade_api::{
     config::SERVICE_VERSION,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{AppState, create_app},
+    run_store::InMemoryRunStore,
+    runs::RunService,
     session::SessionService,
     terminal::TerminalService,
     unix_time_ms,
@@ -88,8 +90,28 @@ fn fixture_terminal_service(session_service: Arc<SessionService>) -> Arc<Termina
 
 fn app_state(readiness: ReadinessController) -> AppState {
     let session_service = fixture_session_service();
+    let env = [
+        (
+            "ADE_APP_URL".to_string(),
+            "http://127.0.0.1:8000".to_string(),
+        ),
+        (
+            "ADE_ARTIFACTS_ROOT".to_string(),
+            tempdir().unwrap().path().display().to_string(),
+        ),
+    ]
+    .into_iter()
+    .collect();
     AppState {
         readiness,
+        run_service: Arc::new(
+            RunService::from_env(
+                &env,
+                Arc::clone(&session_service),
+                Arc::new(InMemoryRunStore::default()),
+            )
+            .unwrap(),
+        ),
         terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
         session_service,
         web_root: Some(fixture_web_root()),

@@ -3,9 +3,16 @@ use ade_api::embedded_migrations;
 #[test]
 fn embedded_migrations_use_small_ordered_versions() {
     let runner = embedded_migrations::migrations::runner();
-    let migrations = runner.get_migrations();
+    let mut migrations = runner
+        .get_migrations()
+        .iter()
+        .map(|migration| (migration.version() as i32, migration.name().to_string()))
+        .collect::<Vec<_>>();
+    migrations.sort_by_key(|(version, _)| *version);
 
-    assert_eq!(migrations.len(), 1);
-    assert_eq!(migrations[0].version() as i32, 1);
-    assert_eq!(migrations[0].name(), "initial_schema");
+    assert_eq!(migrations.len(), 2);
+    assert_eq!(migrations[0].0, 1);
+    assert_eq!(migrations[0].1, "initial_schema");
+    assert_eq!(migrations[1].0, 2);
+    assert_eq!(migrations[1].1, "runs");
 }

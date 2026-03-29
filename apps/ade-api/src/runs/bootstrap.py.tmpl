@@ -1,0 +1,228 @@
+import asyncio
+import fcntl
+import importlib.metadata
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+CONFIG = json.loads({{CONFIG_JSON}})
+SESSION_ROOT = Path("/mnt/data")
+INPUT_PATH = Path(CONFIG["inputPath"])
+OUTPUT_DIR = Path(CONFIG["outputDir"])
+INSTALL_LOCK_PATH = Path(CONFIG["installLockPath"])
+
+
+def event_payload(payload):
+    return json.dumps(payload, separators=(",", ":"))
+
+
+class StdoutEmitter:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def ready(self):
+        return
+
+    async def emit(self, payload):
+        print(CONFIG["eventSentinelPrefix"] + event_payload(payload), flush=True)
+
+
+class WebSocketEmitter:
+    def __init__(self):
+        self.socket = None
+        self.control_task = None
+
+    async def __aenter__(self):
+        ensure_websockets()
+        import websockets
+
+        self.socket = await websockets.connect(CONFIG["bridgeUrl"])
+        self.control_task = asyncio.create_task(self.listen_for_control())
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self.control_task is not None:
+            self.control_task.cancel()
+        if self.socket is not None:
+            await self.socket.close()
+        return False
+
+    async def ready(self):
+        await self.socket.send(event_payload({"type": "ready"}))
+
+    async def emit(self, payload):
+        await self.socket.send(event_payload(payload))
+
+    async def listen_for_control(self):
+        try:
+            async for message in self.socket:
+                payload = json.loads(message)
+                if payload.get("type") == "cancel":
+                    os._exit(130)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+
+
+def ensure_websockets():
+    try:
+        import websockets  # noqa: F401
+    except ModuleNotFoundError:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "websockets>=12,<16"],
+            check=True,
+        )
+
+
+def emitter():
+    if CONFIG.get("bridgeUrl"):
+        return WebSocketEmitter()
+    return StdoutEmitter()
+
+
+async def emit_status(sink, phase, state):
+    await sink.emit({"type": "status", "phase": phase, "state": state})
+
+
+async def emit_log(sink, phase, level, message):
+    await sink.emit(
+        {"type": "log", "phase": phase, "level": level, "message": message.rstrip("\n")}
+    )
+
+
+async def emit_error(sink, phase, message, retriable):
+    await sink.emit(
+        {
+            "type": "error",
+            "phase": phase,
+            "message": str(message),
+            "retriable": retriable,
+        }
+    )
+
+
+async def stream_subprocess(sink, phase, argv):
+    process = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def pump(stream, level):
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            await emit_log(sink, phase, level, line.decode("utf-8", errors="replace"))
+
+    await asyncio.gather(pump(process.stdout, "info"), pump(process.stderr, "error"))
+    return_code = await process.wait()
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, argv)
+
+
+def installed_version(package_name):
+    try:
+        return importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+async def ensure_package(sink, phase, package_name, expected_version, wheel_path, install_args):
+    if installed_version(package_name) == expected_version:
+        await emit_log(
+            sink,
+            phase,
+            "info",
+            f"{package_name} {expected_version} already installed",
+        )
+        return
+
+    await stream_subprocess(
+        sink,
+        phase,
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            *install_args,
+            wheel_path,
+        ],
+    )
+
+
+async def install_packages(sink):
+    await emit_status(sink, "installPackages", "started")
+    INSTALL_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with INSTALL_LOCK_PATH.open("w") as install_lock_file:
+        fcntl.flock(install_lock_file.fileno(), fcntl.LOCK_EX)
+        await ensure_package(
+            sink,
+            "installPackages",
+            CONFIG["enginePackageName"],
+            CONFIG["engineVersion"],
+            CONFIG["engineWheelPath"],
+            ["--force-reinstall"],
+        )
+        await ensure_package(
+            sink,
+            "installPackages",
+            CONFIG["configPackageName"],
+            CONFIG["configVersion"],
+            CONFIG["configWheelPath"],
+            ["--no-deps", "--force-reinstall"],
+        )
+    await emit_status(sink, "installPackages", "completed")
+
+
+async def execute_run(sink):
+    await emit_status(sink, "executeRun", "started")
+    from ade_engine import load_config, process
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    config = await asyncio.to_thread(load_config, "ade_config", name="ade-config")
+    result = await asyncio.to_thread(
+        process,
+        config=config,
+        input_path=INPUT_PATH,
+        output_dir=OUTPUT_DIR,
+    )
+
+    await sink.emit(
+        {
+            "type": "result",
+            "outputPath": result.output_path.relative_to(SESSION_ROOT).as_posix(),
+            "validationIssues": [
+                {
+                    "rowIndex": issue.row_index,
+                    "field": issue.field,
+                    "message": issue.message,
+                }
+                for issue in result.validation_issues
+            ],
+        }
+    )
+
+
+async def main():
+    async with emitter() as sink:
+        await sink.ready()
+        try:
+            await install_packages(sink)
+            await execute_run(sink)
+        except Exception as error:
+            phase = "installPackages" if installed_version(CONFIG["enginePackageName"]) != CONFIG["engineVersion"] else "executeRun"
+            retriable = phase == "installPackages"
+            await emit_error(sink, phase, error, retriable)
+            raise
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

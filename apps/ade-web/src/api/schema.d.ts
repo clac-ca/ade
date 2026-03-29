@@ -4,534 +4,691 @@
  */
 
 export interface paths {
-    "/api": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["api_root"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+  "/api": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/healthz": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["healthz"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["api_root"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/healthz": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/readyz": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["readyz"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["healthz"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/readyz": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/version": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["version"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["readyz"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/version": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/workspaces/{workspaceId}/configs/{configVersionId}/executions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["execute_command"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["version"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/workspaces/{workspaceId}/configs/{configVersionId}/executions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/workspaces/{workspaceId}/configs/{configVersionId}/files": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["list_files"];
-        put?: never;
-        post: operations["upload_file"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    post: operations["execute_command"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/workspaces/{workspaceId}/configs/{configVersionId}/files": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/workspaces/{workspaceId}/configs/{configVersionId}/files/{path}/content": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["download_file"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["list_files"];
+    put?: never;
+    post: operations["upload_file"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/workspaces/{workspaceId}/configs/{configVersionId}/files/{path}/content": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["create_run"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get: operations["download_file"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
+    get?: never;
+    put?: never;
+    post: operations["create_run"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_run"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/cancel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["cancel_run"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: {
-        CreateRunRequest: {
-            inputPath: string;
-            /** Format: int64 */
-            timeoutInSeconds?: number | null;
-        };
-        ErrorResponse: {
-            error: string;
-            message: string;
-            /** Format: int32 */
-            statusCode: number;
-        };
-        ExecuteCommandRequest: {
-            shellCommand: string;
-            /** Format: int64 */
-            timeoutInSeconds?: number | null;
-        };
-        ExecuteCommandResponse: {
-            /** Format: int64 */
-            durationMs: number;
-            /** Format: int64 */
-            exitCode: number;
-            stderr: string;
-            stdout: string;
-        };
-        RootResponse: {
-            service: string;
-            status: string;
-            version: string;
-        };
-        RunResponse: {
-            outputPath: string;
-            validationIssues: components["schemas"]["RunValidationIssue"][];
-        };
-        RunValidationIssue: {
-            field: string;
-            message: string;
-            rowIndex: number;
-        };
-        ServiceStatusResponse: {
-            service: string;
-            status: string;
-        };
-        SessionFile: {
-            filename: string;
-            lastModifiedTime?: string | null;
-            size: number;
-        };
-        UploadFileBody: {
-            /** Format: binary */
-            file: string;
-        };
-        VersionResponse: {
-            service: string;
-            version: string;
-        };
+  schemas: {
+    AsyncRunResponse: {
+      eventsUrl: string;
+      runId: string;
+      status: components["schemas"]["RunStatus"];
     };
-    responses: never;
-    parameters: never;
-    requestBodies: never;
-    headers: never;
-    pathItems: never;
+    CreateRunRequest: {
+      inputPath: string;
+      /** Format: int64 */
+      timeoutInSeconds?: number | null;
+    };
+    ErrorResponse: {
+      error: string;
+      message: string;
+      /** Format: int32 */
+      statusCode: number;
+    };
+    ExecuteCommandRequest: {
+      shellCommand: string;
+      /** Format: int64 */
+      timeoutInSeconds?: number | null;
+    };
+    ExecuteCommandResponse: {
+      /** Format: int64 */
+      durationMs: number;
+      /** Format: int64 */
+      exitCode: number;
+      stderr: string;
+      stdout: string;
+    };
+    RootResponse: {
+      service: string;
+      status: string;
+      version: string;
+    };
+    RunDetailResponse: {
+      /** Format: int32 */
+      attemptCount: number;
+      errorMessage?: string | null;
+      inputPath: string;
+      /** Format: int64 */
+      lastEventSeq?: number | null;
+      lastSessionGuid?: string | null;
+      outputPath?: string | null;
+      phase?: null | components["schemas"]["RunPhase"];
+      runId: string;
+      status: components["schemas"]["RunStatus"];
+      validationIssues: components["schemas"]["RunValidationIssue"][];
+    };
+    /** @enum {string} */
+    RunPhase:
+      | "executeRun"
+      | "installPackages"
+      | "persistOutputs"
+      | "uploadArtifacts";
+    RunResponse: {
+      outputPath: string;
+      runId?: string;
+      validationIssues: components["schemas"]["RunValidationIssue"][];
+    };
+    /** @enum {string} */
+    RunStatus: "cancelled" | "failed" | "pending" | "running" | "succeeded";
+    RunValidationIssue: {
+      field: string;
+      message: string;
+      rowIndex: number;
+    };
+    ServiceStatusResponse: {
+      service: string;
+      status: string;
+    };
+    SessionFile: {
+      filename: string;
+      lastModifiedTime?: string | null;
+      size: number;
+    };
+    UploadFileBody: {
+      /** Format: binary */
+      file: string;
+    };
+    VersionResponse: {
+      service: string;
+      version: string;
+    };
+  };
+  responses: never;
+  parameters: never;
+  requestBodies: never;
+  headers: never;
+  pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    api_root: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description API root */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RootResponse"];
-                };
-            };
-        };
+  api_root: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    healthz: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description API root */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Service health */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ServiceStatusResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["RootResponse"];
         };
+      };
     };
-    readyz: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Service is ready */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ServiceStatusResponse"];
-                };
-            };
-            /** @description Service is not ready */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ServiceStatusResponse"];
-                };
-            };
-        };
+  };
+  healthz: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    version: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Service health */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Service version */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VersionResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["ServiceStatusResponse"];
         };
+      };
     };
-    execute_command: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace id. */
-                workspaceId: string;
-                /** @description Config version id. */
-                configVersionId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ExecuteCommandRequest"];
-            };
-        };
-        responses: {
-            /** @description Command result */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecuteCommandResponse"];
-                };
-            };
-            /** @description Invalid request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Scope not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  readyz: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    list_files: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace id. */
-                workspaceId: string;
-                /** @description Config version id. */
-                configVersionId: string;
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Service is ready */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Session files */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionFile"][];
-                };
-            };
-            /** @description Scope not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["ServiceStatusResponse"];
         };
+      };
+      /** @description Service is not ready */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ServiceStatusResponse"];
+        };
+      };
     };
-    upload_file: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace id. */
-                workspaceId: string;
-                /** @description Config version id. */
-                configVersionId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["UploadFileBody"];
-            };
-        };
-        responses: {
-            /** @description Uploaded file metadata */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionFile"];
-                };
-            };
-            /** @description Invalid upload */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  version: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    download_file: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace id. */
-                workspaceId: string;
-                /** @description Config version id. */
-                configVersionId: string;
-                /** @description Session-relative file path */
-                path: string;
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Service version */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Raw file bytes */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description File not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+        content: {
+          "application/json": components["schemas"]["VersionResponse"];
         };
+      };
     };
-    create_run: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace id. */
-                workspaceId: string;
-                /** @description Config version id. */
-                configVersionId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateRunRequest"];
-            };
-        };
-        responses: {
-            /** @description ADE run result */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunResponse"];
-                };
-            };
-            /** @description Invalid request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Scope or input file not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Internal error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
+  };
+  execute_command: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Workspace id. */
+        workspaceId: string;
+        /** @description Config version id. */
+        configVersionId: string;
+      };
+      cookie?: never;
     };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ExecuteCommandRequest"];
+      };
+    };
+    responses: {
+      /** @description Command result */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ExecuteCommandResponse"];
+        };
+      };
+      /** @description Invalid request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Scope not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Internal error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  list_files: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Workspace id. */
+        workspaceId: string;
+        /** @description Config version id. */
+        configVersionId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Session files */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SessionFile"][];
+        };
+      };
+      /** @description Scope not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Internal error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  upload_file: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Workspace id. */
+        workspaceId: string;
+        /** @description Config version id. */
+        configVersionId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "multipart/form-data": components["schemas"]["UploadFileBody"];
+      };
+    };
+    responses: {
+      /** @description Uploaded file metadata */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SessionFile"];
+        };
+      };
+      /** @description Invalid upload */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Internal error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  download_file: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Workspace id. */
+        workspaceId: string;
+        /** @description Config version id. */
+        configVersionId: string;
+        /** @description Session-relative file path */
+        path: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Raw file bytes */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description File not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Internal error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  create_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Workspace id. */
+        workspaceId: string;
+        /** @description Config version id. */
+        configVersionId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateRunRequest"];
+      };
+    };
+    responses: {
+      /** @description ADE run result */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunResponse"];
+        };
+      };
+      /** @description Accepted async run */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AsyncRunResponse"];
+        };
+      };
+      /** @description Invalid request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Scope or input file not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Internal error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  get_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Workspace id. */
+        workspaceId: string;
+        /** @description Config version id. */
+        configVersionId: string;
+        /** @description Run identifier */
+        runId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Run detail */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunDetailResponse"];
+        };
+      };
+      /** @description Run not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Internal error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
+  cancel_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Workspace id. */
+        workspaceId: string;
+        /** @description Config version id. */
+        configVersionId: string;
+        /** @description Run identifier */
+        runId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Run cancelled */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Run not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+      /** @description Internal error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorResponse"];
+        };
+      };
+    };
+  };
 }

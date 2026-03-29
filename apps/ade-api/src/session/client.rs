@@ -11,6 +11,7 @@ use utoipa::ToSchema;
 use crate::{
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
+    run_store::RunTimings,
 };
 
 const DEFAULT_AZURE_SESSION_API_VERSION: &str = "2025-10-02-preview";
@@ -18,11 +19,11 @@ const DEFAULT_AZURE_SESSION_AUDIENCE: &str = "https://dynamicsessions.io";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SessionFile {
-    pub(crate) filename: String,
+pub struct SessionFile {
+    pub filename: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) last_modified_time: Option<String>,
-    pub(crate) size: usize,
+    pub last_modified_time: Option<String>,
+    pub size: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +32,19 @@ pub(crate) struct PythonExecution {
     pub(crate) status: String,
     pub(crate) stderr: String,
     pub(crate) stdout: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SessionOperationMetadata {
+    pub(crate) operation_id: Option<String>,
+    pub(crate) session_guid: Option<String>,
+    pub(crate) timings: Option<RunTimings>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionOperationResult<T> {
+    pub(crate) metadata: SessionOperationMetadata,
+    pub(crate) value: T,
 }
 
 pub(crate) struct SessionPoolClient {
@@ -72,7 +86,19 @@ impl SessionPoolClient {
         code: String,
         timeout_in_seconds: Option<u64>,
     ) -> Result<PythonExecution, AppError> {
-        let envelope: ExecutionEnvelope = self
+        Ok(self
+            .execute_detailed(identifier, code, timeout_in_seconds)
+            .await?
+            .value)
+    }
+
+    pub(crate) async fn execute_detailed(
+        &self,
+        identifier: &str,
+        code: String,
+        timeout_in_seconds: Option<u64>,
+    ) -> Result<SessionOperationResult<PythonExecution>, AppError> {
+        let envelope: SessionOperationResult<ExecutionEnvelope> = self
             .json_request(
                 Method::POST,
                 &["executions"],
@@ -87,21 +113,28 @@ impl SessionPoolClient {
             )
             .await?;
 
-        Ok(PythonExecution {
-            duration_ms: envelope.result.execution_time_in_milliseconds.unwrap_or(0),
-            status: envelope.status,
-            stderr: envelope.result.stderr,
-            stdout: envelope.result.stdout,
+        Ok(SessionOperationResult {
+            metadata: envelope.metadata,
+            value: PythonExecution {
+                duration_ms: envelope
+                    .value
+                    .result
+                    .execution_time_in_milliseconds
+                    .unwrap_or(0),
+                status: envelope.value.status,
+                stderr: envelope.value.result.stderr,
+                stdout: envelope.value.result.stdout,
+            },
         })
     }
 
-    pub(crate) async fn upload_file(
+    pub(crate) async fn upload_file_detailed(
         &self,
         identifier: &str,
         filename: String,
         content_type: Option<String>,
         content: Vec<u8>,
-    ) -> Result<SessionFile, AppError> {
+    ) -> Result<SessionOperationResult<SessionFile>, AppError> {
         let (directory, name) = split_session_file_path(&filename);
         let mut part = Part::bytes(content).file_name(name.to_string());
         if let Some(content_type) = content_type {
@@ -118,34 +151,19 @@ impl SessionPoolClient {
             .data_plane_request(Method::POST, &["files"], identifier, &query_pairs)
             .await?
             .multipart(Form::new().part("file", part));
-        let record: AzureFileRecord =
+        let record: SessionOperationResult<AzureFileRecord> =
             parse_json_response(request, "upload a session pool file").await?;
-        Ok(record.into_session_file())
+        Ok(SessionOperationResult {
+            metadata: record.metadata,
+            value: record.value.into_session_file(),
+        })
     }
 
-    pub(crate) async fn list_files(&self, identifier: &str) -> Result<Vec<SessionFile>, AppError> {
-        let envelope: FilesEnvelope = self
-            .json_request(
-                Method::GET,
-                &["files"],
-                identifier,
-                &[("recursive", "true")],
-                None::<()>,
-            )
-            .await?;
-        Ok(envelope
-            .value
-            .into_iter()
-            .filter(AzureFileRecord::is_file)
-            .map(AzureFileRecord::into_session_file)
-            .collect())
-    }
-
-    pub(crate) async fn download_file(
+    pub(crate) async fn download_file_detailed(
         &self,
         identifier: &str,
         filename: &str,
-    ) -> Result<(String, Vec<u8>), AppError> {
+    ) -> Result<SessionOperationResult<(String, Vec<u8>)>, AppError> {
         let (directory, name) = split_session_file_path(filename);
         let query_pairs = directory
             .as_deref()
@@ -169,7 +187,7 @@ impl SessionPoolClient {
         identifier: &str,
         query_pairs: &[(&str, &str)],
         body: Option<B>,
-    ) -> Result<T, AppError>
+    ) -> Result<SessionOperationResult<T>, AppError>
     where
         T: DeserializeOwned,
         B: Serialize,
@@ -235,24 +253,9 @@ struct AzureFileRecord {
     #[serde(default)]
     last_modified_at: Option<String>,
     size_in_bytes: usize,
-    #[serde(rename = "type")]
-    record_type: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct FilesEnvelope {
-    value: Vec<AzureFileRecord>,
 }
 
 impl AzureFileRecord {
-    fn is_file(&self) -> bool {
-        !self
-            .record_type
-            .as_deref()
-            .unwrap_or("file")
-            .eq_ignore_ascii_case("directory")
-    }
-
     fn into_session_file(self) -> SessionFile {
         let filename = match self.directory.as_deref() {
             Some("" | ".") | None => self.name,
@@ -354,7 +357,7 @@ fn split_session_file_path(path: &str) -> (Option<Cow<'_, str>>, Cow<'_, str>) {
 async fn parse_json_response<T>(
     builder: reqwest::RequestBuilder,
     operation: &str,
-) -> Result<T, AppError>
+) -> Result<SessionOperationResult<T>, AppError>
 where
     T: DeserializeOwned,
 {
@@ -368,18 +371,21 @@ where
         return Err(map_session_pool_http_error(status, message));
     }
 
-    response.json::<T>().await.map_err(|error| {
+    let metadata = session_operation_metadata(response.headers());
+    let value = response.json::<T>().await.map_err(|error| {
         AppError::internal_with_source(
             format!("Failed to decode the session-pool response while trying to {operation}."),
             error,
         )
-    })
+    })?;
+
+    Ok(SessionOperationResult { metadata, value })
 }
 
 async fn parse_bytes_response(
     builder: reqwest::RequestBuilder,
     operation: &str,
-) -> Result<(String, Vec<u8>), AppError> {
+) -> Result<SessionOperationResult<(String, Vec<u8>)>, AppError> {
     let response = builder.send().await.map_err(|error| {
         AppError::internal_with_source(format!("Failed to {operation}."), error)
     })?;
@@ -396,6 +402,7 @@ async fn parse_bytes_response(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
+    let metadata = session_operation_metadata(response.headers());
     let body = response.bytes().await.map_err(|error| {
         AppError::internal_with_source(
             format!("Failed to read the session-pool response while trying to {operation}."),
@@ -403,7 +410,49 @@ async fn parse_bytes_response(
         )
     })?;
 
-    Ok((content_type, body.to_vec()))
+    Ok(SessionOperationResult {
+        metadata,
+        value: (content_type, body.to_vec()),
+    })
+}
+
+fn session_operation_metadata(headers: &reqwest::header::HeaderMap) -> SessionOperationMetadata {
+    let timings = RunTimings {
+        allocation_time_ms: header_u64(headers, "x-ms-allocation-time"),
+        container_execution_duration_ms: header_u64(headers, "x-ms-container-execution-duration"),
+        overall_execution_time_ms: header_u64(headers, "x-ms-overall-execution-time"),
+        preparation_time_ms: header_u64(headers, "x-ms-preparation-time"),
+    };
+
+    SessionOperationMetadata {
+        operation_id: header_string(headers, "operation-id"),
+        session_guid: header_string(headers, "x-ms-session-guid"),
+        timings: if timings.allocation_time_ms.is_some()
+            || timings.container_execution_duration_ms.is_some()
+            || timings.overall_execution_time_ms.is_some()
+            || timings.preparation_time_ms.is_some()
+        {
+            Some(timings)
+        } else {
+            None
+        },
+    }
+}
+
+fn header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn header_u64(headers: &reqwest::header::HeaderMap, name: &str) -> Option<u64> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
 async fn error_message(response: reqwest::Response) -> Result<String, AppError> {

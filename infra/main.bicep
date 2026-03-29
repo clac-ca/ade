@@ -104,6 +104,7 @@ var mergedTags = union({
 }, tags)
 var githubOidcSubject = 'repo:${githubOrganization}/${githubRepository}:environment:${githubEnvironmentName}'
 var sessionExecutorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0fb8eba5-a2bb-4abe-b1c1-49dfad359bb0')
+var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 
 resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: deploymentManagedIdentityName
@@ -183,6 +184,10 @@ resource sessionPoolResource 'Microsoft.App/sessionPools@2025-10-02-preview' exi
   name: sessionPoolName
 }
 
+resource storageAccountResource 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {
+  name: storageAccountName
+}
+
 var appSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
 var migrationSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};User ID=${deploymentManagedIdentity.properties.clientId};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
 var appPublicUrl = 'https://${appName}.${platform.outputs.defaultDomain}'
@@ -212,6 +217,14 @@ module app 'modules/container-app.bicep' = {
       {
         name: 'ADE_APP_URL'
         value: appPublicUrl
+      }
+      {
+        name: 'ADE_BLOB_ACCOUNT_URL'
+        value: storage.outputs.blobEndpoint
+      }
+      {
+        name: 'ADE_BLOB_CONTAINER'
+        value: storage.outputs.blobContainerName
       }
     ]
     probes: [
@@ -279,6 +292,16 @@ resource appSessionPoolExecutorRoleAssignment 'Microsoft.Authorization/roleAssig
     principalId: app.outputs.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: sessionExecutorRoleDefinitionId
+  }
+}
+
+resource appStorageBlobDataContributorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccountResource.id, appName, storageBlobDataContributorRoleDefinitionId)
+  scope: storageAccountResource
+  properties: {
+    principalId: app.outputs.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: storageBlobDataContributorRoleDefinitionId
   }
 }
 

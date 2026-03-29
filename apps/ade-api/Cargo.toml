@@ -14,7 +14,10 @@ bb8-tiberius = { version = "0.16.0", default-features = false, features = ["tds7
 clap = { version = "4.5.48", features = ["derive"] }
 hex = "0.4.3"
 hmac = "0.12.1"
+httpdate = "1.0.3"
+mime_guess = "2.0.5"
 native-tls = { version = "0.2.18", features = ["vendored"] }
+quick-xml = { version = "0.38.3", features = ["serialize"] }
 refinery = { version = "0.9.0", features = ["tiberius"] }
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -30,6 +33,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 utoipa = "5.4.0"
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 futures-util = "0.3.31"

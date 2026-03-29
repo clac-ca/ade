@@ -19,14 +19,11 @@ use crate::{
 
 use self::{
     client::SessionPoolClient,
-    python::{
-        RunPythonConfig, build_run_code, command_execution_code, ensure_successful_execution,
-        extract_command_response, extract_run_response,
-    },
+    python::{command_execution_code, extract_command_response},
 };
 
 pub(crate) use self::client::PythonExecution;
-pub(crate) use self::client::SessionFile;
+pub(crate) use self::client::{SessionFile, SessionOperationMetadata, SessionOperationResult};
 
 const CONFIG_PACKAGE_NAME: &str = "ade-config";
 const CONFIG_TARGETS_ENV_NAME: &str = "ADE_CONFIG_TARGETS";
@@ -39,51 +36,53 @@ const SESSION_SECRET_ENV_NAME: &str = "ADE_SESSION_SECRET";
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, ToSchema, IntoParams)]
 #[into_params(parameter_in = Path)]
-pub(crate) struct Scope {
+pub struct Scope {
     /// Workspace id.
     #[serde(rename = "workspaceId")]
-    pub(crate) workspace_id: String,
+    pub workspace_id: String,
     /// Config version id.
     #[serde(rename = "configVersionId")]
-    pub(crate) config_version_id: String,
+    pub config_version_id: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ExecuteCommandRequest {
-    pub(crate) shell_command: String,
-    pub(crate) timeout_in_seconds: Option<u64>,
+pub struct ExecuteCommandRequest {
+    pub shell_command: String,
+    pub timeout_in_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ExecuteCommandResponse {
-    pub(crate) duration_ms: u64,
-    pub(crate) exit_code: i64,
-    pub(crate) stderr: String,
-    pub(crate) stdout: String,
+pub struct ExecuteCommandResponse {
+    pub duration_ms: u64,
+    pub exit_code: i64,
+    pub stderr: String,
+    pub stdout: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct CreateRunRequest {
-    pub(crate) input_path: String,
-    pub(crate) timeout_in_seconds: Option<u64>,
+pub struct CreateRunRequest {
+    pub input_path: String,
+    pub timeout_in_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RunResponse {
-    pub(crate) output_path: String,
-    pub(crate) validation_issues: Vec<RunValidationIssue>,
+pub struct RunResponse {
+    #[serde(default)]
+    pub run_id: String,
+    pub output_path: String,
+    pub validation_issues: Vec<RunValidationIssue>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RunValidationIssue {
-    pub(crate) row_index: usize,
-    pub(crate) field: String,
-    pub(crate) message: String,
+pub struct RunValidationIssue {
+    pub row_index: usize,
+    pub field: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,6 +90,20 @@ struct PackageWheel {
     bytes: Vec<u8>,
     filename: String,
     version: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionRuntimeArtifacts {
+    pub(crate) config_filename: String,
+    pub(crate) config_package_name: &'static str,
+    pub(crate) config_version: String,
+    pub(crate) config_wheel_bytes: Vec<u8>,
+    pub(crate) engine_filename: String,
+    pub(crate) engine_package_name: &'static str,
+    pub(crate) engine_version: String,
+    pub(crate) engine_wheel_bytes: Vec<u8>,
+    pub(crate) install_lock_path: String,
+    pub(crate) runs_root: String,
 }
 
 pub struct SessionService {
@@ -133,105 +146,6 @@ impl SessionService {
         extract_command_response(execution)
     }
 
-    pub(crate) async fn upload_file(
-        &self,
-        scope: &Scope,
-        filename: String,
-        content_type: Option<String>,
-        content: Vec<u8>,
-    ) -> Result<SessionFile, AppError> {
-        self.client
-            .upload_file(
-                &self.session_identifier(scope),
-                uploaded_filename(&filename)?,
-                content_type,
-                content,
-            )
-            .await
-    }
-
-    pub(crate) async fn list_files(&self, scope: &Scope) -> Result<Vec<SessionFile>, AppError> {
-        let config = self.config_for(scope)?;
-        let mut files = self
-            .client
-            .list_files(&self.session_identifier(scope))
-            .await?
-            .into_iter()
-            .filter(|file| !is_internal_session_file(&self.engine, config, &file.filename))
-            .collect::<Vec<_>>();
-        files.sort_by(|left, right| left.filename.cmp(&right.filename));
-        Ok(files)
-    }
-
-    pub(crate) async fn download_file(
-        &self,
-        scope: &Scope,
-        filename: &str,
-    ) -> Result<(String, Vec<u8>), AppError> {
-        let config = self.config_for(scope)?;
-        let normalized_path = public_session_path(filename)?;
-        if is_internal_session_file(&self.engine, config, &normalized_path) {
-            return Err(AppError::not_found("Session file not found."));
-        }
-        self.client
-            .download_file(&self.session_identifier(scope), &normalized_path)
-            .await
-    }
-
-    pub(crate) async fn run(
-        &self,
-        scope: &Scope,
-        input_path: &str,
-        timeout_in_seconds: Option<u64>,
-    ) -> Result<RunResponse, AppError> {
-        let config = self.config_for(scope)?;
-        let session_identifier = self.session_identifier(scope);
-        let normalized_input_path = public_session_path(input_path)?;
-
-        if is_internal_session_file(&self.engine, config, &normalized_input_path) {
-            return Err(AppError::not_found("Session file not found."));
-        }
-
-        self.client
-            .upload_file(
-                &session_identifier,
-                self.engine.filename.clone(),
-                Some("application/octet-stream".to_string()),
-                self.engine.bytes.clone(),
-            )
-            .await?;
-        self.client
-            .upload_file(
-                &session_identifier,
-                config.filename.clone(),
-                Some("application/octet-stream".to_string()),
-                config.bytes.clone(),
-            )
-            .await?;
-
-        let execution = self
-            .execute_python(
-                &session_identifier,
-                build_run_code(&RunPythonConfig {
-                    config_package_name: CONFIG_PACKAGE_NAME,
-                    config_version: config.version.clone(),
-                    config_wheel_path: session_file_path(&config.filename),
-                    engine_package_name: ENGINE_PACKAGE_NAME,
-                    engine_version: self.engine.version.clone(),
-                    engine_wheel_path: session_file_path(&self.engine.filename),
-                    input_path: session_file_path(&normalized_input_path),
-                    install_lock_path: session_file_path(INSTALL_LOCK_SESSION_FILENAME),
-                    runs_root: session_file_path(RUNS_ROOT),
-                    sentinel_prefix: python::RUN_SENTINEL_PREFIX,
-                })?,
-                timeout_in_seconds,
-            )
-            .await?;
-
-        ensure_successful_execution(&execution)?;
-        extract_run_response(&execution)
-    }
-
     pub(crate) async fn execute_inline_python(
         &self,
         scope: &Scope,
@@ -244,6 +158,63 @@ impl SessionService {
 
     pub(crate) fn session_secret(&self) -> &str {
         &self.session_secret
+    }
+
+    pub(crate) fn runtime_artifacts(
+        &self,
+        scope: &Scope,
+    ) -> Result<SessionRuntimeArtifacts, AppError> {
+        let config = self.config_for(scope)?;
+        Ok(SessionRuntimeArtifacts {
+            config_filename: config.filename.clone(),
+            config_package_name: CONFIG_PACKAGE_NAME,
+            config_version: config.version.clone(),
+            config_wheel_bytes: config.bytes.clone(),
+            engine_filename: self.engine.filename.clone(),
+            engine_package_name: ENGINE_PACKAGE_NAME,
+            engine_version: self.engine.version.clone(),
+            engine_wheel_bytes: self.engine.bytes.clone(),
+            install_lock_path: session_file_path(INSTALL_LOCK_SESSION_FILENAME),
+            runs_root: session_file_path(RUNS_ROOT),
+        })
+    }
+
+    pub(crate) async fn upload_session_file_detailed(
+        &self,
+        scope: &Scope,
+        path: &str,
+        content_type: Option<String>,
+        content: Vec<u8>,
+    ) -> Result<SessionOperationResult<SessionFile>, AppError> {
+        self.client
+            .upload_file_detailed(
+                &self.session_identifier(scope),
+                public_session_path(path)?,
+                content_type,
+                content,
+            )
+            .await
+    }
+
+    pub(crate) async fn download_session_file_detailed(
+        &self,
+        scope: &Scope,
+        path: &str,
+    ) -> Result<SessionOperationResult<(String, Vec<u8>)>, AppError> {
+        self.client
+            .download_file_detailed(&self.session_identifier(scope), &public_session_path(path)?)
+            .await
+    }
+
+    pub(crate) async fn execute_inline_python_detailed(
+        &self,
+        scope: &Scope,
+        code: String,
+        timeout_in_seconds: Option<u64>,
+    ) -> Result<SessionOperationResult<PythonExecution>, AppError> {
+        self.client
+            .execute_detailed(&self.session_identifier(scope), code, timeout_in_seconds)
+            .await
     }
 
     async fn execute_python(
@@ -280,21 +251,6 @@ struct ConfigTargetEntry {
     workspace_id: String,
     config_version_id: String,
     wheel_path: PathBuf,
-}
-
-fn uploaded_filename(filename: &str) -> Result<String, AppError> {
-    let name = Path::new(filename.trim())
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| AppError::request("Uploaded file must include a valid filename."))?;
-
-    if name.is_empty() {
-        return Err(AppError::request(
-            "Uploaded file must include a valid filename.",
-        ));
-    }
-
-    Ok(name.to_string())
 }
 
 fn public_session_path(path: &str) -> Result<String, AppError> {
@@ -334,10 +290,6 @@ fn public_session_path(path: &str) -> Result<String, AppError> {
 
 fn session_file_path(relative_path: &str) -> String {
     format!("{SESSION_ROOT}/{}", relative_path.trim_start_matches('/'))
-}
-
-fn is_internal_session_file(engine: &PackageWheel, config: &PackageWheel, path: &str) -> bool {
-    path == engine.filename || path == config.filename || path == INSTALL_LOCK_SESSION_FILENAME
 }
 
 fn resolve_config_targets(env: &EnvBag) -> Result<HashMap<Scope, PackageWheel>, AppError> {
@@ -476,12 +428,13 @@ mod tests {
 
     use super::{
         CONFIG_PACKAGE_NAME, CreateRunRequest, ENGINE_PACKAGE_NAME, ExecuteCommandRequest,
-        ExecuteCommandResponse, RunResponse, RunValidationIssue, Scope, build_run_code,
+        ExecuteCommandResponse, RunResponse, RunValidationIssue, Scope,
         client::PythonExecution,
-        command_execution_code, derive_session_identifier, ensure_successful_execution,
-        extract_command_response, extract_run_response, parse_wheel_version, public_session_path,
+        command_execution_code, derive_session_identifier, extract_command_response,
+        parse_wheel_version, public_session_path,
         python::{
-            COMMAND_SENTINEL_PREFIX, RUN_SENTINEL_PREFIX, RunPythonConfig, strip_command_metadata,
+            COMMAND_SENTINEL_PREFIX, RUN_SENTINEL_PREFIX, RunPythonConfig, build_run_code,
+            ensure_successful_execution, extract_run_response, strip_command_metadata,
         },
     };
 
@@ -580,6 +533,7 @@ mod tests {
         assert_eq!(
             extract_run_response(&response).unwrap(),
             RunResponse {
+                run_id: String::new(),
                 output_path: "runs/run-1/output/input.normalized.xlsx".to_string(),
                 validation_issues: vec![RunValidationIssue {
                     row_index: 2,

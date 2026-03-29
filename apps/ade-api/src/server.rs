@@ -21,6 +21,7 @@ use crate::{
     error::AppError,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{AppState, create_app},
+    runs::RunService,
     session::SessionService,
     terminal::TerminalService,
 };
@@ -29,6 +30,7 @@ pub struct ServerOptions {
     pub host: String,
     pub port: u16,
     pub probe_interval_ms: u64,
+    pub run_service: Arc<RunService>,
     pub session_service: Arc<SessionService>,
     pub terminal_service: Arc<TerminalService>,
     pub sql_connection_string: String,
@@ -59,6 +61,7 @@ impl ServerInstance {
         });
         let app = create_app(AppState {
             readiness: readiness.clone(),
+            run_service: options.run_service,
             session_service: options.session_service,
             terminal_service: options.terminal_service,
             web_root: options.web_root,
@@ -274,8 +277,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::DEFAULT_READINESS_STALE_AFTER_MS, session::SessionService,
-        terminal::TerminalService,
+        config::DEFAULT_READINESS_STALE_AFTER_MS, run_store::InMemoryRunStore, runs::RunService,
+        session::SessionService, terminal::TerminalService,
     };
 
     #[derive(Debug, Default)]
@@ -365,6 +368,19 @@ mod tests {
         Arc::new(TerminalService::from_env(&env, session_service).unwrap())
     }
 
+    fn fixture_run_service(session_service: Arc<SessionService>) -> Arc<RunService> {
+        let env = [(
+            "ADE_APP_URL".to_string(),
+            "http://127.0.0.1:8000".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        Arc::new(
+            RunService::from_env(&env, session_service, Arc::new(InMemoryRunStore::default()))
+                .unwrap(),
+        )
+    }
+
     #[tokio::test]
     async fn startup_fails_when_initial_probe_fails() {
         let database: Arc<dyn DatabaseProbe> =
@@ -374,6 +390,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
+            run_service: fixture_run_service(Arc::clone(&session_service)),
             terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
             session_service,
             sql_connection_string: "unused".to_string(),
@@ -403,6 +420,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
+            run_service: fixture_run_service(Arc::clone(&session_service)),
             terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
             session_service,
             sql_connection_string: "unused".to_string(),

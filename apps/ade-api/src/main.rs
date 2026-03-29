@@ -6,8 +6,11 @@ use ade_api::{
         DEFAULT_READINESS_STALE_AFTER_MS, DEFAULT_RUNTIME_HOST, EnvBag, default_web_root,
         is_production,
     },
+    db::Database,
     error::AppError,
     init_tracing, run_server_until_shutdown,
+    run_store::SqlRunStore,
+    runs::RunService,
     server::ServerOptions,
     session::SessionService,
     terminal::TerminalService,
@@ -41,7 +44,14 @@ async fn run() -> Result<(), AppError> {
     let config = AppConfig::from_env(&env)?;
     let args = ServerArgs::parse();
     let production = is_production(&env);
+    let database = Arc::new(Database::connect(&config.sql_connection_string).await?);
     let session_service = Arc::new(SessionService::from_env(&env)?);
+    let run_store = Arc::new(SqlRunStore::new(Arc::clone(&database)));
+    let run_service = Arc::new(RunService::from_env(
+        &env,
+        Arc::clone(&session_service),
+        run_store,
+    )?);
     let terminal_service = Arc::new(TerminalService::from_env(
         &env,
         Arc::clone(&session_service),
@@ -61,6 +71,7 @@ async fn run() -> Result<(), AppError> {
         }),
         port: args.port.unwrap_or(DEFAULT_PORT),
         probe_interval_ms: args.probe_interval_ms.unwrap_or(DEFAULT_PROBE_INTERVAL_MS),
+        run_service,
         terminal_service,
         session_service,
         sql_connection_string: config.sql_connection_string,
@@ -68,7 +79,7 @@ async fn run() -> Result<(), AppError> {
             .stale_after_ms
             .unwrap_or(DEFAULT_READINESS_STALE_AFTER_MS),
         web_root,
-        database: None,
+        database: Some(database),
     })
     .await
 }

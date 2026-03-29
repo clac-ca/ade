@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
-use super::{ExecuteCommandResponse, RunResponse, client::PythonExecution};
+use super::{ExecuteCommandResponse, client::PythonExecution};
 
 pub(super) const COMMAND_SENTINEL_PREFIX: &str = "__ADE_COMMAND_META__=";
+#[cfg(test)]
 pub(super) const RUN_SENTINEL_PREFIX: &str = "__ADE_RUN_RESULT__=";
 
 const COMMAND_TEMPLATE: &str = include_str!("command.py.tmpl");
+#[cfg(test)]
 const RUN_TEMPLATE: &str = include_str!("run.py.tmpl");
 
 #[derive(Deserialize)]
@@ -26,6 +28,7 @@ struct CommandTemplateConfig<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(test)]
 pub(super) struct RunPythonConfig {
     pub(super) config_package_name: &'static str,
     pub(super) config_version: String,
@@ -95,6 +98,7 @@ pub(super) fn strip_command_metadata(stdout: &str) -> Result<Option<(String, i64
     )))
 }
 
+#[cfg(test)]
 pub(super) fn build_run_code(config: &RunPythonConfig) -> Result<String, AppError> {
     render_python_template(RUN_TEMPLATE, config)
 }
@@ -119,6 +123,7 @@ fn json_string(value: &str) -> Result<String, AppError> {
     })
 }
 
+#[cfg(test)]
 pub(super) fn ensure_successful_execution(execution: &PythonExecution) -> Result<(), AppError> {
     if matches!(execution.status.as_str(), "Success" | "Succeeded" | "0") {
         return Ok(());
@@ -141,11 +146,14 @@ pub(super) fn ensure_successful_execution(execution: &PythonExecution) -> Result
     ))
 }
 
-pub(super) fn extract_run_response(execution: &PythonExecution) -> Result<RunResponse, AppError> {
+#[cfg(test)]
+pub(super) fn extract_run_response(
+    execution: &PythonExecution,
+) -> Result<super::RunResponse, AppError> {
     let marker_index = execution.stdout.rfind(RUN_SENTINEL_PREFIX).ok_or_else(|| {
         AppError::internal("ADE run execution did not emit the structured result metadata.")
     })?;
-    serde_json::from_str::<RunResponse>(
+    serde_json::from_str::<super::RunResponse>(
         execution.stdout[marker_index + RUN_SENTINEL_PREFIX.len()..].trim(),
     )
     .map_err(|error| {

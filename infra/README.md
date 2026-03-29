@@ -9,7 +9,7 @@ The template deploys:
 - one GitHub OIDC federated credential on that deployment identity
 - one VNet with a delegated Container Apps subnet
 - one Azure SQL logical server and database
-- one Blob Storage account and blob container placeholder
+- one Blob Storage account and blob container for durable ADE artifacts
 - one Log Analytics workspace
 - one VNet-integrated Azure Container Apps environment
 - one shared Azure Container Apps session pool for hosted ADE document processing and admin executions
@@ -50,7 +50,8 @@ Lock these assumptions in:
 - the SQL logical server itself has a system-assigned managed identity
 - the Container Apps subnet uses service endpoints for `Microsoft.Sql` and same-region `Microsoft.Storage`
 - Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a virtual network rule
-- Blob Storage stays provisioned as a placeholder, but it is not an active application dependency today
+- the running app authenticates to Blob Storage with its system-assigned managed identity
+- Blob Storage is the durable store for uploaded scope files and persisted run outputs
 - the Azure SQL database uses the General Purpose serverless compute tier with auto-pause enabled
 - the shared Azure session pool uses the built-in `PythonLTS` container type
 
