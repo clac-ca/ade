@@ -126,6 +126,21 @@ async fn cancel_run(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/events",
+    tag = "runs",
+    params(
+        Scope,
+        ("runId" = String, Path, description = "Run identifier")
+    ),
+    responses(
+        (status = 101, description = "WebSocket upgrade for run events"),
+        (status = 400, description = "Invalid websocket request", body = crate::error::ErrorResponse),
+        (status = 404, description = "Run not found", body = crate::error::ErrorResponse),
+        (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
+    )
+)]
 async fn connect_run_events(
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     State(run_service): State<Arc<RunService>>,

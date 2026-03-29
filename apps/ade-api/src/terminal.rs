@@ -1008,7 +1008,7 @@ mod tests {
 
         assert!(code.contains("pty.openpty()"));
         assert!(code.contains("/mnt/data"));
-        assert!(code.contains("websockets.connect"));
+        assert!(code.contains("websockets.sync.client"));
         assert!(code.contains("codecs.getincrementaldecoder"));
         assert!(code.contains("wss://example.com/api/internal/terminals/channel"));
     }

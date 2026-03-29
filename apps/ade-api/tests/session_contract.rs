@@ -194,7 +194,7 @@ async fn stub_execute(
     }
 
     if code.contains("pty.openpty()")
-        && code.contains("websockets.connect")
+        && code.contains("websockets.sync.client")
         && let Some(bridge_url) = extract_bridge_url(&code)
     {
         if stub.options.terminal_bridge_delay_ms > 0 {
@@ -235,7 +235,7 @@ async fn stub_execute(
         }));
     }
 
-    if code.contains("websockets.connect")
+    if code.contains("websockets.sync.client")
         && let Some(bridge_url) = extract_bridge_url(&code)
     {
         let config = extract_execution_config(&code).expect("run config");
@@ -730,7 +730,7 @@ async fn terminal_route_starts_bootstrap_code_and_streams_bridge_events() {
     let execution_codes = state.lock().unwrap().execution_codes.clone();
     assert_eq!(execution_codes.len(), 1);
     assert!(execution_codes[0].contains("pty.openpty()"));
-    assert!(execution_codes[0].contains("websockets.connect"));
+    assert!(execution_codes[0].contains("websockets.sync.client"));
     assert!(!execution_codes[0].contains("capture_output=True"));
 
     let _ = socket.close(None).await;

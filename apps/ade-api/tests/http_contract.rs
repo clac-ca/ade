@@ -240,6 +240,14 @@ async fn openapi_route_serves_generated_spec() {
         payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/executions"]
             .is_object()
     );
+    assert!(
+        payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/events"]
+            .is_object()
+    );
+    assert!(
+        payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/terminal"]
+            .is_object()
+    );
 }
 
 #[tokio::test]

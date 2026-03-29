@@ -12,7 +12,9 @@ use utoipa::OpenApi;
     crate::routes::session::download_file,
     crate::routes::runs::create_run,
     crate::routes::runs::get_run,
+    crate::routes::runs::connect_run_events,
     crate::routes::runs::cancel_run,
+    crate::routes::terminal::connect_terminal,
 ))]
 pub struct ApiDoc;
 

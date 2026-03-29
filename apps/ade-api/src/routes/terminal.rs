@@ -21,6 +21,18 @@ pub fn internal_router() -> Router<crate::router::AppState> {
     Router::new().route("/terminals/{channelId}", get(connect_internal_bridge))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/terminal",
+    tag = "terminal",
+    params(Scope),
+    responses(
+        (status = 101, description = "WebSocket upgrade for the interactive terminal"),
+        (status = 400, description = "Invalid websocket request", body = crate::error::ErrorResponse),
+        (status = 404, description = "Scope not found", body = crate::error::ErrorResponse),
+        (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
+    )
+)]
 async fn connect_terminal(
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     State(terminal_service): State<Arc<TerminalService>>,

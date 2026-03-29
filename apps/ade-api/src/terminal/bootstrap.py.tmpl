@@ -1,4 +1,3 @@
-import asyncio
 import codecs
 import errno
 import json
@@ -8,13 +7,15 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
+import time
 
 CONFIG = json.loads({{CONFIG_JSON}})
 
 
 def _install_websockets():
     try:
-        import websockets  # noqa: F401
+        from websockets.sync.client import connect  # noqa: F401
     except Exception:
         subprocess.run(
             [
@@ -27,9 +28,9 @@ def _install_websockets():
             ],
             check=True,
         )
-    import websockets
+    from websockets.sync.client import connect
 
-    return websockets
+    return connect
 
 
 def _set_winsize(fd: int, rows: int, cols: int) -> None:
@@ -47,8 +48,14 @@ def _encode(message: dict[str, object]) -> str:
     return json.dumps(message, separators=(",", ":"))
 
 
-async def main() -> None:
-    websockets = _install_websockets()
+def _decode_text(message: str | bytes) -> str:
+    if isinstance(message, bytes):
+        return message.decode("utf-8", errors="replace")
+    return message
+
+
+def main() -> None:
+    connect = _install_websockets()
     shell = shutil.which("bash") or shutil.which("sh")
     if shell is None:
         raise RuntimeError("Could not locate a shell executable inside the session.")
@@ -66,62 +73,86 @@ async def main() -> None:
     )
     os.close(slave_fd)
     os.set_blocking(master_fd, False)
+    stop_event = threading.Event()
+    thread_errors: list[BaseException] = []
 
-    async with websockets.connect(
+    with connect(
         CONFIG["bridgeUrl"],
         ping_interval=20,
         ping_timeout=20,
         max_size=None,
     ) as websocket:
-        await websocket.send(_encode({"type": "ready"}))
+        websocket.send(_encode({"type": "ready"}))
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
-        async def forward_pty() -> None:
-            while True:
-                try:
-                    data = os.read(master_fd, 4096)
-                except BlockingIOError:
-                    if process.poll() is not None:
-                        break
-                    await asyncio.sleep(0.01)
-                    continue
-                except OSError as error:
-                    if error.errno == errno.EIO:
-                        break
-                    raise
+        def record_thread_error(error: BaseException) -> None:
+            if thread_errors:
+                return
+            thread_errors.append(error)
+            stop_event.set()
 
-                if not data:
-                    if process.poll() is not None:
-                        break
-                    await asyncio.sleep(0.01)
-                    continue
+        def forward_pty() -> None:
+            try:
+                while not stop_event.is_set():
+                    try:
+                        data = os.read(master_fd, 4096)
+                    except BlockingIOError:
+                        if process.poll() is not None:
+                            break
+                        time.sleep(0.01)
+                        continue
+                    except OSError as error:
+                        if error.errno == errno.EIO:
+                            break
+                        raise
 
-                await websocket.send(
-                    _encode(
-                        {
-                            "type": "output",
-                            "data": decoder.decode(data),
-                        }
+                    if not data:
+                        if process.poll() is not None:
+                            break
+                        time.sleep(0.01)
+                        continue
+
+                    websocket.send(
+                        _encode(
+                            {
+                                "type": "output",
+                                "data": decoder.decode(data),
+                            }
+                        )
                     )
-                )
 
-            tail = decoder.decode(b"", final=True)
-            if tail:
-                await websocket.send(_encode({"type": "output", "data": tail}))
+                tail = decoder.decode(b"", final=True)
+                if tail and not stop_event.is_set():
+                    websocket.send(_encode({"type": "output", "data": tail}))
 
-            return_code = process.wait()
-            await websocket.send(
-                _encode(
-                    {
-                        "type": "exit",
-                        "code": return_code,
-                    }
-                )
-            )
+                return_code = process.wait()
+                if not stop_event.is_set():
+                    websocket.send(
+                        _encode(
+                            {
+                                "type": "exit",
+                                "code": return_code,
+                            }
+                        )
+                    )
+            except Exception as error:
+                record_thread_error(error)
+            finally:
+                stop_event.set()
 
-        async def forward_control() -> None:
-            async for raw_message in websocket:
-                message = json.loads(raw_message)
+        output_thread = threading.Thread(target=forward_pty, daemon=True)
+        output_thread.start()
+
+        try:
+            while not stop_event.is_set():
+                try:
+                    raw_message = websocket.recv(timeout=1)
+                except TimeoutError:
+                    continue
+                except Exception:
+                    break
+
+                message = json.loads(_decode_text(raw_message))
                 message_type = message.get("type")
 
                 if message_type == "input":
@@ -142,10 +173,9 @@ async def main() -> None:
                     except ProcessLookupError:
                         pass
                     break
-
-        try:
-            await asyncio.gather(forward_pty(), forward_control())
         finally:
+            stop_event.set()
+            output_thread.join(timeout=5)
             try:
                 os.close(master_fd)
             except OSError:
@@ -156,5 +186,8 @@ async def main() -> None:
                 except ProcessLookupError:
                     pass
 
+    if thread_errors:
+        raise thread_errors[0]
 
-asyncio.run(main())
+
+main()

@@ -1390,7 +1390,7 @@ impl RunService {
         run.attempt_count = attempt;
         run.input_path = input_path.to_string();
         run.phase = failure.phase;
-        run.status = if failure.phase.is_none() && failure.error.to_string() == "Run cancelled." {
+        run.status = if failure.error.to_string() == "Run cancelled." {
             RunStatus::Cancelled
         } else {
             RunStatus::Failed
@@ -1865,7 +1865,7 @@ mod tests {
         })
         .unwrap();
 
-        assert!(code.contains("websockets.connect"));
+        assert!(code.contains("websockets.sync.client"));
         assert!(code.contains("installPackages"));
         assert!(code.contains("/mnt/data/runs/run-1/output"));
     }
