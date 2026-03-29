@@ -13,9 +13,9 @@ pub mod terminal;
 
 pub mod routes {
     pub mod runs;
-    pub mod session;
     pub mod system;
     pub mod terminal;
+    pub mod uploads;
 }
 
 pub use server::{

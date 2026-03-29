@@ -103,6 +103,10 @@ pub struct RunTimings {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum RunEvent {
+    Created {
+        seq: i64,
+        status: RunStatus,
+    },
     Complete {
         seq: i64,
         #[serde(rename = "finalStatus")]
@@ -146,7 +150,8 @@ pub enum RunEvent {
 impl RunEvent {
     pub fn seq(&self) -> i64 {
         match self {
-            Self::Complete { seq, .. }
+            Self::Created { seq, .. }
+            | Self::Complete { seq, .. }
             | Self::Error { seq, .. }
             | Self::Log { seq, .. }
             | Self::Result { seq, .. }
@@ -158,6 +163,9 @@ impl RunEvent {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum RunEventPayload {
+    Created {
+        status: RunStatus,
+    },
     Complete {
         #[serde(rename = "finalStatus")]
         final_status: RunStatus,
@@ -196,6 +204,7 @@ pub enum RunEventPayload {
 impl RunEventPayload {
     fn event_type(&self) -> &'static str {
         match self {
+            Self::Created { .. } => "created",
             Self::Complete { .. } => "complete",
             Self::Error { .. } => "error",
             Self::Log { .. } => "log",
@@ -206,6 +215,7 @@ impl RunEventPayload {
 
     fn with_seq(self, seq: i64) -> RunEvent {
         match self {
+            Self::Created { status } => RunEvent::Created { seq, status },
             Self::Complete { final_status } => RunEvent::Complete { seq, final_status },
             Self::Error {
                 phase,
@@ -602,7 +612,7 @@ fn run_event_from_row(row: tiberius::Row) -> Result<RunEvent, AppError> {
         .get(1)
         .ok_or_else(|| AppError::internal("Failed to read the run event type."))?;
     let payload = match event_type {
-        "complete" | "error" | "log" | "result" | "status" => {
+        "complete" | "created" | "error" | "log" | "result" | "status" => {
             serde_json::from_str::<RunEventPayload>(payload_json).map_err(|error| {
                 AppError::internal_with_source("Failed to decode a run event payload.", error)
             })?
@@ -644,6 +654,13 @@ mod tests {
             }
             .event_type(),
             "status"
+        );
+        assert_eq!(
+            RunEventPayload::Created {
+                status: RunStatus::Pending
+            }
+            .event_type(),
+            "created"
         );
     }
 }

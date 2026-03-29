@@ -1,6 +1,6 @@
 param accountName string
 param blobContainerName string
-param virtualNetworkSubnetId string
+param corsAllowedOrigins array
 param location string
 param tags object = {}
 
@@ -16,16 +16,6 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2024-01-01' = {
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
     minimumTlsVersion: 'TLS1_2'
-    networkAcls: {
-      bypass: 'None'
-      defaultAction: 'Deny'
-      virtualNetworkRules: [
-        {
-          action: 'Allow'
-          id: virtualNetworkSubnetId
-        }
-      ]
-    }
     publicNetworkAccess: 'Enabled'
     supportsHttpsTrafficOnly: true
   }
@@ -34,6 +24,30 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2024-01-01' = {
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2024-01-01' = {
   parent: storageAccount
   name: 'default'
+  properties: {
+    cors: {
+      corsRules: [
+        {
+          allowedHeaders: [
+            'content-type'
+            'x-ms-*'
+          ]
+          allowedMethods: [
+            'GET'
+            'HEAD'
+            'OPTIONS'
+            'PUT'
+          ]
+          allowedOrigins: corsAllowedOrigins
+          exposedHeaders: [
+            'etag'
+            'x-ms-*'
+          ]
+          maxAgeInSeconds: 3600
+        }
+      ]
+    }
+  }
 }
 
 resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2024-01-01' = {

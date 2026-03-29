@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::Path as FsPath,
+    path::{Path as FsPath, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -16,28 +16,23 @@ use ade_api::{
 };
 use axum::{
     Json, Router,
-    body::{Body, Bytes, to_bytes},
-    extract::{Multipart, Path, Query, State},
-    http::{Request, StatusCode},
+    body::{Body, to_bytes},
+    extract::{Multipart, Query, State},
+    http::{HeaderName, HeaderValue, Request, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::post,
 };
 use futures_util::{SinkExt, StreamExt};
-use reqwest::{
-    Client,
-    multipart::{Form, Part},
-};
+use reqwest::{Client, Method, Url};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tower::util::ServiceExt;
 
-const RUN_SENTINEL_PREFIX: &str = "__ADE_RUN_RESULT__=";
-const RUN_EVENT_SENTINEL_PREFIX: &str = "__ADE_RUN_EVENT__=";
-
 #[derive(Default)]
 struct PoolStubState {
-    downloaded_names: Vec<String>,
+    artifact_download_urls: Vec<String>,
+    artifact_upload_urls: Vec<String>,
     execution_codes: Vec<String>,
     identifiers: Vec<String>,
     uploaded_files: HashMap<String, Vec<u8>>,
@@ -52,7 +47,9 @@ struct PoolStub {
 
 #[derive(Clone, Copy)]
 struct PoolStubOptions {
+    auto_connect_run_bridge: bool,
     auto_connect_terminal_bridge: bool,
+    run_bridge_delay_ms: u64,
     terminal_bridge_delay_ms: u64,
     terminal_execution_delay_ms: u64,
 }
@@ -60,7 +57,9 @@ struct PoolStubOptions {
 impl Default for PoolStubOptions {
     fn default() -> Self {
         Self {
+            auto_connect_run_bridge: true,
             auto_connect_terminal_bridge: true,
+            run_bridge_delay_ms: 0,
             terminal_bridge_delay_ms: 0,
             terminal_execution_delay_ms: 0,
         }
@@ -74,8 +73,13 @@ struct IdentifierQuery {
     api_version: Option<String>,
     identifier: String,
     path: Option<String>,
-    #[allow(dead_code)]
-    recursive: Option<bool>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SseEvent {
+    data: String,
+    event: String,
+    id: i64,
 }
 
 fn ready_state() -> ReadinessController {
@@ -127,59 +131,6 @@ async fn stub_upload_file(
     }))
 }
 
-async fn stub_list_files(
-    State(stub): State<PoolStub>,
-    Query(query): Query<IdentifierQuery>,
-) -> impl IntoResponse {
-    let mut state = stub.state.lock().unwrap();
-    state.identifiers.push(query.identifier.clone());
-    let prefix = format!("{}::", query.identifier);
-    let files = state
-        .uploaded_files
-        .iter()
-        .filter_map(|(key, content)| key.strip_prefix(&prefix).map(|name| (name, content)))
-        .map(|(filename, content)| {
-            json!({
-                "directory": filename
-                    .rsplit_once('/')
-                    .map(|(directory, _)| directory)
-                    .unwrap_or("."),
-                "name": filename
-                    .rsplit_once('/')
-                    .map(|(_, name)| name)
-                    .unwrap_or(filename),
-                "sizeInBytes": content.len(),
-                "type": "file",
-            })
-        })
-        .collect::<Vec<_>>();
-    Json(json!({ "value": files }))
-}
-
-async fn stub_get_file(
-    State(stub): State<PoolStub>,
-    Query(query): Query<IdentifierQuery>,
-    Path(path): Path<String>,
-) -> impl IntoResponse {
-    let mut state = stub.state.lock().unwrap();
-    state.identifiers.push(query.identifier.clone());
-    let filename = path
-        .strip_suffix("/content")
-        .unwrap_or_else(|| panic!("missing /content suffix: {path}"));
-    let stored_name = match query.path.as_deref() {
-        Some(path) if !path.is_empty() && path != "." => format!("{path}/{filename}"),
-        _ => filename.to_string(),
-    };
-    state.downloaded_names.push(stored_name.clone());
-    let key = format!("{}::{stored_name}", query.identifier);
-    let content = state
-        .uploaded_files
-        .get(&key)
-        .cloned()
-        .unwrap_or_else(|| panic!("missing file: {stored_name}"));
-    (StatusCode::OK, Bytes::from(content)).into_response()
-}
-
 async fn stub_execute(
     State(stub): State<PoolStub>,
     Query(query): Query<IdentifierQuery>,
@@ -189,7 +140,7 @@ async fn stub_execute(
     let identifier = query.identifier.clone();
     {
         let mut state = stub.state.lock().unwrap();
-        state.identifiers.push(identifier.clone());
+        state.identifiers.push(identifier);
         state.execution_codes.push(code.clone());
     }
 
@@ -239,47 +190,83 @@ async fn stub_execute(
         && let Some(bridge_url) = extract_bridge_url(&code)
     {
         let config = extract_execution_config(&code).expect("run config");
-        let output_dir = config["outputDir"].as_str().expect("output dir");
-        let output_path = format!(
-            "{}/input.normalized.xlsx",
-            output_dir.trim_start_matches("/mnt/data/")
-        );
-        {
-            let mut state = stub.state.lock().unwrap();
-            state.uploaded_files.insert(
-                format!("{identifier}::{output_path}"),
-                b"normalized-output".to_vec(),
-            );
+
+        if stub.options.run_bridge_delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(stub.options.run_bridge_delay_ms)).await;
         }
 
-        if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
-            let _ = socket
-                .send(Message::Text(r#"{"type":"ready"}"#.into()))
+        if stub.options.auto_connect_run_bridge {
+            let client = Client::new();
+            let input_download = config["inputDownload"].as_object().expect("input download");
+            let output_upload = config["outputUpload"].as_object().expect("output upload");
+            let output_path = config["outputPath"].as_str().expect("output path");
+
+            let _input = request_artifact(&client, input_download, None).await;
+            {
+                let mut state = stub.state.lock().unwrap();
+                state
+                    .artifact_download_urls
+                    .push(input_download["url"].as_str().unwrap().to_string());
+            }
+
+            if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
+                let _ = socket
+                    .send(Message::Text(r#"{"type":"ready"}"#.into()))
+                    .await;
+                let _ = socket
+                    .send(Message::Text(
+                        r#"{"type":"status","phase":"installPackages","state":"started"}"#.into(),
+                    ))
+                    .await;
+                let _ = socket
+                    .send(Message::Text(
+                        r#"{"type":"status","phase":"installPackages","state":"completed"}"#.into(),
+                    ))
+                    .await;
+                let _ = socket
+                    .send(Message::Text(
+                        r#"{"type":"status","phase":"executeRun","state":"started"}"#.into(),
+                    ))
+                    .await;
+                let _ = socket
+                    .send(Message::Text(
+                        r#"{"type":"log","phase":"executeRun","level":"info","message":"Loaded 12 rows"}"#.into(),
+                    ))
+                    .await;
+                let _ = socket
+                    .send(Message::Text(
+                        r#"{"type":"status","phase":"persistOutputs","state":"started"}"#.into(),
+                    ))
+                    .await;
+
+                request_artifact(
+                    &client,
+                    output_upload,
+                    Some(b"normalized-output".to_vec()),
+                )
                 .await;
-            let _ = socket
-                .send(Message::Text(
-                    r#"{"type":"status","phase":"installPackages","state":"started"}"#.into(),
-                ))
-                .await;
-            let _ = socket
-                .send(Message::Text(
-                    r#"{"type":"status","phase":"installPackages","state":"completed"}"#.into(),
-                ))
-                .await;
-            let _ = socket
-                .send(Message::Text(
-                    r#"{"type":"status","phase":"executeRun","state":"started"}"#.into(),
-                ))
-                .await;
-            let _ = socket
-                .send(Message::Text(
-                    format!(
-                        r#"{{"type":"result","outputPath":"{output_path}","validationIssues":[]}}"#
-                    )
-                    .into(),
-                ))
-                .await;
-            let _ = socket.close(None).await;
+                {
+                    let mut state = stub.state.lock().unwrap();
+                    state
+                        .artifact_upload_urls
+                        .push(output_upload["url"].as_str().unwrap().to_string());
+                }
+
+                let _ = socket
+                    .send(Message::Text(
+                        format!(
+                            r#"{{"type":"result","outputPath":"{output_path}","validationIssues":[]}}"#
+                        )
+                        .into(),
+                    ))
+                    .await;
+                let _ = socket
+                    .send(Message::Text(
+                        r#"{"type":"status","phase":"persistOutputs","state":"completed"}"#.into(),
+                    ))
+                    .await;
+                let _ = socket.close(None).await;
+            }
         }
 
         return Json(json!({
@@ -292,41 +279,36 @@ async fn stub_execute(
         }));
     }
 
-    let stdout = if code.contains(RUN_EVENT_SENTINEL_PREFIX) {
-        let config = extract_execution_config(&code).expect("run config");
-        let output_dir = config["outputDir"].as_str().expect("output dir");
-        let output_path = format!(
-            "{}/input.normalized.xlsx",
-            output_dir.trim_start_matches("/mnt/data/")
-        );
-        {
-            let mut state = stub.state.lock().unwrap();
-            state.uploaded_files.insert(
-                format!("{identifier}::{output_path}"),
-                b"normalized-output".to_vec(),
-            );
-        }
-        format!(
-            "{RUN_EVENT_SENTINEL_PREFIX}{{\"type\":\"status\",\"phase\":\"installPackages\",\"state\":\"started\"}}\n{RUN_EVENT_SENTINEL_PREFIX}{{\"type\":\"status\",\"phase\":\"installPackages\",\"state\":\"completed\"}}\n{RUN_EVENT_SENTINEL_PREFIX}{{\"type\":\"status\",\"phase\":\"executeRun\",\"state\":\"started\"}}\n{RUN_EVENT_SENTINEL_PREFIX}{{\"type\":\"result\",\"outputPath\":\"{output_path}\",\"validationIssues\":[]}}\n"
-        )
-    } else if code.contains(RUN_SENTINEL_PREFIX) {
-        format!(
-            "run log\n{RUN_SENTINEL_PREFIX}{{\"outputPath\":\"runs/run-1/output/input.normalized.xlsx\",\"validationIssues\":[]}}\n"
-        )
-    } else if code.contains("subprocess.run") {
-        "pwd\n__ADE_COMMAND_META__={\"exitCode\":7}\n".to_string()
-    } else {
-        "ok\n".to_string()
-    };
-
     Json(json!({
         "status": "Succeeded",
         "result": {
-            "stdout": stdout,
+            "stdout": "ok\n",
             "stderr": "",
             "executionTimeInMilliseconds": 4,
         }
     }))
+}
+
+async fn request_artifact(
+    client: &Client,
+    access: &serde_json::Map<String, Value>,
+    body: Option<Vec<u8>>,
+) {
+    let method = Method::from_bytes(access["method"].as_str().unwrap().as_bytes()).unwrap();
+    let mut request = client.request(method, access["url"].as_str().unwrap());
+    for (name, value) in access["headers"].as_object().expect("access headers") {
+        request = request.header(name, value.as_str().unwrap());
+    }
+    if let Some(body) = body {
+        request = request.body(body);
+    }
+
+    let response = request.send().await.unwrap();
+    assert!(
+        response.status().is_success(),
+        "artifact request failed with status {}",
+        response.status()
+    );
 }
 
 async fn start_stub_server() -> (
@@ -347,11 +329,10 @@ async fn start_stub_server_with_options(
     let state = Arc::new(Mutex::new(PoolStubState::default()));
     let stub = PoolStub {
         options,
-        state: state.clone(),
+        state: Arc::clone(&state),
     };
     let app = Router::new()
-        .route("/files", post(stub_upload_file).get(stub_list_files))
-        .route("/files/{*path}", get(stub_get_file))
+        .route("/files", post(stub_upload_file))
         .route("/executions", post(stub_execute))
         .with_state(stub);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -465,21 +446,11 @@ fn app_with_session_and_url_and_terminal_service(
     (app, terminal_service)
 }
 
-fn extract_execution_config(code: &str) -> Option<Value> {
-    let config_line = code
-        .lines()
-        .find(|line| line.trim_start().starts_with("CONFIG = json.loads("))?;
-    let encoded_json = config_line
-        .trim()
-        .strip_prefix("CONFIG = json.loads(")?
-        .strip_suffix(")")?;
-    let config_json = serde_json::from_str::<String>(encoded_json).ok()?;
-    serde_json::from_str::<Value>(&config_json).ok()
-}
-
-fn extract_bridge_url(code: &str) -> Option<String> {
-    let config = extract_execution_config(code)?;
-    config["bridgeUrl"].as_str().map(str::to_string)
+fn artifact_root(engine_wheel_path: &FsPath) -> PathBuf {
+    engine_wheel_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("artifacts")
 }
 
 fn create_wheels() -> (
@@ -498,168 +469,170 @@ fn create_wheels() -> (
     (tempdir, config_v1, config_v2, engine)
 }
 
-#[tokio::test]
-async fn session_routes_proxy_flat_files_and_preserve_scope_isolation() {
-    let (endpoint, state, handle) = start_stub_server().await;
-    let (_tempdir, config_v1, config_v2, engine) = create_wheels();
-    let app = app_with_session(
-        &endpoint,
-        &[
-            ("workspace-a", "config-v1", config_v1.as_path()),
-            ("workspace-b", "config-v2", config_v2.as_path()),
-        ],
-        &engine,
-    );
+fn extract_execution_config(code: &str) -> Option<Value> {
+    let config_line = code
+        .lines()
+        .find(|line| line.trim_start().starts_with("CONFIG = json.loads("))?;
+    let encoded_json = config_line
+        .trim()
+        .strip_prefix("CONFIG = json.loads(")?
+        .strip_suffix(")")?;
+    let config_json = serde_json::from_str::<String>(encoded_json).ok()?;
+    serde_json::from_str::<Value>(&config_json).ok()
+}
 
-    let boundary = "test-boundary";
-    let payload = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n--{boundary}--\r\n"
-    );
+fn extract_bridge_url(code: &str) -> Option<String> {
+    let config = extract_execution_config(code)?;
+    config["bridgeUrl"].as_str().map(str::to_string)
+}
 
-    let upload = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/workspaces/workspace-a/configs/config-v1/files")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(payload))
-                .unwrap(),
-        )
+fn parse_sse_events(body: &str) -> Vec<SseEvent> {
+    let mut events = Vec::new();
+    let mut event_name: Option<String> = None;
+    let mut event_id: Option<i64> = None;
+    let mut data_lines = Vec::new();
+
+    for line in body.lines() {
+        if line.is_empty() {
+            if let (Some(event), Some(id)) = (event_name.take(), event_id.take()) {
+                events.push(SseEvent {
+                    data: data_lines.join("\n"),
+                    event,
+                    id,
+                });
+            }
+            data_lines.clear();
+            continue;
+        }
+
+        if line.starts_with(':') {
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("event: ") {
+            event_name = Some(value.to_string());
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("id: ") {
+            event_id = Some(value.parse().unwrap());
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("data: ") {
+            data_lines.push(value.to_string());
+        }
+    }
+
+    if let (Some(event), Some(id)) = (event_name.take(), event_id.take()) {
+        events.push(SseEvent {
+            data: data_lines.join("\n"),
+            event,
+            id,
+        });
+    }
+
+    events
+}
+
+fn resolve_url(base_url: &str, url: &str) -> String {
+    if Url::parse(url).is_ok() {
+        return url.to_string();
+    }
+
+    Url::parse(base_url)
+        .unwrap()
+        .join(url)
+        .unwrap()
+        .to_string()
+}
+
+async fn upload_input(
+    client: &Client,
+    base_url: &str,
+    filename: &str,
+    content_type: &str,
+    body: Vec<u8>,
+) -> Value {
+    let response = client
+        .post(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/uploads"
+        ))
+        .json(&json!({
+            "filename": filename,
+            "contentType": content_type,
+            "size": body.len(),
+        }))
+        .send()
         .await
         .unwrap();
-    assert_eq!(upload.status(), StatusCode::OK);
-    let uploaded =
-        serde_json::from_slice::<Value>(&to_bytes(upload.into_body(), usize::MAX).await.unwrap())
-            .unwrap();
-    assert_eq!(uploaded["filename"], "notes.txt");
-    assert_eq!(uploaded["size"], 5);
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let payload = response.json::<Value>().await.unwrap();
 
-    let list = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/workspaces/workspace-a/configs/config-v1/files")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(list.status(), StatusCode::OK);
-    let listed =
-        serde_json::from_slice::<Value>(&to_bytes(list.into_body(), usize::MAX).await.unwrap())
-            .unwrap();
-    assert_eq!(listed, json!([{ "filename": "notes.txt", "size": 5 }]));
-
-    let isolated_list = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/workspaces/workspace-b/configs/config-v2/files")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let isolated_files = serde_json::from_slice::<Value>(
-        &to_bytes(isolated_list.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(isolated_files, json!([]));
-
-    let download = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/workspaces/workspace-a/configs/config-v1/files/notes.txt/content")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(download.status(), StatusCode::OK);
-    assert_eq!(
-        to_bytes(download.into_body(), usize::MAX).await.unwrap(),
-        Bytes::from_static(b"hello")
+    let upload = payload["upload"].as_object().unwrap();
+    let method = Method::from_bytes(upload["method"].as_str().unwrap().as_bytes()).unwrap();
+    let mut request = client.request(
+        method,
+        resolve_url(base_url, upload["url"].as_str().unwrap()),
     );
+    for (name, value) in upload["headers"].as_object().unwrap() {
+        let name = HeaderName::from_bytes(name.as_bytes()).unwrap();
+        let value = HeaderValue::from_str(value.as_str().unwrap()).unwrap();
+        request = request.header(name, value);
+    }
+    let upload_response = request.body(body).send().await.unwrap();
+    assert_eq!(upload_response.status(), reqwest::StatusCode::CREATED);
 
-    let identifiers = state.lock().unwrap().identifiers.clone();
-    assert!(
-        identifiers
-            .iter()
-            .all(|identifier| identifier.starts_with("cfg-")),
-        "session identifiers should be derived server-side",
-    );
+    payload
+}
 
-    handle.abort();
+async fn start_run(client: &Client, base_url: &str, input_path: &str) -> reqwest::Response {
+    client
+        .post(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs"
+        ))
+        .json(&json!({
+            "inputPath": input_path,
+        }))
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn wait_for_terminal_status(client: &Client, url: &str, expected: &str) -> Value {
+    let mut detail = Value::Null;
+    for _ in 0..40 {
+        detail = client.get(url).send().await.unwrap().json::<Value>().await.unwrap();
+        if detail["status"] == expected {
+            return detail;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    panic!("run never reached status {expected}: {detail}");
 }
 
 #[tokio::test]
-async fn removed_session_endpoints_return_not_found() {
-    let (endpoint, _state, handle) = start_stub_server().await;
-    let (_tempdir, config_v1, config_v2, engine) = create_wheels();
+async fn uploads_route_returns_server_chosen_paths_and_direct_upload_instructions() {
+    let (endpoint, _state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
     let app = app_with_session(
         &endpoint,
-        &[
-            ("workspace-a", "config-v1", config_v1.as_path()),
-            ("workspace-b", "config-v2", config_v2.as_path()),
-        ],
-        &engine,
-    );
-
-    let execution_lookup = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/workspaces/workspace-a/configs/config-v1/executions/abc")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(execution_lookup.status(), StatusCode::NOT_FOUND);
-
-    let file_metadata = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/workspaces/workspace-a/configs/config-v1/files/notes.txt")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(file_metadata.status(), StatusCode::NOT_FOUND);
-
-    handle.abort();
-}
-
-#[tokio::test]
-async fn shell_command_requests_return_flat_results_and_session_ids_stay_private() {
-    let (endpoint, state, handle) = start_stub_server().await;
-    let (_tempdir, config_v1, config_v2, engine) = create_wheels();
-    let app = app_with_session(
-        &endpoint,
-        &[
-            ("workspace-a", "config-v1", config_v1.as_path()),
-            ("workspace-b", "config-v2", config_v2.as_path()),
-        ],
+        &[("workspace-a", "config-v1", config_v1.as_path())],
         &engine,
     );
 
     let response = app
-        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/workspaces/workspace-a/configs/config-v1/executions")
+                .uri("/api/workspaces/workspace-a/configs/config-v1/uploads")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "shellCommand": "pwd",
+                        "filename": "../Quarterly Input.xlsx",
+                        "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "size": 1048576,
                     })
                     .to_string(),
                 ))
@@ -669,25 +642,316 @@ async fn shell_command_requests_return_flat_results_and_session_ids_stay_private
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-
     let payload =
         serde_json::from_slice::<Value>(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
             .unwrap();
+    let file_path = payload["filePath"].as_str().unwrap();
+    assert!(file_path.starts_with("workspaces/workspace-a/configs/config-v1/uploads/upl_"));
+    assert!(file_path.ends_with("/Quarterly Input.xlsx"));
+    assert_eq!(payload["upload"]["method"], "PUT");
     assert_eq!(
-        payload,
-        json!({
-            "stdout": "pwd",
-            "stderr": "",
-            "exitCode": 7,
-            "durationMs": 4,
-        })
+        payload["upload"]["headers"]["x-ade-artifact-token"].as_str(),
+        Some(payload["upload"]["headers"]["x-ade-artifact-token"].as_str().unwrap())
+    );
+    assert_eq!(
+        payload["upload"]["headers"]["content-type"],
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    assert!(
+        payload["upload"]["url"]
+            .as_str()
+            .unwrap()
+            .contains("/api/internal/artifacts/workspaces/workspace-a/configs/config-v1/uploads/")
+    );
+    assert!(payload["upload"]["expiresAt"].as_str().unwrap().contains('T'));
+
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn create_run_returns_accepted_metadata_and_persists_output_via_artifact_store() {
+    let (endpoint, state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{address}");
+    let upload = upload_input(
+        &client,
+        &base_url,
+        "input.csv",
+        "text/csv",
+        b"name,email\nalice,alice@example.com\n".to_vec(),
+    )
+    .await;
+
+    let response = start_run(&client, &base_url, upload["filePath"].as_str().unwrap()).await;
+    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .to_string();
+    let payload = response.json::<Value>().await.unwrap();
+    let run_id = payload["runId"].as_str().unwrap();
+    assert_eq!(payload["status"], "pending");
+    assert_eq!(payload["inputPath"], upload["filePath"]);
+    assert_eq!(payload["outputPath"], Value::Null);
+    assert_eq!(
+        payload["eventsUrl"],
+        Value::String(format!(
+            "/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
+        ))
+    );
+    assert!(location.ends_with(&format!("/runs/{run_id}")));
+
+    let detail = wait_for_terminal_status(&client, &format!("{base_url}{location}"), "succeeded").await;
+    let output_path = detail["outputPath"].as_str().unwrap();
+    assert_eq!(output_path, format!(
+        "workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx"
+    ));
+    assert_eq!(detail["validationIssues"], json!([]));
+
+    let output_bytes = std::fs::read(artifact_root(&engine).join(output_path)).unwrap();
+    assert_eq!(output_bytes, b"normalized-output");
+
+    let state = state.lock().unwrap();
+    assert_eq!(state.artifact_download_urls.len(), 1);
+    assert_eq!(state.artifact_upload_urls.len(), 1);
+    assert!(
+        state
+            .uploaded_names
+            .iter()
+            .all(|name| !name.starts_with("workspaces/")),
+        "session uploads should contain only runtime wheels",
+    );
+    assert!(
+        state
+            .uploaded_names
+            .iter()
+            .any(|name| name == "ade_engine-0.1.0-py3-none-any.whl")
+    );
+    assert!(
+        state
+            .uploaded_names
+            .iter()
+            .any(|name| name == "ade_config-0.1.0-py3-none-any.whl")
     );
 
-    let execution_codes = state.lock().unwrap().execution_codes.clone();
-    assert_eq!(execution_codes.len(), 1);
-    assert!(execution_codes[0].contains("subprocess.run"));
+    app_handle.abort();
+    stub_handle.abort();
+}
 
-    handle.abort();
+#[tokio::test]
+async fn run_events_stream_over_sse_and_resume_from_last_event_id() {
+    let (endpoint, _state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{address}");
+    let upload = upload_input(
+        &client,
+        &base_url,
+        "input.csv",
+        "text/csv",
+        b"name,email\nalice,alice@example.com\n".to_vec(),
+    )
+    .await;
+    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap()).await
+        .json::<Value>()
+        .await
+        .unwrap();
+    let run_id = created["runId"].as_str().unwrap();
+    let detail_url =
+        format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}");
+    wait_for_terminal_status(&client, &detail_url, "succeeded").await;
+
+    let events_text = client
+        .get(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
+        ))
+        .header("Accept", "text/event-stream")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let events = parse_sse_events(&events_text);
+    assert!(!events.is_empty());
+    assert_eq!(events.first().unwrap().event, "run.created");
+    assert_eq!(events.last().unwrap().event, "run.completed");
+    assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
+    assert!(
+        events.iter().any(|event| event.event == "run.log"
+            && serde_json::from_str::<Value>(&event.data).unwrap()["message"] == "Loaded 12 rows")
+    );
+    assert!(
+        events.iter().any(|event| event.event == "run.result"
+            && serde_json::from_str::<Value>(&event.data).unwrap()["outputPath"]
+                == format!(
+                    "workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx"
+                ))
+    );
+
+    let resume_from = events[2].id;
+    let resumed_text = client
+        .get(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
+        ))
+        .header("Accept", "text/event-stream")
+        .header("Last-Event-ID", resume_from.to_string())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let resumed = parse_sse_events(&resumed_text);
+    assert!(!resumed.is_empty());
+    assert!(resumed.iter().all(|event| event.id > resume_from));
+    assert_eq!(resumed.first().unwrap().id, resume_from + 1);
+    assert_eq!(resumed.last().unwrap().event, "run.completed");
+
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn cancelling_a_run_marks_it_cancelled_and_emits_final_sse_event() {
+    let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        auto_connect_run_bridge: false,
+        ..PoolStubOptions::default()
+    })
+    .await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{address}");
+    let upload = upload_input(
+        &client,
+        &base_url,
+        "input.csv",
+        "text/csv",
+        b"name,email\nalice,alice@example.com\n".to_vec(),
+    )
+    .await;
+    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap()).await
+        .json::<Value>()
+        .await
+        .unwrap();
+    let run_id = created["runId"].as_str().unwrap();
+
+    let cancel = client
+        .post(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/cancel"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancel.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let detail = wait_for_terminal_status(
+        &client,
+        &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}"),
+        "cancelled",
+    )
+    .await;
+    assert_eq!(detail["errorMessage"], "Run cancelled.");
+
+    let events_text = client
+        .get(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
+        ))
+        .header("Accept", "text/event-stream")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let events = parse_sse_events(&events_text);
+    assert_eq!(events.last().unwrap().event, "run.completed");
+    assert_eq!(
+        serde_json::from_str::<Value>(&events.last().unwrap().data).unwrap()["finalStatus"],
+        "cancelled"
+    );
+
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn removed_public_file_routes_return_not_found() {
+    let (endpoint, _state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+    let app = app_with_session(
+        &endpoint,
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+
+    let files_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/workspaces/workspace-a/configs/config-v1/files")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(files_response.status(), StatusCode::NOT_FOUND);
+
+    let executions_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/workspaces/workspace-a/configs/config-v1/executions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(executions_response.status(), StatusCode::NOT_FOUND);
+
+    stub_handle.abort();
 }
 
 #[tokio::test]
@@ -742,8 +1006,8 @@ async fn terminal_route_starts_bootstrap_code_and_streams_bridge_events() {
 async fn internal_bridge_route_can_only_attach_once() {
     let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
         auto_connect_terminal_bridge: false,
-        terminal_bridge_delay_ms: 0,
         terminal_execution_delay_ms: 300,
+        ..PoolStubOptions::default()
     })
     .await;
     let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
@@ -797,8 +1061,8 @@ async fn internal_bridge_route_can_only_attach_once() {
 async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
     let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
         auto_connect_terminal_bridge: false,
-        terminal_bridge_delay_ms: 0,
         terminal_execution_delay_ms: 300,
+        ..PoolStubOptions::default()
     })
     .await;
     let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
@@ -833,8 +1097,8 @@ async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
 async fn reconnect_while_previous_terminal_is_shutting_down_returns_clear_error() {
     let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
         auto_connect_terminal_bridge: false,
-        terminal_bridge_delay_ms: 0,
         terminal_execution_delay_ms: 300,
+        ..PoolStubOptions::default()
     })
     .await;
     let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
@@ -872,453 +1136,4 @@ async fn reconnect_while_previous_terminal_is_shutting_down_returns_clear_error(
 
     app_handle.abort();
     stub_handle.abort();
-}
-
-#[tokio::test]
-async fn unsupported_execution_fields_are_rejected() {
-    let (endpoint, _state, handle) = start_stub_server().await;
-    let (_tempdir, config_v1, config_v2, engine) = create_wheels();
-    let app = app_with_session(
-        &endpoint,
-        &[
-            ("workspace-a", "config-v1", config_v1.as_path()),
-            ("workspace-b", "config-v2", config_v2.as_path()),
-        ],
-        &engine,
-    );
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/workspaces/workspace-a/configs/config-v1/executions")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "stdin": "hello",
-                        "shellCommand": "pwd",
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert!(
-        serde_json::from_slice::<Value>(&body).unwrap()["message"]
-            .as_str()
-            .unwrap()
-            .contains("unknown field")
-    );
-
-    handle.abort();
-}
-
-#[tokio::test]
-async fn raw_python_execution_requests_are_rejected() {
-    let (endpoint, _state, handle) = start_stub_server().await;
-    let (_tempdir, config_v1, config_v2, engine) = create_wheels();
-    let app = app_with_session(
-        &endpoint,
-        &[
-            ("workspace-a", "config-v1", config_v1.as_path()),
-            ("workspace-b", "config-v2", config_v2.as_path()),
-        ],
-        &engine,
-    );
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/workspaces/workspace-a/configs/config-v1/executions")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "code": "print('hello')",
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert!(
-        serde_json::from_slice::<Value>(&body).unwrap()["message"]
-            .as_str()
-            .unwrap()
-            .contains("unknown field")
-    );
-
-    handle.abort();
-}
-
-#[tokio::test]
-async fn run_route_uses_scoped_config_artifacts_and_existing_session_files() {
-    let (endpoint, state, handle) = start_stub_server().await;
-    let (_tempdir, config_v1, config_v2, engine) = create_wheels();
-    let app = app_with_session(
-        &endpoint,
-        &[
-            ("workspace-a", "config-v1", config_v1.as_path()),
-            ("workspace-b", "config-v2", config_v2.as_path()),
-        ],
-        &engine,
-    );
-
-    let upload_boundary = "run-upload-boundary";
-    let upload_body = format!(
-        "--{upload_boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.csv\"\r\nContent-Type: text/csv\r\n\r\nname,email\nalice,alice@example.com\n\r\n--{upload_boundary}--\r\n"
-    );
-    let upload = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/workspaces/workspace-a/configs/config-v1/files")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={upload_boundary}"),
-                )
-                .body(Body::from(upload_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let uploaded =
-        serde_json::from_slice::<Value>(&to_bytes(upload.into_body(), usize::MAX).await.unwrap())
-            .unwrap();
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/workspaces/workspace-a/configs/config-v1/runs")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "inputPath": uploaded["filename"],
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let payload =
-        serde_json::from_slice::<Value>(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-            .unwrap();
-    let run_id = payload["runId"].as_str().expect("run id");
-    let output_path = payload["outputPath"].as_str().expect("output path");
-    assert_eq!(payload["validationIssues"], json!([]));
-    assert!(output_path.starts_with(&format!("runs/{run_id}/output/")));
-    assert!(output_path.ends_with("input.normalized.xlsx"));
-    assert!(payload.get("resultPath").is_none());
-
-    {
-        let state = state.lock().unwrap();
-        assert_eq!(state.downloaded_names, vec![output_path.to_string()]);
-        assert!(state.uploaded_names.iter().any(|name| name == "input.csv"));
-        assert!(
-            state
-                .uploaded_names
-                .iter()
-                .any(|name| name == "ade_engine-0.1.0-py3-none-any.whl")
-        );
-        assert!(
-            state
-                .uploaded_names
-                .iter()
-                .any(|name| name == "ade_config-0.1.0-py3-none-any.whl")
-        );
-        assert!(
-            state
-                .uploaded_names
-                .iter()
-                .all(|name| !name.starts_with("runs/"))
-        );
-    }
-
-    let second_upload_boundary = "run-upload-boundary-b";
-    let second_upload_body = format!(
-        "--{second_upload_boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.csv\"\r\nContent-Type: text/csv\r\n\r\nname,email\nbob,bob@example.com\n\r\n--{second_upload_boundary}--\r\n"
-    );
-    let second_upload = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/workspaces/workspace-b/configs/config-v2/files")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={second_upload_boundary}"),
-                )
-                .body(Body::from(second_upload_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let second_uploaded = serde_json::from_slice::<Value>(
-        &to_bytes(second_upload.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-
-    let second_response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/workspaces/workspace-b/configs/config-v2/runs")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "inputPath": second_uploaded["filename"],
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-
-    {
-        let state = state.lock().unwrap();
-        assert!(
-            state
-                .uploaded_names
-                .iter()
-                .any(|name| name == "ade_config-0.2.0-py3-none-any.whl")
-        );
-    }
-
-    handle.abort();
-}
-
-#[tokio::test]
-async fn async_runs_return_accepted_and_replay_events() {
-    let (endpoint, _state, stub_handle) = start_stub_server().await;
-    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let app = app_with_session_and_url(
-        &endpoint,
-        &format!("http://{address}"),
-        &[("workspace-a", "config-v1", config_v1.as_path())],
-        &engine,
-    );
-    let app_handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    let client = Client::new();
-    let upload = client
-        .post(format!(
-            "http://{address}/api/workspaces/workspace-a/configs/config-v1/files"
-        ))
-        .multipart(
-            Form::new().part(
-                "file",
-                Part::bytes(b"name,email\nalice,alice@example.com\n".to_vec())
-                    .file_name("input.csv")
-                    .mime_str("text/csv")
-                    .unwrap(),
-            ),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(upload.status(), reqwest::StatusCode::OK);
-    let uploaded = upload.json::<Value>().await.unwrap();
-
-    let response = client
-        .post(format!(
-            "http://{address}/api/workspaces/workspace-a/configs/config-v1/runs"
-        ))
-        .header("Prefer", "respond-async")
-        .json(&json!({
-            "inputPath": uploaded["filename"],
-        }))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
-    assert_eq!(
-        response
-            .headers()
-            .get("preference-applied")
-            .and_then(|value| value.to_str().ok()),
-        Some("respond-async")
-    );
-    let location = response
-        .headers()
-        .get("location")
-        .and_then(|value| value.to_str().ok())
-        .unwrap()
-        .to_string();
-    let payload = response.json::<Value>().await.unwrap();
-    let run_id = payload["runId"].as_str().expect("run id");
-    assert!(location.ends_with(&format!("/runs/{run_id}")));
-    assert_eq!(
-        payload["eventsUrl"],
-        Value::String(format!(
-            "/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
-        ))
-    );
-    assert_eq!(payload["status"], "pending");
-
-    let detail_url = format!("http://{address}{location}");
-    let mut detail = Value::Null;
-    for _ in 0..20 {
-        detail = client
-            .get(&detail_url)
-            .send()
-            .await
-            .unwrap()
-            .json::<Value>()
-            .await
-            .unwrap();
-        if detail["status"] == "succeeded" {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(detail["status"], "succeeded");
-
-    let events_url =
-        format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events");
-    let (mut socket, _response) = connect_async(events_url).await.unwrap();
-    socket
-        .send(Message::Text(
-            r#"{"type":"attach","lastSeenSeq":null}"#.into(),
-        ))
-        .await
-        .unwrap();
-
-    let mut messages = Vec::new();
-    while let Some(message) = tokio::time::timeout(Duration::from_millis(250), socket.next())
-        .await
-        .ok()
-        .flatten()
-    {
-        let message = message.unwrap();
-        if let Message::Text(text) = message {
-            messages.push(text.to_string());
-        }
-    }
-
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains(r#""type":"hello""#))
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains(r#""type":"result""#))
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains(r#""type":"complete""#))
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains(r#""phase":"uploadArtifacts""#))
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains(r#""phase":"persistOutputs""#))
-    );
-
-    let _ = socket.close(None).await;
-    app_handle.abort();
-    stub_handle.abort();
-}
-
-#[tokio::test]
-async fn multipart_run_uploads_are_rejected() {
-    let (endpoint, _state, handle) = start_stub_server().await;
-    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
-    let app = app_with_session(
-        &endpoint,
-        &[("workspace-a", "config-v1", config_v1.as_path())],
-        &engine,
-    );
-
-    let boundary = "run-boundary";
-    let multipart_body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.csv\"\r\nContent-Type: text/csv\r\n\r\nname,email\nalice,alice@example.com\n\r\n--{boundary}--\r\n"
-    );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/workspaces/workspace-a/configs/config-v1/runs")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(Body::from(multipart_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    handle.abort();
-}
-
-#[tokio::test]
-async fn run_route_returns_not_found_for_unknown_config_targets() {
-    let (endpoint, _state, handle) = start_stub_server().await;
-    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
-    let app = app_with_session(
-        &endpoint,
-        &[("workspace-a", "config-v1", config_v1.as_path())],
-        &engine,
-    );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/workspaces/workspace-b/configs/config-v2/runs")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "inputPath": "input.csv",
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).unwrap()["message"],
-        "Config version 'config-v2' for workspace 'workspace-b' is not configured."
-    );
-
-    handle.abort();
 }

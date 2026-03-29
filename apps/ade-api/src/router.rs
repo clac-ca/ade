@@ -20,7 +20,7 @@ use crate::{
     api_docs::ApiDoc,
     error::AppError,
     readiness::ReadinessController,
-    routes::{runs, session, system, terminal},
+    routes::{runs, system, terminal, uploads},
     runs::RunService,
     session::SessionService,
     terminal::TerminalService,
@@ -68,11 +68,13 @@ pub fn create_app(state: AppState) -> Router {
         .route("/version", get(system::version))
         .nest(
             "/internal",
-            terminal::internal_router().merge(runs::internal_router()),
+            terminal::internal_router()
+                .merge(runs::internal_router())
+                .merge(uploads::internal_router()),
         )
         .nest(
             "/workspaces/{workspaceId}/configs/{configVersionId}",
-            session::router()
+            uploads::workspace_router()
                 .merge(runs::workspace_router())
                 .merge(terminal::workspace_router()),
         )

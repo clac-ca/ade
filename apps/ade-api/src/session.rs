@@ -1,4 +1,5 @@
 mod client;
+#[cfg(test)]
 mod python;
 
 use std::{
@@ -17,10 +18,7 @@ use crate::{
     error::AppError,
 };
 
-use self::{
-    client::SessionPoolClient,
-    python::{command_execution_code, extract_command_response},
-};
+use self::client::SessionPoolClient;
 
 pub(crate) use self::client::PythonExecution;
 pub(crate) use self::client::{SessionFile, SessionOperationMetadata, SessionOperationResult};
@@ -43,22 +41,6 @@ pub struct Scope {
     /// Config version id.
     #[serde(rename = "configVersionId")]
     pub config_version_id: String,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExecuteCommandRequest {
-    pub shell_command: String,
-    pub timeout_in_seconds: Option<u64>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecuteCommandResponse {
-    pub duration_ms: u64,
-    pub exit_code: i64,
-    pub stderr: String,
-    pub stdout: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -130,22 +112,6 @@ impl SessionService {
         })
     }
 
-    pub(crate) async fn execute_command(
-        &self,
-        scope: &Scope,
-        shell_command: &str,
-        timeout_in_seconds: Option<u64>,
-    ) -> Result<ExecuteCommandResponse, AppError> {
-        let execution = self
-            .execute_python(
-                &self.session_identifier(scope),
-                command_execution_code(shell_command)?,
-                timeout_in_seconds,
-            )
-            .await?;
-        extract_command_response(execution)
-    }
-
     pub(crate) async fn execute_inline_python(
         &self,
         scope: &Scope,
@@ -193,16 +159,6 @@ impl SessionService {
                 content_type,
                 content,
             )
-            .await
-    }
-
-    pub(crate) async fn download_session_file_detailed(
-        &self,
-        scope: &Scope,
-        path: &str,
-    ) -> Result<SessionOperationResult<(String, Vec<u8>)>, AppError> {
-        self.client
-            .download_file_detailed(&self.session_identifier(scope), &public_session_path(path)?)
             .await
     }
 
@@ -427,15 +383,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        CONFIG_PACKAGE_NAME, CreateRunRequest, ENGINE_PACKAGE_NAME, ExecuteCommandRequest,
-        ExecuteCommandResponse, RunResponse, RunValidationIssue, Scope,
-        client::PythonExecution,
-        command_execution_code, derive_session_identifier, extract_command_response,
-        parse_wheel_version, public_session_path,
-        python::{
-            COMMAND_SENTINEL_PREFIX, RUN_SENTINEL_PREFIX, RunPythonConfig, build_run_code,
-            ensure_successful_execution, extract_run_response, strip_command_metadata,
-        },
+        CONFIG_PACKAGE_NAME, CreateRunRequest, ENGINE_PACKAGE_NAME, Scope,
+        derive_session_identifier, parse_wheel_version, public_session_path,
+        python::{RUN_SENTINEL_PREFIX, RunPythonConfig, build_run_code},
     };
 
     #[test]
@@ -462,17 +412,6 @@ mod tests {
     }
 
     #[test]
-    fn command_request_denies_unknown_fields() {
-        let error = serde_json::from_value::<ExecuteCommandRequest>(json!({
-            "code": "print('hi')",
-        }))
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("unknown field"));
-    }
-
-    #[test]
     fn run_request_denies_unknown_fields() {
         let error = serde_json::from_value::<CreateRunRequest>(json!({
             "file": "input.csv",
@@ -481,78 +420,6 @@ mod tests {
         .to_string();
 
         assert!(error.contains("unknown field"));
-    }
-
-    #[test]
-    fn shell_command_code_uses_json_config_and_subprocess() {
-        let code = command_execution_code("pwd").unwrap();
-
-        assert!(code.contains("json.loads"));
-        assert!(code.contains("subprocess.run"));
-        assert!(code.contains("CONFIG[\"command\"]"));
-        assert!(code.contains("cwd=\"/mnt/data\""));
-    }
-
-    #[test]
-    fn command_metadata_is_extracted_into_a_flat_response() {
-        let response = extract_command_response(PythonExecution {
-            duration_ms: 4,
-            status: "Succeeded".to_string(),
-            stdout: format!("hello\n{COMMAND_SENTINEL_PREFIX}{{\"exitCode\":7}}\n"),
-            stderr: String::new(),
-        })
-        .unwrap();
-
-        assert_eq!(
-            response,
-            ExecuteCommandResponse {
-                duration_ms: 4,
-                exit_code: 7,
-                stderr: String::new(),
-                stdout: "hello".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn strip_command_metadata_returns_none_when_missing() {
-        assert_eq!(strip_command_metadata("plain output").unwrap(), None);
-    }
-
-    #[test]
-    fn extracts_run_responses_from_stdout_metadata() {
-        let response = PythonExecution {
-            duration_ms: 0,
-            status: "Succeeded".to_string(),
-            stdout: format!(
-                "log line\n{RUN_SENTINEL_PREFIX}{{\"outputPath\":\"runs/run-1/output/input.normalized.xlsx\",\"validationIssues\":[{{\"rowIndex\":2,\"field\":\"email\",\"message\":\"missing\"}}]}}\n"
-            ),
-            stderr: String::new(),
-        };
-
-        assert_eq!(
-            extract_run_response(&response).unwrap(),
-            RunResponse {
-                run_id: String::new(),
-                output_path: "runs/run-1/output/input.normalized.xlsx".to_string(),
-                validation_issues: vec![RunValidationIssue {
-                    row_index: 2,
-                    field: "email".to_string(),
-                    message: "missing".to_string(),
-                }],
-            }
-        );
-    }
-
-    #[test]
-    fn successful_status_is_accepted() {
-        ensure_successful_execution(&PythonExecution {
-            duration_ms: 0,
-            status: "Succeeded".to_string(),
-            stdout: "ok".to_string(),
-            stderr: String::new(),
-        })
-        .unwrap();
     }
 
     #[test]

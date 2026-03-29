@@ -92,14 +92,14 @@ describe("AppRouter", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Stream config install and run output over `/runs`.",
+        name: "Direct upload, async runs, and one-way SSE logs.",
       }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Start Run" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/execution cap of about 220 seconds/),
+      screen.getByText(/browser negotiates a single-file upload/i),
     ).toBeInTheDocument();
   });
 

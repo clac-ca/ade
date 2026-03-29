@@ -1,4 +1,33 @@
 services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command:
+      [
+        "azurite-blob",
+        "--blobHost",
+        "0.0.0.0",
+        "--blobPort",
+        "10000",
+        "--location",
+        "/data",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:10000/devstoreaccount1?comp=list', (response) => process.exit(response.statusCode === 200 || response.statusCode === 403 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    ports:
+      - "10000:10000"
+    volumes:
+      - azurite-data:/data
+
   sessionpool:
     build:
       context: ./sessionpool
@@ -41,4 +70,5 @@ services:
       - sqlserver-data:/var/opt/mssql
 
 volumes:
+  azurite-data:
   sqlserver-data:

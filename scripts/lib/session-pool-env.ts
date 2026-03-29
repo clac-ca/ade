@@ -3,6 +3,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
+  createLocalContainerAppUrl,
   createLocalContainerSessionPoolManagementEndpoint,
   createLocalSessionPoolManagementEndpoint,
   localContainerAppUrl,
@@ -56,7 +57,11 @@ function createConfigTargetsValue(configWheelPath: string): string {
   ]);
 }
 
-function createHostSessionPoolEnv(): Record<string, string> {
+function createHostSessionPoolEnv(
+  options: {
+    appUrl?: string;
+  } = {},
+): Record<string, string> {
   const configWheelPath = newestWheel(
     fileURLToPath(new URL("../../packages/ade-config/dist", import.meta.url)),
     "ade_config-",
@@ -67,7 +72,7 @@ function createHostSessionPoolEnv(): Record<string, string> {
   );
 
   return {
-    [appUrlEnvName]: localContainerAppUrl,
+    [appUrlEnvName]: options.appUrl ?? localContainerAppUrl,
     [configTargetsEnvName]: createConfigTargetsValue(configWheelPath),
     [sessionSecretEnvName]: localSessionPoolSecret,
     [managementEndpointEnvName]: createLocalSessionPoolManagementEndpoint(),
@@ -75,7 +80,12 @@ function createHostSessionPoolEnv(): Record<string, string> {
   };
 }
 
-function createContainerSessionPoolEnv(env: NodeJS.ProcessEnv = process.env): {
+function createContainerSessionPoolEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  options: {
+    appUrl?: string;
+  } = {},
+): {
   usesManagedLocalSessionPool: boolean;
   values: Record<string, string>;
 } {
@@ -94,7 +104,7 @@ function createContainerSessionPoolEnv(env: NodeJS.ProcessEnv = process.env): {
       usesManagedLocalSessionPool: true,
       values: {
         ...values,
-        [appUrlEnvName]: localContainerAppUrl,
+        [appUrlEnvName]: options.appUrl ?? localContainerAppUrl,
         [configTargetsEnvName]: createConfigTargetsValue(
           "/app/python/ade_config.whl",
         ),
@@ -107,14 +117,17 @@ function createContainerSessionPoolEnv(env: NodeJS.ProcessEnv = process.env): {
 
   return {
     usesManagedLocalSessionPool: false,
-    values: {
-      ...values,
-      [appUrlEnvName]: readRequiredEnv(env, appUrlEnvName),
-      [configTargetsEnvName]: readRequiredEnv(env, configTargetsEnvName),
-      [managementEndpointEnvName]: configuredManagementEndpoint,
-      [sessionSecretEnvName]: readRequiredEnv(env, sessionSecretEnvName),
-    },
-  };
+      values: {
+        ...values,
+        [appUrlEnvName]:
+          readOptionalTrimmedString(env, appUrlEnvName) ??
+          options.appUrl ??
+          createLocalContainerAppUrl(5173),
+        [configTargetsEnvName]: readRequiredEnv(env, configTargetsEnvName),
+        [managementEndpointEnvName]: configuredManagementEndpoint,
+        [sessionSecretEnvName]: readRequiredEnv(env, sessionSecretEnvName),
+      },
+    };
 }
 
 export { createContainerSessionPoolEnv, createHostSessionPoolEnv };

@@ -237,7 +237,7 @@ async fn openapi_route_serves_generated_spec() {
     assert_eq!(payload["openapi"], "3.1.0");
     assert!(payload["paths"]["/api/healthz"].is_object());
     assert!(
-        payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/executions"]
+        payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/uploads"]
             .is_object()
     );
     assert!(
@@ -247,6 +247,14 @@ async fn openapi_route_serves_generated_spec() {
     assert!(
         payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/terminal"]
             .is_object()
+    );
+    assert!(
+        payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/files"]
+            .is_null()
+    );
+    assert!(
+        payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/executions"]
+            .is_null()
     );
 }
 
