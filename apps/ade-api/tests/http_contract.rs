@@ -1,9 +1,10 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use ade_api::{
     config::SERVICE_VERSION,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{create_app, normalize_app},
+    session::SessionService,
     state::AppState,
     unix_time_ms,
 };
@@ -13,6 +14,7 @@ use axum::{
     response::Response,
 };
 use pretty_assertions::assert_eq;
+use tempfile::tempdir;
 use tower::util::ServiceExt;
 
 fn fixture_web_root() -> PathBuf {
@@ -35,18 +37,62 @@ fn request_with_method(uri: &str, method: Method) -> Request<Body> {
         .unwrap()
 }
 
+fn fixture_session_service() -> Arc<SessionService> {
+    let tempdir = tempdir().unwrap();
+    let engine = tempdir.path().join("ade_engine-0.1.0-py3-none-any.whl");
+    let config = tempdir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    std::fs::write(&engine, b"engine").unwrap();
+    std::fs::write(&config, b"config").unwrap();
+
+    let env = [
+        (
+            "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
+            "http://127.0.0.1:9".to_string(),
+        ),
+        (
+            "ADE_SESSION_SECRET".to_string(),
+            "test-session-secret".to_string(),
+        ),
+        (
+            "ADE_ENGINE_WHEEL_PATH".to_string(),
+            engine.display().to_string(),
+        ),
+        (
+            "ADE_CONFIG_TARGETS".to_string(),
+            serde_json::json!([
+                {
+                    "workspaceId": "workspace-a",
+                    "configVersionId": "config-v1",
+                    "wheelPath": config.display().to_string(),
+                }
+            ])
+            .to_string(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+
+    SessionService::from_env(&env).unwrap()
+}
+
+fn app_state(readiness: ReadinessController) -> AppState {
+    AppState {
+        readiness,
+        session_service: fixture_session_service(),
+        web_root: Some(fixture_web_root()),
+    }
+}
+
 #[tokio::test]
 async fn health_route_reports_ok() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions {
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions {
             database_ok: Some(true),
             last_checked_at: Some(unix_time_ms()),
             phase: Some(ReadinessPhase::Ready),
             ..CreateReadinessControllerOptions::default()
-        }),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+        },
+    ))));
 
     let response = app.oneshot(request("/api/healthz")).await.unwrap();
 
@@ -62,11 +108,9 @@ async fn health_route_reports_ok() {
 
 #[tokio::test]
 async fn api_root_works_without_trailing_slash() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
 
     let response = app.oneshot(request("/api")).await.unwrap();
 
@@ -83,11 +127,9 @@ async fn api_root_works_without_trailing_slash() {
 
 #[tokio::test]
 async fn api_root_works_with_trailing_slash() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
 
     let response = app.oneshot(request("/api/")).await.unwrap();
 
@@ -108,11 +150,7 @@ async fn ready_route_reflects_readiness_state() {
         phase: Some(ReadinessPhase::Starting),
         ..CreateReadinessControllerOptions::default()
     });
-    let app = normalize_app(create_app(AppState {
-        readiness: readiness.clone(),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(readiness.clone())));
 
     let not_ready = app.clone().oneshot(request("/api/readyz")).await.unwrap();
     assert_eq!(not_ready.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -140,11 +178,9 @@ async fn ready_route_reflects_readiness_state() {
 
 #[tokio::test]
 async fn version_route_exposes_minimal_runtime_metadata() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
 
     let response = app.oneshot(request("/api/version")).await.unwrap();
     let payload = json_body(response).await;
@@ -156,11 +192,9 @@ async fn version_route_exposes_minimal_runtime_metadata() {
 
 #[tokio::test]
 async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
 
     let response = app.oneshot(request("/documents/example")).await.unwrap();
     let html = String::from_utf8(
@@ -176,11 +210,9 @@ async fn spa_fallback_serves_index_html_for_unknown_frontend_routes() {
 
 #[tokio::test]
 async fn head_requests_to_frontend_routes_preserve_head_semantics() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
 
     let response = app
         .oneshot(request_with_method("/documents/example", Method::HEAD))
@@ -193,11 +225,9 @@ async fn head_requests_to_frontend_routes_preserve_head_semantics() {
 
 #[tokio::test]
 async fn unknown_api_routes_return_json_404() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
 
     let response = app.oneshot(request("/api/unknown")).await.unwrap();
 
@@ -214,11 +244,9 @@ async fn unknown_api_routes_return_json_404() {
 
 #[tokio::test]
 async fn missing_assets_stay_not_found() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
 
     let response = app.oneshot(request("/assets/missing.js")).await.unwrap();
 
@@ -227,11 +255,9 @@ async fn missing_assets_stay_not_found() {
 
 #[tokio::test]
 async fn head_requests_to_missing_assets_stay_not_found() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
 
     let response = app
         .oneshot(request_with_method("/assets/missing.js", Method::HEAD))
@@ -243,11 +269,9 @@ async fn head_requests_to_missing_assets_stay_not_found() {
 
 #[tokio::test]
 async fn root_serves_application_shell_when_web_root_exists() {
-    let app = normalize_app(create_app(AppState {
-        readiness: ReadinessController::new(CreateReadinessControllerOptions::default()),
-        runtime: None,
-        web_root: Some(fixture_web_root()),
-    }));
+    let app = normalize_app(create_app(app_state(ReadinessController::new(
+        CreateReadinessControllerOptions::default(),
+    ))));
 
     let response = app.oneshot(request("/")).await.unwrap();
     let html = String::from_utf8(

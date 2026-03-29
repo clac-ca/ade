@@ -76,12 +76,13 @@ RUN apk add --no-cache ca-certificates \
     && adduser -S -D -H -G ade ade
 
 ENV NODE_ENV=production
+ENV ADE_ENGINE_WHEEL_PATH=/app/python/ade_engine.whl
 
 COPY --from=web-builder --chown=ade:ade /build/apps/ade-web/dist ./public
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-api ./bin/ade-api
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-migrate ./bin/ade-migrate
-COPY --from=python-builder --chown=ade:ade /dist/ade_engine-*.whl ./python/
-COPY --from=python-builder --chown=ade:ade /dist/ade_config-*.whl ./python/
+COPY --from=python-builder --chown=ade:ade /dist/ade_engine-*.whl ./python/ade_engine.whl
+COPY --from=python-builder --chown=ade:ade /dist/ade_config-*.whl ./python/ade_config.whl
 
 USER ade:ade
 

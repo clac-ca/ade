@@ -1,4 +1,4 @@
-"""Local Azure-style session pool emulator for ADE development."""
+"""Local Azure-style Python session pool emulator for ADE development."""
 
 from __future__ import annotations
 
@@ -13,16 +13,15 @@ import json
 import logging
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import threading
+import time
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 import uuid
 
 LOGGER = logging.getLogger("ade.local.sessionpool")
-DEFAULT_COMMAND_TIMEOUT_SECONDS = 120
 DEFAULT_EXECUTION_TIMEOUT_SECONDS = 220
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9000
@@ -39,17 +38,16 @@ class CommandResult:
     stdout: str
     stderr: str
     exit_code: int
+    execution_time_in_milliseconds: int
 
 
 class SessionPoolEmulator:
     def __init__(self, workspace_root: Path) -> None:
         self.workspace_root = workspace_root.resolve()
         self.sessions_root = self.workspace_root / "sessions"
-        self.environments_root = self.workspace_root / "environments"
         self.mnt_root = _resolve_mnt_root(self.workspace_root)
         self.mnt_data_path = self.mnt_root / "data"
         self.sessions_root.mkdir(parents=True, exist_ok=True)
-        self.environments_root.mkdir(parents=True, exist_ok=True)
         self._execution_lock = threading.Lock()
 
     def health(self) -> dict[str, str]:
@@ -63,10 +61,10 @@ class SessionPoolEmulator:
         content: bytes,
     ) -> dict[str, Any]:
         data_dir = self._job_session(identifier).data_dir
-        target = data_dir / filename
+        target = self._resolve_file_path(data_dir, filename)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
-        return self._file_metadata(target, data_dir)
+        return {"properties": self._file_metadata(target, data_dir)}
 
     def list_files(self, *, identifier: str) -> dict[str, Any]:
         data_dir = self._job_session(identifier).data_dir
@@ -89,166 +87,25 @@ class SessionPoolEmulator:
         identifier: str,
         code: str,
         timeout_seconds: int = DEFAULT_EXECUTION_TIMEOUT_SECONDS,
-    ) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+    ) -> dict[str, Any]:
         session = self._job_session(identifier)
         result = self._run_python_code(
             session,
             code,
             timeout_seconds=min(timeout_seconds, DEFAULT_EXECUTION_TIMEOUT_SECONDS),
         )
-        operation_id = uuid.uuid4().hex
-        headers = [
-            ("operation-id", operation_id),
-            ("x-ms-session-guid", identifier),
-        ]
-        return {
-            "properties": {
+        payload = {
+            "status": "Succeeded" if result.exit_code == 0 else "Failed",
+            "result": {
                 "stdout": result.stdout,
                 "stderr": result.stderr,
-                "exitCode": result.exit_code,
-                "status": "Succeeded" if result.exit_code == 0 else "Failed",
-            }
-        }, headers
-
-    def stop_session(self, *, identifier: str) -> dict[str, Any]:
-        session_path = self.sessions_root / identifier
-        if session_path.exists():
-            shutil.rmtree(session_path)
-        return {}
-
-    def mcp(self, body: dict[str, Any]) -> dict[str, Any]:
-        method = body.get("method")
-        request_id = body.get("id")
-
-        if method == "initialize":
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "protocolVersion": "2025-03-26",
-                    "serverInfo": {"name": "ADE Local Session Pool MCP Server"},
-                    "capabilities": {"tools": {"list": True, "call": True}},
-                },
-            }
-
-        if method == "tools/list":
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "tools": [
-                        {"name": "launchShell"},
-                        {"name": "runShellCommandInRemoteEnvironment"},
-                        {"name": "runPythonCodeInRemoteEnvironment"},
-                    ]
-                },
-            }
-
-        if method != "tools/call":
-            return self._mcp_error(request_id, f"Unsupported MCP method: {method}")
-
-        params = body.get("params")
-        if not isinstance(params, dict):
-            return self._mcp_error(request_id, "MCP params must be an object.")
-
-        tool_name = params.get("name")
-        arguments = params.get("arguments")
-        if not isinstance(arguments, dict):
-            arguments = {}
-
-        if tool_name == "launchShell":
-            environment_id = f"env-{uuid.uuid4().hex}"
-            self._console_environment(environment_id)
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "structuredContent": {"environmentId": environment_id},
-                },
-            }
-
-        environment_id = arguments.get("environmentId")
-        if not isinstance(environment_id, str) or environment_id.strip() == "":
-            return self._mcp_error(request_id, "environmentId is required.")
-
-        try:
-            environment = self._console_environment(environment_id)
-        except FileNotFoundError:
-            return self._mcp_error(
-                request_id, f"Environment not found: {environment_id}"
-            )
-
-        if tool_name == "runPythonCodeInRemoteEnvironment":
-            python_code = arguments.get("pythonCode")
-            if not isinstance(python_code, str):
-                return self._mcp_error(request_id, "pythonCode is required.")
-            timeout_seconds = _coerce_timeout(
-                arguments.get("timeoutSeconds"),
-                DEFAULT_COMMAND_TIMEOUT_SECONDS,
-                900,
-            )
-            result = self._run_python_code(environment, python_code, timeout_seconds)
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "structuredContent": {
-                        "stdout": result.stdout,
-                        "stderr": result.stderr,
-                        "exitCode": result.exit_code,
-                    }
-                },
-            }
-
-        if tool_name == "runShellCommandInRemoteEnvironment":
-            timeout_seconds = _coerce_timeout(
-                arguments.get("timeoutSeconds"),
-                DEFAULT_COMMAND_TIMEOUT_SECONDS,
-                240,
-            )
-            shell_command = arguments.get("shellCommand")
-            exec_command_and_args = arguments.get("execCommandAndArgs")
-            try:
-                result = self._run_shell_command(
-                    environment,
-                    shell_command=shell_command
-                    if isinstance(shell_command, str)
-                    else None,
-                    exec_command_and_args=(
-                        exec_command_and_args
-                        if isinstance(exec_command_and_args, list)
-                        else None
-                    ),
-                    timeout_seconds=timeout_seconds,
-                )
-            except ValueError as error:
-                return self._mcp_error(request_id, str(error))
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "structuredContent": {
-                        "stdout": result.stdout,
-                        "stderr": result.stderr,
-                        "exitCode": result.exit_code,
-                    }
-                },
-            }
-
-        return self._mcp_error(request_id, f"Unsupported MCP tool: {tool_name}")
+                "executionTimeInMilliseconds": result.execution_time_in_milliseconds,
+            },
+        }
+        return payload
 
     def _job_session(self, identifier: str) -> PythonSession:
-        return self._ensure_session(self.sessions_root / identifier)
-
-    def _console_environment(self, environment_id: str) -> PythonSession:
-        environment_path = self.environments_root / environment_id
-        if not environment_path.exists():
-            if environment_id.startswith("env-"):
-                return self._ensure_session(environment_path)
-            raise FileNotFoundError(environment_id)
-        return self._ensure_session(environment_path)
-
-    def _ensure_session(self, session_root: Path) -> PythonSession:
+        session_root = self.sessions_root / identifier
         data_dir = session_root / "mnt-data"
         venv_dir = session_root / "venv"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -272,38 +129,7 @@ class SessionPoolEmulator:
             "-c",
             _rewrite_mnt_path(self.mnt_data_path, code),
         ]
-        return self._run_command(command, session, timeout_seconds=timeout_seconds)
-
-    def _run_shell_command(
-        self,
-        session: PythonSession,
-        *,
-        shell_command: str | None,
-        exec_command_and_args: list[Any] | None,
-        timeout_seconds: int,
-    ) -> CommandResult:
-        if shell_command:
-            command = [
-                os.environ.get("SHELL", "/bin/bash"),
-                "-lc",
-                _rewrite_mnt_path(self.mnt_data_path, shell_command),
-            ]
-        elif exec_command_and_args:
-            command = [
-                _rewrite_mnt_path(self.mnt_data_path, str(value))
-                for value in exec_command_and_args
-            ]
-        else:
-            raise ValueError("shellCommand or execCommandAndArgs is required.")
-        return self._run_command(command, session, timeout_seconds=timeout_seconds)
-
-    def _run_command(
-        self,
-        command: list[str],
-        session: PythonSession,
-        *,
-        timeout_seconds: int,
-    ) -> CommandResult:
+        started_at = time.perf_counter()
         with self._execution_lock:
             _point_mnt_data(self.mnt_root, session.data_dir)
             completed = subprocess.run(
@@ -320,6 +146,9 @@ class SessionPoolEmulator:
             stdout=completed.stdout,
             stderr=completed.stderr,
             exit_code=completed.returncode,
+            execution_time_in_milliseconds=int(
+                (time.perf_counter() - started_at) * 1000
+            ),
         )
 
     def _resolve_file_path(self, data_dir: Path, filename: str) -> Path:
@@ -337,13 +166,6 @@ class SessionPoolEmulator:
             "filename": str(path.relative_to(data_dir)),
             "size": stat.st_size,
             "lastModifiedTime": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
-        }
-
-    def _mcp_error(self, request_id: Any, message: str) -> dict[str, Any]:
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": {"code": -32000, "message": message},
         }
 
 
@@ -366,8 +188,10 @@ class SessionPoolRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            if parsed.path.startswith("/files/content/"):
-                filename = unquote(parsed.path[len("/files/content/") :]).strip("/")
+            if parsed.path.endswith("/content") and parsed.path.startswith("/files/"):
+                filename = unquote(
+                    parsed.path[len("/files/") : -len("/content")]
+                ).strip("/")
                 content_type, content = self.server.emulator.download_file(
                     identifier=identifier,
                     filename=filename,
@@ -392,35 +216,27 @@ class SessionPoolRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
 
         try:
-            if parsed.path == "/mcp":
-                body = self._read_json_body()
-                self._write_json(HTTPStatus.OK, self.server.emulator.mcp(body))
-                return
-
             identifier = _identifier(parse_qs(parsed.query))
 
-            if parsed.path == "/code/execute":
+            if parsed.path == "/executions":
                 body = self._read_json_body()
-                properties = body.get("properties")
-                if not isinstance(properties, dict):
-                    raise ValueError("properties is required.")
-                code = properties.get("code")
+                code = body.get("code")
                 if not isinstance(code, str):
-                    raise ValueError("properties.code is required.")
+                    raise ValueError("code is required.")
                 timeout_seconds = _coerce_timeout(
-                    properties.get("timeoutSeconds"),
+                    body.get("timeoutInSeconds"),
                     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
                     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
                 )
-                payload, headers = self.server.emulator.execute(
+                payload = self.server.emulator.execute(
                     identifier=identifier,
                     code=code,
                     timeout_seconds=timeout_seconds,
                 )
-                self._write_json(HTTPStatus.OK, payload, headers=headers)
+                self._write_json(HTTPStatus.OK, payload)
                 return
 
-            if parsed.path == "/files/upload":
+            if parsed.path == "/files":
                 filename, content = _multipart_file(
                     self.headers.get("Content-Type", ""),
                     self._read_body(),
@@ -430,11 +246,6 @@ class SessionPoolRequestHandler(BaseHTTPRequestHandler):
                     filename=filename,
                     content=content,
                 )
-                self._write_json(HTTPStatus.OK, payload)
-                return
-
-            if parsed.path == "/.management/stopSession":
-                payload = self.server.emulator.stop_session(identifier=identifier)
                 self._write_json(HTTPStatus.OK, payload)
                 return
 

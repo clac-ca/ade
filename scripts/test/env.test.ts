@@ -2,15 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createLocalContainerSessionPoolManagementEndpoint,
-  createLocalContainerSessionPoolMcpEndpoint,
   createLocalSessionPoolManagementEndpoint,
-  createLocalSessionPoolMcpEndpoint,
   createLocalSqlConnectionString,
   localApiHost,
   localApiPort,
   localComposeProjectName,
   localSessionPoolPort,
-  localSessionPoolRuntimeSecret,
+  localSessionPoolSecret,
   localSqlPassword,
   localSqlPort,
   localWebPort,
@@ -22,7 +20,7 @@ test("local development defaults are fixed and predictable", () => {
   assert.equal(localApiPort, 8000);
   assert.equal(localComposeProjectName, "ade-local");
   assert.equal(localSessionPoolPort, 8014);
-  assert.equal(localSessionPoolRuntimeSecret, "ade-local-session-secret");
+  assert.equal(localSessionPoolSecret, "ade-local-session-secret");
   assert.equal(localSqlPort, 8013);
   assert.equal(localSqlPassword, "AdeLocal1!adeclean");
   assert.equal(localWebPort, 5173);
@@ -35,16 +33,8 @@ test("local development defaults are fixed and predictable", () => {
     "http://127.0.0.1:8014",
   );
   assert.equal(
-    createLocalSessionPoolMcpEndpoint(),
-    "http://127.0.0.1:8014/mcp",
-  );
-  assert.equal(
     createLocalContainerSessionPoolManagementEndpoint(),
     "http://host.docker.internal:8014",
-  );
-  assert.equal(
-    createLocalContainerSessionPoolMcpEndpoint(),
-    "http://host.docker.internal:8014/mcp",
   );
 });
 

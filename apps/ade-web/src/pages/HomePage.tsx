@@ -16,7 +16,7 @@ export function HomePage() {
         </h2>
         <p className="hero__summary">
           Routing is handled by React Router, server data by TanStack Query, and
-          API access by a thin client layer. Runtime health stays on explicit
+          API access by a thin client layer. Service health stays on explicit
           API endpoints, with no extra operational surface in the first slice.
         </p>
       </div>
@@ -49,7 +49,7 @@ export function HomePage() {
           <p className="status-note">
             This first slice keeps the client contract intentionally small: a
             minimal version endpoint for application identity and explicit
-            health endpoints for runtime status.
+            health endpoints for service status.
           </p>
         </>
       ) : null}

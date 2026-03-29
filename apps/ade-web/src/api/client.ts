@@ -22,10 +22,10 @@ function normalizeApiPath(path: string) {
   return `/api${trimmed.startsWith("/") ? trimmed : `/${trimmed}`}`;
 }
 
-export async function apiFetch<T>(
+export async function apiRequest(
   path: string,
   init?: RequestInit,
-): Promise<T> {
+): Promise<Response> {
   const headers = new Headers(init?.headers);
 
   if (!headers.has("accept")) {
@@ -58,5 +58,13 @@ export async function apiFetch<T>(
     throw new ApiError(message, response.status);
   }
 
+  return response;
+}
+
+export async function apiFetch<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await apiRequest(path, init);
   return (await response.json()) as T;
 }

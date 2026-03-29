@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiFetch } from "./client";
+import { ApiError, apiFetch, apiRequest } from "./client";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -39,5 +39,21 @@ describe("apiFetch", () => {
     await expect(apiFetch("/version")).rejects.toEqual(
       new ApiError("Service unavailable", 503),
     );
+  });
+
+  it("returns the raw response for non-JSON callers", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("plain text", {
+          headers: { "content-type": "text/plain" },
+          status: 200,
+        }),
+      ),
+    );
+
+    const response = await apiRequest("/files/content/notes.txt");
+
+    expect(await response.text()).toBe("plain text");
   });
 });

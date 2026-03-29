@@ -61,6 +61,20 @@ param sessionPoolName string = '${prefix}-sessions'
 @secure()
 param runtimeSessionSecret string
 
+@description('JSON array mapping workspace/config pairs to config wheel paths inside the app container.')
+param configTargets string = string([
+  {
+    workspaceId: 'workspace-a'
+    configVersionId: 'config-v1'
+    wheelPath: '/app/python/ade_config.whl'
+  }
+  {
+    workspaceId: 'workspace-b'
+    configVersionId: 'config-v2'
+    wheelPath: '/app/python/ade_config.whl'
+  }
+])
+
 @description('CPU allocation for the ADE container app.')
 param appCpu string = '0.25'
 
@@ -183,20 +197,16 @@ module app 'modules/container-app.bicep' = {
         value: appSqlConnectionString
       }
       {
-        name: 'ADE_RUNTIME_SESSION_SECRET'
+        name: 'ADE_SESSION_SECRET'
         secretRef: 'ade-runtime-session-secret'
+      }
+      {
+        name: 'ADE_CONFIG_TARGETS'
+        value: configTargets
       }
       {
         name: 'ADE_SESSION_POOL_MANAGEMENT_ENDPOINT'
         value: sessionPool.outputs.poolManagementEndpoint
-      }
-      {
-        name: 'ADE_SESSION_POOL_MCP_ENDPOINT'
-        value: sessionPool.outputs.mcpEndpoint
-      }
-      {
-        name: 'ADE_SESSION_POOL_RESOURCE_ID'
-        value: sessionPool.outputs.id
       }
     ]
     probes: [
@@ -300,7 +310,6 @@ output deploymentManagedIdentityPrincipalId string = deploymentManagedIdentity.p
 output migrationJobName string = migrationJobName
 output sqlDatabaseName string = sql.outputs.databaseName
 output sessionPoolId string = sessionPool.outputs.id
-output sessionPoolMcpEndpoint string = sessionPool.outputs.mcpEndpoint
 output sessionPoolName string = sessionPool.outputs.name
 output sessionPoolPoolManagementEndpoint string = sessionPool.outputs.poolManagementEndpoint
 output sqlServerIdentityPrincipalId string = sql.outputs.serverIdentityPrincipalId

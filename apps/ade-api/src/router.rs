@@ -18,7 +18,7 @@ use tower_http::{
 
 use crate::{
     error::AppError,
-    routes::{runtime, system},
+    routes::{session, system},
     state::AppState,
 };
 
@@ -28,7 +28,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/healthz", get(system::healthz))
         .route("/readyz", get(system::readyz))
         .route("/version", get(system::version))
-        .nest("/runtime", runtime::router())
+        .nest(
+            "/workspaces/{workspaceId}/configs/{configVersionId}",
+            session::router(),
+        )
         .fallback(api_not_found);
 
     Router::new()

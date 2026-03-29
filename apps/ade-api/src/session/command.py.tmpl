@@ -1,0 +1,21 @@
+import json
+import subprocess
+import sys
+
+CONFIG = json.loads({{CONFIG_JSON}})
+result = subprocess.run(
+    CONFIG["command"],
+    shell=True,
+    text=True,
+    capture_output=True,
+    check=False,
+    cwd="/mnt/data",
+)
+sys.stdout.write(result.stdout)
+if result.stdout and not result.stdout.endswith("\n"):
+    sys.stdout.write("\n")
+print(
+    CONFIG["sentinelPrefix"]
+    + json.dumps({"exitCode": result.returncode}, separators=(",", ":"))
+)
+sys.stderr.write(result.stderr)

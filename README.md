@@ -40,7 +40,7 @@ pnpm format:python:check
 pnpm test
 pnpm test:python
 pnpm test:unit
-pnpm test:runtime:local
+pnpm test:session:local
 pnpm clean
 ```
 
@@ -55,7 +55,7 @@ pnpm deps:down
 
 `pnpm clean` removes local build output, Python virtualenvs and locks, ADE local containers, Compose state, and the `ade-platform:local` image.
 
-`pnpm test:runtime:local` runs one black-box smoke path against the local SQL and session-pool infrastructure through the ADE API.
+`pnpm test:session:local` runs one black-box smoke path against the local SQL and session-pool infrastructure through the ADE API.
 
 ## Production-Like Local Runtime
 

@@ -12,7 +12,7 @@ The template deploys:
 - one Blob Storage account and blob container placeholder
 - one Log Analytics workspace
 - one VNet-integrated Azure Container Apps environment
-- one shared Azure Container Apps session pool for hosted ADE runtime and MCP console access
+- one shared Azure Container Apps session pool for hosted ADE document processing and admin executions
 - one public Container App for the API/web host
 - one manual Azure Container Apps Job for schema migrations
 
@@ -52,7 +52,7 @@ Lock these assumptions in:
 - Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a virtual network rule
 - Blob Storage stays provisioned as a placeholder, but it is not an active application dependency today
 - the Azure SQL database uses the General Purpose serverless compute tier with auto-pause enabled
-- the shared Azure session pool uses the built-in `PythonLTS` container type with MCP enabled
+- the shared Azure session pool uses the built-in `PythonLTS` container type
 
 ## Prerequisites
 

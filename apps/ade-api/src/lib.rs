@@ -4,7 +4,7 @@ pub mod error;
 pub mod readiness;
 pub mod router;
 pub mod routes;
-pub mod runtime;
+pub mod session;
 pub mod state;
 
 use std::{
@@ -31,7 +31,7 @@ use crate::{
     error::AppError,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
     router::{create_app, normalize_app},
-    runtime::RuntimeService,
+    session::SessionService,
     state::AppState,
 };
 
@@ -45,7 +45,7 @@ pub struct ServerOptions {
     pub host: String,
     pub port: u16,
     pub probe_interval_ms: u64,
-    pub runtime: Option<Arc<RuntimeService>>,
+    pub session_service: Arc<SessionService>,
     pub sql_connection_string: String,
     pub stale_after_ms: u64,
     pub web_root: Option<PathBuf>,
@@ -74,7 +74,7 @@ impl ServerInstance {
         });
         let app = create_app(AppState {
             readiness: readiness.clone(),
-            runtime: options.runtime,
+            session_service: options.session_service,
             web_root: options.web_root,
         });
 
@@ -114,7 +114,10 @@ impl ServerInstance {
         let listener = TcpListener::bind(SocketAddr::from((listener_host, self.port)))
             .await
             .map_err(|error| {
-                AppError::startup_with_source("Failed to bind the ADE runtime.".to_string(), error)
+                AppError::startup_with_source(
+                    "Failed to bind the ADE API server.".to_string(),
+                    error,
+                )
             })?;
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -304,6 +307,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
+    use tempfile::tempdir;
     use tokio::time::sleep;
 
     use super::*;
@@ -360,6 +364,44 @@ mod tests {
         }
     }
 
+    fn fixture_session_service() -> Arc<SessionService> {
+        let tempdir = tempdir().unwrap();
+        let engine = tempdir.path().join("ade_engine-0.1.0-py3-none-any.whl");
+        let config = tempdir.path().join("ade_config-0.1.0-py3-none-any.whl");
+        std::fs::write(&engine, b"engine").unwrap();
+        std::fs::write(&config, b"config").unwrap();
+
+        let env = [
+            (
+                "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
+                "http://127.0.0.1:9".to_string(),
+            ),
+            (
+                "ADE_SESSION_SECRET".to_string(),
+                "test-session-secret".to_string(),
+            ),
+            (
+                "ADE_ENGINE_WHEEL_PATH".to_string(),
+                engine.display().to_string(),
+            ),
+            (
+                "ADE_CONFIG_TARGETS".to_string(),
+                serde_json::json!([
+                    {
+                        "workspaceId": "workspace-a",
+                        "configVersionId": "config-v1",
+                        "wheelPath": config.display().to_string(),
+                    }
+                ])
+                .to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        SessionService::from_env(&env).unwrap()
+    }
+
     #[tokio::test]
     async fn startup_fails_when_initial_probe_fails() {
         let database: Arc<dyn DatabaseProbe> =
@@ -368,7 +410,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
-            runtime: None,
+            session_service: fixture_session_service(),
             sql_connection_string: "unused".to_string(),
             stale_after_ms: 15_000,
             web_root: None,
@@ -395,7 +437,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
-            runtime: None,
+            session_service: fixture_session_service(),
             sql_connection_string: "unused".to_string(),
             stale_after_ms: 15_000,
             web_root: None,

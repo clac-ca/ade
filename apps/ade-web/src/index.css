@@ -171,6 +171,16 @@ body {
   color: #8f3c35;
 }
 
+.inline-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.inline-link:hover {
+  text-decoration: underline;
+}
+
 .not-found {
   display: grid;
   gap: 14px;

@@ -1,10 +1,6 @@
 import process from "node:process";
-import {
-  createLocalContainerSessionPoolManagementEndpoint,
-  createLocalContainerSessionPoolMcpEndpoint,
-  createLocalContainerSqlConnectionString,
-  localSessionPoolRuntimeSecret,
-} from "./dev-config";
+import { createLocalContainerSqlConnectionString } from "./dev-config";
+import { createContainerSessionPoolEnv } from "./session-pool-env";
 import type { Logger } from "./runtime";
 import { createMigrationRunArgs, createContainerRunArgs } from "./start";
 import {
@@ -21,68 +17,7 @@ import {
 } from "../local-deps";
 
 const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
-const azureRuntimeEnvNames = [
-  "ADE_RUNTIME_SESSION_SECRET",
-  "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT",
-  "ADE_SESSION_POOL_MCP_ENDPOINT",
-  "ADE_SESSION_POOL_RESOURCE_ID",
-];
-const runtimeSessionSecretName = "ADE_RUNTIME_SESSION_SECRET";
 const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
-
-function readOptionalTrimmedString(
-  env: NodeJS.ProcessEnv,
-  name: string,
-): string | undefined {
-  const value = env[name]?.trim();
-  return value === "" || value === undefined ? undefined : value;
-}
-
-function readRequiredTrimmedString(
-  env: NodeJS.ProcessEnv,
-  name: string,
-): string {
-  const value = readOptionalTrimmedString(env, name);
-  if (value === undefined) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
-function readContainerRuntimeEnv(): {
-  usesManagedLocalSessionPool: boolean;
-  values: Record<string, string>;
-} {
-  const azureRuntimeConfigured =
-    readOptionalTrimmedString(process.env, "ADE_SESSION_POOL_RESOURCE_ID") !==
-    undefined;
-
-  const values: Record<string, string> = {};
-  const runtimeSessionSecret =
-    readOptionalTrimmedString(process.env, runtimeSessionSecretName) ??
-    localSessionPoolRuntimeSecret;
-
-  if (!azureRuntimeConfigured) {
-    values[runtimeSessionSecretName] = runtimeSessionSecret;
-    values["ADE_SESSION_POOL_MANAGEMENT_ENDPOINT"] =
-      createLocalContainerSessionPoolManagementEndpoint();
-    values["ADE_SESSION_POOL_MCP_ENDPOINT"] =
-      createLocalContainerSessionPoolMcpEndpoint();
-    return {
-      usesManagedLocalSessionPool: true,
-      values,
-    };
-  }
-
-  for (const name of azureRuntimeEnvNames) {
-    values[name] = readRequiredTrimmedString(process.env, name);
-  }
-
-  return {
-    usesManagedLocalSessionPool: false,
-    values,
-  };
-}
 
 type StartedLocalRuntime = {
   appUrl: string;
@@ -90,7 +25,6 @@ type StartedLocalRuntime = {
   dumpLogs: () => Promise<string>;
   isAlive: () => boolean;
   stop: () => Promise<void>;
-  usesManagedLocalSql: boolean;
 };
 
 async function removeContainer(name: string): Promise<void> {
@@ -147,8 +81,8 @@ async function startLocalRuntime(options: {
   await ensureImageAvailable(options.image);
 
   const usesManagedLocalSql = options.sqlConnectionString === undefined;
-  const { usesManagedLocalSessionPool, values: runtimeEnv } =
-    readContainerRuntimeEnv();
+  const { usesManagedLocalSessionPool, values: sessionPoolEnv } =
+    createContainerSessionPoolEnv();
   const effectiveSqlConnectionString =
     options.sqlConnectionString ?? createLocalContainerSqlConnectionString();
 
@@ -179,13 +113,13 @@ async function startLocalRuntime(options: {
       dockerCommand,
       createContainerRunArgs({
         containerName: options.containerName,
-        envNames: Object.keys(runtimeEnv),
+        envNames: Object.keys(sessionPoolEnv),
         hostPort: options.hostPort,
         image: options.image,
       }),
       {
         env: {
-          ...runtimeEnv,
+          ...sessionPoolEnv,
           [sqlConnectionStringName]: effectiveSqlConnectionString,
         },
       },
@@ -226,7 +160,6 @@ async function startLocalRuntime(options: {
           }).catch(() => undefined);
         }
       },
-      usesManagedLocalSql,
     };
   } catch (error) {
     if (usesManagedLocalSql || usesManagedLocalSessionPool) {

@@ -1,0 +1,70 @@
+import fcntl
+import importlib.metadata
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+CONFIG = json.loads({{CONFIG_JSON}})
+SESSION_ROOT = Path("/mnt/data")
+INPUT_PATH = Path(CONFIG["inputPath"])
+RUNS_ROOT = Path(CONFIG["runsRoot"])
+INSTALL_LOCK_PATH = Path(CONFIG["installLockPath"])
+
+
+def ensure_package(package_name, expected_version, wheel_path, install_args):
+    try:
+        installed_version = importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        installed_version = None
+    if installed_version == expected_version:
+        return
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", *install_args, wheel_path],
+        check=True,
+    )
+
+
+INSTALL_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+with INSTALL_LOCK_PATH.open("w") as install_lock_file:
+    fcntl.flock(install_lock_file.fileno(), fcntl.LOCK_EX)
+    ensure_package(
+        CONFIG["enginePackageName"],
+        CONFIG["engineVersion"],
+        CONFIG["engineWheelPath"],
+        ["--force-reinstall"],
+    )
+    ensure_package(
+        CONFIG["configPackageName"],
+        CONFIG["configVersion"],
+        CONFIG["configWheelPath"],
+        ["--no-deps", "--force-reinstall"],
+    )
+
+from ade_engine import load_config, process
+
+RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+run_root = Path(tempfile.mkdtemp(prefix="run-", dir=str(RUNS_ROOT)))
+output_dir = run_root / "output"
+output_dir.mkdir(parents=True, exist_ok=True)
+
+config = load_config("ade_config", name="ade-config")
+result = process(config=config, input_path=INPUT_PATH, output_dir=output_dir)
+print(
+    CONFIG["sentinelPrefix"]
+    + json.dumps(
+        {
+            "outputPath": result.output_path.relative_to(SESSION_ROOT).as_posix(),
+            "validationIssues": [
+                {
+                    "rowIndex": issue.row_index,
+                    "field": issue.field,
+                    "message": issue.message,
+                }
+                for issue in result.validation_issues
+            ],
+        },
+        separators=(",", ":"),
+    )
+)

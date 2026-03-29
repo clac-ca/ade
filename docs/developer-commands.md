@@ -35,7 +35,7 @@ pnpm format
 pnpm format:check
 pnpm test
 pnpm test:unit
-pnpm test:runtime:local
+pnpm test:session:local
 pnpm test:scripts
 pnpm package:python
 pnpm clean
@@ -74,7 +74,7 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 
 - `pnpm dev` is host-based and does not read `.env`.
 - `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local SQL and the local session-pool emulator automatically.
-- `pnpm test:runtime:local` is the black-box smoke command for the local session-pool path.
+- `pnpm test:session:local` is the black-box smoke command for the local session-pool path.
 - ADE uses Azure session pools only when the Azure session-pool settings are explicitly configured; otherwise it falls back to the local emulator.
 - See [runtime-config.md](runtime-config.md) for the full connection string and hosted runtime rules.
 
