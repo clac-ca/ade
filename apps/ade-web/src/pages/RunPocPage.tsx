@@ -154,11 +154,11 @@ async function readErrorMessage(response: Response): Promise<string> {
     return (
       payload.message ??
       payload.error ??
-      `Request failed with ${response.status}.`
+      `Request failed with ${String(response.status)}.`
     );
   } catch {
     const text = await response.text();
-    return text || `Request failed with ${response.status}.`;
+    return text || `Request failed with ${String(response.status)}.`;
   }
 }
 
@@ -173,15 +173,13 @@ export function RunPocPage() {
     initialState.configVersionId,
   );
   const [runId, setRunId] = useState(initialState.runId);
-  const [lastSeenSeq, setLastSeenSeq] = useState<number | null>(
-    initialState.lastSeenSeq,
-  );
+  const [lastSeenSeq, setLastSeenSeq] = useState(initialState.lastSeenSeq);
   const [outputPath, setOutputPath] = useState<string | null>(null);
   const [status, setStatus] = useState<RunPocStatus>("idle");
   const [statusMessage, setStatusMessage] = useState(
     "Upload a file to start an async run.",
   );
-  const [logLines, setLogLines] = useState<string[]>([
+  const [logLines, setLogLines] = useState([
     "Temporary ADE run proof of concept.",
     "Uploads are durable. Use Resume to reattach to a live run stream.",
   ]);

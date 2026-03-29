@@ -6,7 +6,7 @@ fn embedded_migrations_use_small_ordered_versions() {
     let mut migrations = runner
         .get_migrations()
         .iter()
-        .map(|migration| (migration.version() as i32, migration.name().to_string()))
+        .map(|migration| (migration.version(), migration.name().to_string()))
         .collect::<Vec<_>>();
     migrations.sort_by_key(|(version, _)| *version);
 

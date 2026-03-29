@@ -161,6 +161,16 @@ struct AttemptFailure {
     retriable: bool,
 }
 
+struct RunAttemptContext<'a> {
+    attempt_session_guid: &'a mut Option<String>,
+    input_path: &'a str,
+    run: &'a mut StoredRun,
+    run_id: &'a str,
+    runtime: &'a SessionRuntimeArtifacts,
+    scope: &'a Scope,
+    timeout_in_seconds: Option<u64>,
+}
+
 #[derive(Clone)]
 struct ActiveRunState {
     broadcaster: broadcast::Sender<RunEvent>,
@@ -783,42 +793,36 @@ impl RunService {
             return Err(cancelled_failure());
         }
 
+        let context = RunAttemptContext {
+            attempt_session_guid: &mut attempt_session_guid,
+            input_path,
+            run: &mut run,
+            run_id,
+            runtime: &runtime,
+            scope,
+            timeout_in_seconds,
+        };
+
         if let Some(active) = active {
-            self.run_attempt_async(
-                scope,
-                run_id,
-                input_path,
-                timeout_in_seconds,
-                active,
-                &mut run,
-                &runtime,
-                &mut attempt_session_guid,
-            )
-            .await
+            self.run_attempt_async(context, active).await
         } else {
-            self.run_attempt_sync(
-                scope,
-                run_id,
-                input_path,
-                timeout_in_seconds,
-                &mut run,
-                &runtime,
-                &mut attempt_session_guid,
-            )
-            .await
+            self.run_attempt_sync(context).await
         }
     }
 
     async fn run_attempt_sync(
         &self,
-        scope: &Scope,
-        run_id: &str,
-        input_path: &str,
-        timeout_in_seconds: Option<u64>,
-        run: &mut StoredRun,
-        runtime: &SessionRuntimeArtifacts,
-        attempt_session_guid: &mut Option<String>,
+        context: RunAttemptContext<'_>,
     ) -> Result<AttemptSuccess, AttemptFailure> {
+        let RunAttemptContext {
+            attempt_session_guid,
+            input_path,
+            run,
+            run_id,
+            runtime,
+            scope,
+            timeout_in_seconds,
+        } = context;
         let bootstrap = render_bootstrap_code(&RunBootstrapConfig {
             bridge_url: None,
             config_package_name: runtime.config_package_name,
@@ -942,15 +946,18 @@ impl RunService {
 
     async fn run_attempt_async(
         &self,
-        scope: &Scope,
-        run_id: &str,
-        input_path: &str,
-        timeout_in_seconds: Option<u64>,
+        context: RunAttemptContext<'_>,
         active: &ActiveRunHandle,
-        run: &mut StoredRun,
-        runtime: &SessionRuntimeArtifacts,
-        attempt_session_guid: &mut Option<String>,
     ) -> Result<AttemptSuccess, AttemptFailure> {
+        let RunAttemptContext {
+            attempt_session_guid,
+            input_path,
+            run,
+            run_id,
+            runtime,
+            scope,
+            timeout_in_seconds,
+        } = context;
         let pending = self.bridge_manager.create();
         let bridge_url =
             self.build_bridge_url(&pending.bridge_id)
@@ -1004,18 +1011,15 @@ impl RunService {
                 retriable: true,
             })?;
 
-        let outcome = self
-            .consume_run_bridge(
-                run_id,
-                run,
-                active,
-                attempt_session_guid,
-                bridge_socket,
-                execution_task,
-            )
-            .await;
-
-        outcome
+        self.consume_run_bridge(
+            run_id,
+            run,
+            active,
+            attempt_session_guid,
+            bridge_socket,
+            execution_task,
+        )
+        .await
     }
 
     async fn consume_run_bridge(
@@ -1386,12 +1390,11 @@ impl RunService {
         run.attempt_count = attempt;
         run.input_path = input_path.to_string();
         run.phase = failure.phase;
-        run.status =
-            if matches!(failure.phase, None) && failure.error.to_string() == "Run cancelled." {
-                RunStatus::Cancelled
-            } else {
-                RunStatus::Failed
-            };
+        run.status = if failure.phase.is_none() && failure.error.to_string() == "Run cancelled." {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Failed
+        };
         run.error_message = Some(failure.error.to_string());
         self.run_store.save_run(&run).await?;
 
@@ -1563,19 +1566,17 @@ impl RunService {
         tokio::pin!(bridge_rx);
         let mut cancel_rx = active.cancel_rx.clone();
 
-        loop {
-            tokio::select! {
-                _ = cancel_rx.changed() => {
-                    self.bridge_manager.cancel(&pending.bridge_id);
-                    return Err(AppError::request("Run cancelled."));
-                }
-                result = &mut bridge_rx => {
-                    return result.map_err(|_| AppError::status(StatusCode::BAD_GATEWAY, "Run bridge did not connect."));
-                }
-                _ = &mut timeout => {
-                    self.bridge_manager.cancel(&pending.bridge_id);
-                    return Err(AppError::status(StatusCode::BAD_GATEWAY, "Timed out waiting for the run bridge to connect."));
-                }
+        tokio::select! {
+            _ = cancel_rx.changed() => {
+                self.bridge_manager.cancel(&pending.bridge_id);
+                Err(AppError::request("Run cancelled."))
+            }
+            result = &mut bridge_rx => {
+                result.map_err(|_| AppError::status(StatusCode::BAD_GATEWAY, "Run bridge did not connect."))
+            }
+            _ = &mut timeout => {
+                self.bridge_manager.cancel(&pending.bridge_id);
+                Err(AppError::status(StatusCode::BAD_GATEWAY, "Timed out waiting for the run bridge to connect."))
             }
         }
     }
