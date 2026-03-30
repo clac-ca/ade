@@ -1,11 +1,10 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
 use ade_api::{
+    api::{AppState, create_app},
     config::SERVICE_VERSION,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
-    router::{AppState, create_app},
-    run_store::InMemoryRunStore,
-    runs::RunService,
+    runs::{InMemoryRunStore, RunService},
     session::SessionService,
     terminal::TerminalService,
     unix_time_ms,
@@ -249,8 +248,7 @@ async fn openapi_route_serves_generated_spec() {
             .is_object()
     );
     assert!(
-        payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/files"]
-            .is_null()
+        payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/files"].is_null()
     );
     assert!(
         payload["paths"]["/api/workspaces/{workspaceId}/configs/{configVersionId}/executions"]

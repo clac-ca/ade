@@ -10,9 +10,9 @@ use axum::{
     routing::get,
 };
 
-use crate::{error::AppError, session::Scope, terminal::TerminalService};
+use crate::{error::AppError, scope::Scope, terminal::TerminalService};
 
-pub fn workspace_router() -> Router<crate::router::AppState> {
+pub fn router() -> Router<crate::api::AppState> {
     Router::new().route("/terminal", get(connect_terminal))
 }
 

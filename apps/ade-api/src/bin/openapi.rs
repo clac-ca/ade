@@ -1,4 +1,4 @@
-use ade_api::api_docs::ApiDoc;
+use ade_api::api::docs::ApiDoc;
 use utoipa::OpenApi;
 
 fn main() {

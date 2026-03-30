@@ -13,7 +13,7 @@ use time::{OffsetDateTime, format_description::FormatItem, macros::format_descri
 use crate::{
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
-    session::Scope,
+    scope::Scope,
 };
 
 mod blob;
@@ -346,7 +346,7 @@ mod tests {
         normalize_artifact_path, output_path_for_run, scope_root, upload_path_for_file,
         validate_input_path, verify_local_artifact_access,
     };
-    use crate::session::Scope;
+    use crate::scope::Scope;
 
     #[test]
     fn normalizes_relative_artifact_paths() {

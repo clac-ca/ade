@@ -1,4 +1,4 @@
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -6,6 +6,14 @@ use crate::{
     config::{SERVICE_NAME, SERVICE_VERSION},
     readiness::{ReadinessController, is_application_ready},
 };
+
+pub fn router() -> Router<crate::api::AppState> {
+    Router::new()
+        .route("/", get(api_root))
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/version", get(version))
+}
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ServiceStatusResponse {

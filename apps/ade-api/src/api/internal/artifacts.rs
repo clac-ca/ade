@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::{artifacts::local_artifact_token_header, error::AppError, runs::RunService};
 
-pub fn router() -> Router<crate::router::AppState> {
+pub fn router() -> Router<crate::api::AppState> {
     Router::new().route("/artifacts/{*path}", get(download).put(upload))
 }
 

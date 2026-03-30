@@ -1,25 +1,16 @@
-pub mod api_docs;
+pub mod api;
 pub mod artifacts;
 pub mod config;
 pub mod db;
 pub mod error;
 pub mod readiness;
-pub mod router;
-pub mod run_store;
 pub mod runs;
+pub mod scope;
 pub mod server;
 pub mod session;
 pub mod terminal;
 
-pub mod routes {
-    pub mod internal_artifacts;
-    pub mod internal_run_bridges;
-    pub mod internal_terminal_bridges;
-    pub mod runs;
-    pub mod system;
-    pub mod terminal;
-    pub mod uploads;
-}
+pub use api::{AppState, create_app};
 
 pub use server::{
     ServerInstance, ServerOptions, init_tracing, run_server_until_shutdown, unix_time_ms,

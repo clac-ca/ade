@@ -6,10 +6,9 @@ use std::{
 };
 
 use ade_api::{
+    api::{AppState, create_app},
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
-    router::{AppState, create_app},
-    run_store::InMemoryRunStore,
-    runs::RunService,
+    runs::{InMemoryRunStore, RunService},
     session::SessionService,
     terminal::TerminalService,
     unix_time_ms,
@@ -239,12 +238,7 @@ async fn stub_execute(
                     ))
                     .await;
 
-                request_artifact(
-                    &client,
-                    output_upload,
-                    Some(b"normalized-output".to_vec()),
-                )
-                .await;
+                request_artifact(&client, output_upload, Some(b"normalized-output".to_vec())).await;
                 {
                     let mut state = stub.state.lock().unwrap();
                     state
@@ -540,11 +534,7 @@ fn resolve_url(base_url: &str, url: &str) -> String {
         return url.to_string();
     }
 
-    Url::parse(base_url)
-        .unwrap()
-        .join(url)
-        .unwrap()
-        .to_string()
+    Url::parse(base_url).unwrap().join(url).unwrap().to_string()
 }
 
 async fn upload_input(
@@ -602,7 +592,14 @@ async fn start_run(client: &Client, base_url: &str, input_path: &str) -> reqwest
 async fn wait_for_terminal_status(client: &Client, url: &str, expected: &str) -> Value {
     let mut detail = Value::Null;
     for _ in 0..40 {
-        detail = client.get(url).send().await.unwrap().json::<Value>().await.unwrap();
+        detail = client
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
         if detail["status"] == expected {
             return detail;
         }
@@ -651,7 +648,11 @@ async fn uploads_route_returns_server_chosen_paths_and_direct_upload_instruction
     assert_eq!(payload["upload"]["method"], "PUT");
     assert_eq!(
         payload["upload"]["headers"]["x-ade-artifact-token"].as_str(),
-        Some(payload["upload"]["headers"]["x-ade-artifact-token"].as_str().unwrap())
+        Some(
+            payload["upload"]["headers"]["x-ade-artifact-token"]
+                .as_str()
+                .unwrap()
+        )
     );
     assert_eq!(
         payload["upload"]["headers"]["content-type"],
@@ -663,7 +664,12 @@ async fn uploads_route_returns_server_chosen_paths_and_direct_upload_instruction
             .unwrap()
             .contains("/api/internal/artifacts/workspaces/workspace-a/configs/config-v1/uploads/")
     );
-    assert!(payload["upload"]["expiresAt"].as_str().unwrap().contains('T'));
+    assert!(
+        payload["upload"]["expiresAt"]
+            .as_str()
+            .unwrap()
+            .contains('T')
+    );
 
     stub_handle.abort();
 }
@@ -717,11 +723,13 @@ async fn create_run_returns_accepted_metadata_and_persists_output_via_artifact_s
     );
     assert!(location.ends_with(&format!("/runs/{run_id}")));
 
-    let detail = wait_for_terminal_status(&client, &format!("{base_url}{location}"), "succeeded").await;
+    let detail =
+        wait_for_terminal_status(&client, &format!("{base_url}{location}"), "succeeded").await;
     let output_path = detail["outputPath"].as_str().unwrap();
-    assert_eq!(output_path, format!(
-        "workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx"
-    ));
+    assert_eq!(
+        output_path,
+        format!("workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx")
+    );
     assert_eq!(detail["validationIssues"], json!([]));
 
     let output_bytes = std::fs::read(artifact_root(&engine).join(output_path)).unwrap();
@@ -781,7 +789,8 @@ async fn run_events_stream_over_sse_and_resume_from_last_event_id() {
         b"name,email\nalice,alice@example.com\n".to_vec(),
     )
     .await;
-    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap()).await
+    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap())
+        .await
         .json::<Value>()
         .await
         .unwrap();
@@ -806,17 +815,13 @@ async fn run_events_stream_over_sse_and_resume_from_last_event_id() {
     assert_eq!(events.first().unwrap().event, "run.created");
     assert_eq!(events.last().unwrap().event, "run.completed");
     assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
-    assert!(
-        events.iter().any(|event| event.event == "run.log"
-            && serde_json::from_str::<Value>(&event.data).unwrap()["message"] == "Loaded 12 rows")
-    );
-    assert!(
-        events.iter().any(|event| event.event == "run.result"
-            && serde_json::from_str::<Value>(&event.data).unwrap()["outputPath"]
-                == format!(
-                    "workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx"
-                ))
-    );
+    assert!(events.iter().any(|event| event.event == "run.log"
+        && serde_json::from_str::<Value>(&event.data).unwrap()["message"] == "Loaded 12 rows"));
+    assert!(events.iter().any(|event| event.event == "run.result"
+        && serde_json::from_str::<Value>(&event.data).unwrap()["outputPath"]
+            == format!(
+                "workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx"
+            )));
 
     let resume_from = events[2].id;
     let resumed_text = client
@@ -872,7 +877,8 @@ async fn cancelling_a_run_marks_it_cancelled_and_emits_final_sse_event() {
         b"name,email\nalice,alice@example.com\n".to_vec(),
     )
     .await;
-    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap()).await
+    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap())
+        .await
         .json::<Value>()
         .await
         .unwrap();

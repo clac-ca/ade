@@ -283,3 +283,140 @@ Result:
 
 - The final diff is narrower and easier to audit.
 - Reviewers can focus on the architectural simplifications instead of formatter movement.
+
+## Area 8: JSON Extractor and Error Logging Boilerplate
+
+Research:
+
+- Axum's standard JSON handling is the plain `Json<T>` extractor, and extractor rejections already expose readable error text:
+  - <https://docs.rs/axum/latest/axum/struct.Json.html>
+- `tracing` events already support structured error fields directly, so manual error-chain flattening is usually unnecessary:
+  - <https://docs.rs/tracing/latest/tracing/macro.error.html>
+
+Comparison:
+
+- `apps/ade-api/src/api/public/runs.rs` and `apps/ade-api/src/api/public/uploads.rs` each had the same `parse_json(...)` helper.
+- `apps/ade-api/src/api/public/uploads.rs` also had a manual `error_sources(...)` helper that walked `Error::source()` and rendered a custom string.
+
+Gap:
+
+- The helpers did not add policy.
+- They made simple request decoding and logging look more custom than it is.
+
+Implemented:
+
+- Inlined the JSON rejection mapping directly at the handler call site in both route modules.
+- Removed `error_sources(...)` and kept the log entry to the standard structured fields:
+  - `%error`
+  - `?error`
+
+Examples:
+
+- Before: a reader had to jump to a helper to learn that invalid JSON becomes `AppError::request(error.body_text())`.
+- After: the handler shows the exact mapping where the request enters.
+
+Result:
+
+- Public handlers read more like normal Axum handlers.
+- Upload error logging now uses the standard `tracing` shape instead of a custom source-string formatter.
+
+## Area 9: Session Path Splitting and Pass-Through Layers
+
+Research:
+
+- Rust's standard string API already provides `str::rsplit_once(...)` for this exact split-at-last-delimiter case:
+  - <https://doc.rust-lang.org/std/primitive.str.html#method.rsplit_once>
+- Basic readability guidance still applies:
+  - remove pass-through helpers that only rename a call
+  - keep the richer return type at the layer that actually needs it
+
+Comparison:
+
+- `apps/ade-api/src/session/client.rs` used `Cow<'_, str>` in `split_session_file_path(...)` even though it always returned borrowed slices.
+- `apps/ade-api/src/session/service.rs` had a private `execute_python(...)` helper that only forwarded to the client.
+- `apps/ade-api/src/session/client.rs` and `apps/ade-api/src/session/service.rs` also carried `*_detailed` names at points where that was the only real operation.
+
+Gap:
+
+- These layers added names and types to resolve without adding behavior.
+- The `Cow` return type especially suggested ownership complexity that was not real.
+
+Implemented:
+
+- Changed `split_session_file_path(...)` to return `(Option<&str>, &str)`.
+- Removed the service-level `execute_python(...)` pass-through.
+- Renamed the client methods to the plain operation names:
+  - `execute_detailed(...)` -> `execute(...)`
+  - `upload_file_detailed(...)` -> `upload_file(...)`
+- Renamed the service upload method to the plain operation name:
+  - `upload_session_file_detailed(...)` -> `upload_session_file(...)`
+- Mapped `.value` at the call site that actually wants only the execution payload.
+
+Examples:
+
+- Before: the session upload path split implied borrowed-or-owned behavior, but the function never owned anything.
+- After: it plainly returns borrowed slices.
+
+Result:
+
+- The session client/service stack has fewer layers and less invented type machinery.
+- File-path handling now reads like ordinary Rust string code.
+
+## Area 10: Consistent Access-Grant Maps
+
+Research:
+
+- Rust's `BTreeMap` is the standard ordered map and iterates in key order:
+  - <https://doc.rust-lang.org/std/collections/struct.BTreeMap.html>
+
+Comparison:
+
+- `ArtifactAccessGrant` already stored headers as `BTreeMap<String, String>`.
+- `UploadInstruction` and `BootstrapArtifactAccess` converted those same headers into `HashMap<String, String>`.
+- That forced `into_iter().collect()` churn in the run service and bootstrap code for no behavioral gain.
+
+Gap:
+
+- The same logical value changed map types across layers even though nothing needed hash-map semantics.
+- That made the code noisier and the serialized output less obviously deterministic.
+
+Implemented:
+
+- Changed `UploadInstruction.headers` and `BootstrapArtifactAccess.headers` to `BTreeMap<String, String>`.
+- Removed the now-pointless map conversions when building upload instructions and bootstrap config.
+
+Examples:
+
+- Before: the code converted a sorted header map into an unordered map and then immediately serialized it.
+- After: the same map flows straight through.
+
+Result:
+
+- Access-grant data now keeps one representation end to end.
+- The code is shorter and easier to follow because it no longer changes collection type without reason.
+
+## Area 11: One-Use Response Mapping Helpers
+
+Research:
+
+- The simplest Rust code is usually direct construction at the call site when there is no reused policy:
+  - keep helpers only when they hide real complexity or enforce one rule in multiple places
+
+Comparison:
+
+- `apps/ade-api/src/runs/service.rs` had a private `upload_instruction(...)` helper used only once to map an `ArtifactAccessGrant` into `UploadInstruction`.
+
+Gap:
+
+- The helper introduced another jump target without removing any real complexity.
+
+Implemented:
+
+- Inlined the `UploadInstruction` construction directly into `create_upload(...)`.
+
+Result:
+
+- The upload flow now reads straight through from:
+  - choose server-side file path
+  - mint access grant
+  - return API response

@@ -17,10 +17,10 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
+    api::{AppState, create_app},
     db::{Database, DatabaseProbe},
     error::AppError,
     readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
-    router::{AppState, create_app},
     runs::RunService,
     session::SessionService,
     terminal::TerminalService,
@@ -277,8 +277,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::DEFAULT_READINESS_STALE_AFTER_MS, run_store::InMemoryRunStore, runs::RunService,
-        session::SessionService, terminal::TerminalService,
+        config::DEFAULT_READINESS_STALE_AFTER_MS,
+        runs::{InMemoryRunStore, RunService},
+        session::SessionService,
+        terminal::TerminalService,
     };
 
     #[derive(Debug, Default)]

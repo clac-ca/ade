@@ -17,13 +17,9 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
-    api_docs::ApiDoc,
+    api::{docs::ApiDoc, internal, public},
     error::AppError,
     readiness::ReadinessController,
-    routes::{
-        internal_artifacts, internal_run_bridges, internal_terminal_bridges, runs, system,
-        terminal, uploads,
-    },
     runs::RunService,
     session::SessionService,
     terminal::TerminalService,
@@ -64,27 +60,16 @@ impl FromRef<AppState> for Arc<TerminalService> {
 
 pub fn create_app(state: AppState) -> Router {
     let openapi = ApiDoc::openapi();
-    let api_router = Router::new()
-        .route("/", get(system::api_root))
-        .route("/healthz", get(system::healthz))
-        .route("/readyz", get(system::readyz))
-        .route("/version", get(system::version))
-        .nest(
-            "/internal",
-            internal_terminal_bridges::router()
-                .merge(internal_run_bridges::router())
-                .merge(internal_artifacts::router()),
-        )
+    let api_router = public::system::router()
+        .nest("/internal", internal::router())
         .nest(
             "/workspaces/{workspaceId}/configs/{configVersionId}",
-            uploads::workspace_router()
-                .merge(runs::workspace_router())
-                .merge(terminal::workspace_router()),
+            public::scoped_router(),
         )
         .fallback(api_not_found);
 
     Router::new()
-        .route("/api/", get(system::api_root))
+        .route("/api/", get(public::system::api_root))
         .nest("/api", api_router)
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi))
         .fallback(spa_or_not_found)

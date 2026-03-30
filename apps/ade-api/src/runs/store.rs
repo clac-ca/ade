@@ -10,11 +10,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::{
-    db::Database,
-    error::AppError,
-    session::{RunValidationIssue, Scope},
-};
+use crate::{db::Database, error::AppError, scope::Scope};
+
+use super::RunValidationIssue;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
