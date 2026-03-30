@@ -522,8 +522,10 @@ impl RunService {
 
         let pending = self.bridge_manager.create();
         let bridge_url = self.build_bridge_url(&pending.bridge_id);
-        let access_expires_at =
-            run_access_expiry(attempt.timeout_in_seconds.unwrap_or(RUN_ACCESS_TTL_SECONDS));
+        let access_expires_at = time::OffsetDateTime::now_utc()
+            + time::Duration::seconds(
+                attempt.timeout_in_seconds.unwrap_or(RUN_ACCESS_TTL_SECONDS) as i64,
+            );
         let input_download = self
             .artifact_store
             .create_download_access(attempt.input_path, access_expires_at)

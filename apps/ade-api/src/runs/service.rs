@@ -245,7 +245,8 @@ impl RunService {
     ) -> Result<CreateUploadResponse, AppError> {
         let upload_id = upload_id();
         let file_path = upload_path_for_file(scope, &upload_id, &request.filename);
-        let expires_at = run_access_expiry(RUN_ACCESS_TTL_SECONDS);
+        let expires_at = time::OffsetDateTime::now_utc()
+            + time::Duration::seconds(RUN_ACCESS_TTL_SECONDS as i64);
         let upload = self
             .artifact_store
             .create_browser_upload_access(&file_path, request.content_type.as_deref(), expires_at)
@@ -391,8 +392,4 @@ impl RunService {
         }
         Ok(event)
     }
-}
-
-fn run_access_expiry(ttl_seconds: u64) -> time::OffsetDateTime {
-    time::OffsetDateTime::now_utc() + time::Duration::seconds(ttl_seconds as i64)
 }

@@ -234,7 +234,10 @@ impl TerminalService {
                 }
                 result = &mut *execution_task => {
                     self.manager.cancel(&pending.channel_id);
-                    let message = execution_failure_message(join_execution_result(result));
+                    let message = match join_execution_result(result) {
+                        Ok(execution) => execution_failure_message(&execution),
+                        Err(error) => error.to_string(),
+                    };
                     let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(message)).await;
                     let _ = browser_socket.send(Message::Close(None)).await;
                     return TerminalPhase::Finished;
@@ -342,7 +345,10 @@ impl TerminalService {
                     }
                 }
                 result = &mut *execution_task => {
-                    let message = execution_failure_message(join_execution_result(result));
+                    let message = match join_execution_result(result) {
+                        Ok(execution) => execution_failure_message(&execution),
+                        Err(error) => error.to_string(),
+                    };
                     let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(message)).await;
                     let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
                     let _ = send_close_message(bridge_socket).await;
@@ -434,12 +440,28 @@ impl TerminalService {
                     }
                 }
                 result = &mut execution_task => {
-                    if let Some(message) = execution_error_message(&join_execution_result(result)) {
-                        let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::error(message)).await;
-                        let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::exit(None)).await;
-                        let _ = send_close_message(&mut bridge_socket).await;
-                        phase = TerminalPhase::Finished;
-                        break;
+                    match join_execution_result(result) {
+                        Ok(execution) if matches!(execution.status.as_str(), "Success" | "Succeeded" | "0") => {}
+                        Ok(execution) => {
+                            let _ = send_terminal_event(
+                                &mut browser_socket,
+                                TerminalServerMessage::error(execution_failure_message(&execution)),
+                            ).await;
+                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::exit(None)).await;
+                            let _ = send_close_message(&mut bridge_socket).await;
+                            phase = TerminalPhase::Finished;
+                            break;
+                        }
+                        Err(error) => {
+                            let _ = send_terminal_event(
+                                &mut browser_socket,
+                                TerminalServerMessage::error(error.to_string()),
+                            ).await;
+                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::exit(None)).await;
+                            let _ = send_close_message(&mut bridge_socket).await;
+                            phase = TerminalPhase::Finished;
+                            break;
+                        }
                     }
                 }
                 _ = &mut session_timeout => {
@@ -552,30 +574,14 @@ fn join_execution_result(
     }
 }
 
-fn execution_error_message(result: &Result<PythonExecution, AppError>) -> Option<String> {
-    match result {
-        Ok(execution) if matches!(execution.status.as_str(), "Success" | "Succeeded" | "0") => None,
-        Ok(execution) => Some(execution_failure_message(Ok(execution.clone()))),
-        Err(error) => Some(error.to_string()),
+fn execution_failure_message(execution: &PythonExecution) -> String {
+    if !execution.stderr.trim().is_empty() {
+        return execution.stderr.trim().to_string();
     }
-}
-
-fn execution_failure_message(result: Result<PythonExecution, AppError>) -> String {
-    match result {
-        Ok(execution) => {
-            if !execution.stderr.trim().is_empty() {
-                return execution.stderr.trim().to_string();
-            }
-            if !execution.stdout.trim().is_empty() {
-                return execution.stdout.trim().to_string();
-            }
-            format!(
-                "Terminal execution failed with status {}.",
-                execution.status
-            )
-        }
-        Err(error) => error.to_string(),
+    if !execution.stdout.trim().is_empty() {
+        return execution.stdout.trim().to_string();
     }
+    format!("Terminal execution failed with status {}.", execution.status)
 }
 
 #[cfg(test)]

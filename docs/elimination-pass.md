@@ -114,3 +114,27 @@ Validation:
 Result:
 - Fewer jumps between tiny helpers.
 - The remaining helpers in these files now mostly correspond to real behavior, not simple forwarding.
+
+### Section 6: Remove more one-use helper functions
+
+Issue:
+- `session/service.rs` still had `config_for(...)` and `session_file_path(...)`, both only used from `runtime_artifacts(...)`.
+- `runs/service.rs` still had `run_access_expiry(...)`, a one-line helper used in two nearby places.
+- `terminal/service.rs` still had `execution_error_message(...)`, which was only used once and mainly wrapped another helper.
+
+Standard approach:
+- Keep a helper only if it hides reusable logic or a real policy.
+- If a helper only forwards one expression and the call site stays readable without it, inline it.
+
+Change:
+- Inlined the config lookup and session root paths directly into `runtime_artifacts(...)`.
+- Removed `run_access_expiry(...)` and computed the timestamp at the two call sites.
+- Removed `execution_error_message(...)`.
+- Simplified `execution_failure_message(...)` to work directly on `&PythonExecution`, then handled the success/error branch inline where the join result is consumed.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- Fewer tiny helpers in the run, session, and terminal paths.
+- The remaining helpers now correspond more closely to real state transitions or reusable operations.

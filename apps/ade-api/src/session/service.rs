@@ -78,7 +78,12 @@ impl SessionService {
         &self,
         scope: &Scope,
     ) -> Result<SessionRuntimeArtifacts, AppError> {
-        let config = self.config_for(scope)?;
+        let config = self.config_targets.get(scope).ok_or_else(|| {
+            AppError::not_found(format!(
+                "Config version '{}' for workspace '{}' is not configured.",
+                scope.config_version_id, scope.workspace_id
+            ))
+        })?;
         Ok(SessionRuntimeArtifacts {
             config_filename: config.filename.clone(),
             config_package_name: CONFIG_PACKAGE_NAME,
@@ -88,8 +93,8 @@ impl SessionService {
             engine_package_name: ENGINE_PACKAGE_NAME,
             engine_version: self.engine.version.clone(),
             engine_wheel_bytes: self.engine.bytes.clone(),
-            install_lock_path: session_file_path(INSTALL_LOCK_SESSION_FILENAME),
-            runs_root: session_file_path(RUNS_ROOT),
+            install_lock_path: format!("{SESSION_ROOT}/{INSTALL_LOCK_SESSION_FILENAME}"),
+            runs_root: format!("{SESSION_ROOT}/{RUNS_ROOT}"),
         })
     }
 
@@ -119,15 +124,6 @@ impl SessionService {
         self.client
             .execute(&self.session_identifier(scope), code, timeout_in_seconds)
             .await
-    }
-
-    fn config_for(&self, scope: &Scope) -> Result<&PackageWheel, AppError> {
-        self.config_targets.get(scope).ok_or_else(|| {
-            AppError::not_found(format!(
-                "Config version '{}' for workspace '{}' is not configured.",
-                scope.config_version_id, scope.workspace_id
-            ))
-        })
     }
 
     fn session_identifier(&self, scope: &Scope) -> String {
@@ -179,10 +175,6 @@ fn public_session_path(path: &str) -> Result<String, AppError> {
     }
 
     Ok(normalized)
-}
-
-fn session_file_path(relative_path: &str) -> String {
-    format!("{SESSION_ROOT}/{}", relative_path.trim_start_matches('/'))
 }
 
 fn resolve_config_targets(env: &EnvBag) -> Result<HashMap<Scope, PackageWheel>, AppError> {
