@@ -102,17 +102,12 @@ jobs:
           echo "release_title=ADE Platform ${release_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Restore Rust cache
-        id: rust_cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-            ~/.cargo/git/db
-            apps/ade-api/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'apps/ade-api/Cargo.toml', 'apps/ade-api/Cargo.lock') }}
-          restore-keys: |
-            rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          shared-key: ade-platform-rust
+          workspaces: |
+            apps/ade-api -> target
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -129,17 +124,6 @@ jobs:
       - name: Run unit tests
         run: pnpm test:unit
 
-      - name: Save Rust cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rust_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-            ~/.cargo/git/db
-            apps/ade-api/target
-          key: ${{ steps.rust_cache.outputs.cache-primary-key }}
-
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push'
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
@@ -154,10 +138,11 @@ jobs:
           az bicep build-params --file infra/environments/main.prod.bicepparam --stdout >/dev/null
 
       - name: Set up Docker Buildx
+        if: github.event_name == 'push'
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Restore BuildKit Cargo cache
-        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        if: github.event_name == 'push'
         id: buildkit_cargo_cache
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -165,13 +150,12 @@ jobs:
             ${{ runner.temp }}/buildkit-cargo-cache/ade-api-target
             ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git
             ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-registry
-          key: ${{ github.event_name == 'push' && format('buildkit-cargo-main-{0}-{1}', runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'apps/ade-api/Cargo.lock', 'apps/ade-api/Cargo.toml')) || format('buildkit-cargo-pr-{0}-{1}-{2}', github.event.pull_request.number, runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'apps/ade-api/Cargo.lock', 'apps/ade-api/Cargo.toml')) }}
+          key: buildkit-cargo-main-${{ runner.os }}-${{ hashFiles('Dockerfile', 'rust-toolchain.toml', 'apps/ade-api/Cargo.lock', 'apps/ade-api/Cargo.toml') }}
           restore-keys: |
-            ${{ github.event_name == 'pull_request' && format('buildkit-cargo-pr-{0}-{1}-', github.event.pull_request.number, runner.os) || '' }}
             buildkit-cargo-main-${{ runner.os }}-
 
       - name: Restore BuildKit Cargo cache mounts
-        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        if: github.event_name == 'push'
         uses: reproducible-containers/buildkit-cache-dance@5de31fc1534ed8789e63d41ea933c5df9944a261 # v3.1.0
         with:
           cache-map: |
@@ -190,19 +174,6 @@ jobs:
               }
             }
           skip-extraction: ${{ steps.buildkit_cargo_cache.outputs.cache-hit == 'true' }}
-
-      - name: Build release candidate image (PR same-repo)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
-        with:
-          build-args: |
-            SERVICE_VERSION=${{ steps.version.outputs.release_version }}
-          cache-from: |
-            type=gha,scope=ade-platform-release-candidate-pr-${{ github.event.pull_request.number }}
-            type=gha,scope=ade-platform-release-candidate-main
-          cache-to: type=gha,scope=ade-platform-release-candidate-pr-${{ github.event.pull_request.number }},mode=max
-          context: .
-          file: ./Dockerfile
 
       - name: Build release candidate image (push)
         if: github.event_name == 'push'
