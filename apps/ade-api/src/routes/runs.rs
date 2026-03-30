@@ -3,11 +3,7 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use async_stream::stream;
 use axum::{
     Json, Router,
-    extract::{
-        Path, Query, State,
-        rejection::JsonRejection,
-        ws::{WebSocketUpgrade, rejection::WebSocketUpgradeRejection},
-    },
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response, sse::Event, sse::KeepAlive, sse::Sse},
     routing::{get, post},
@@ -29,10 +25,6 @@ pub fn workspace_router() -> Router<crate::router::AppState> {
         .route("/runs/{runId}/cancel", post(cancel_run))
 }
 
-pub fn internal_router() -> Router<crate::router::AppState> {
-    Router::new().route("/run-bridges/{bridgeId}", get(connect_internal_bridge))
-}
-
 #[utoipa::path(
     post,
     path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs",
@@ -51,7 +43,9 @@ async fn create_run(
     Path(scope): Path<Scope>,
     request: Result<Json<CreateRunRequest>, JsonRejection>,
 ) -> Result<Response, AppError> {
-    let response = run_service.create_run(scope.clone(), parse_json(request)?).await?;
+    let response = run_service
+        .create_run(scope.clone(), parse_json(request)?)
+        .await?;
     let location = format!(
         "/api/workspaces/{}/configs/{}/runs/{}",
         scope.workspace_id, scope.config_version_id, response.run_id
@@ -60,10 +54,7 @@ async fn create_run(
     http_response.headers_mut().insert(
         header::LOCATION,
         HeaderValue::from_str(&location).map_err(|error| {
-            AppError::internal_with_source(
-                "Failed to encode the async run location header.",
-                error,
-            )
+            AppError::internal_with_source("Failed to encode the async run location header.", error)
         })?,
     );
     Ok(http_response)
@@ -183,10 +174,9 @@ async fn stream_run_events(
                 .text("keep-alive"),
         )
         .into_response();
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-cache"),
-    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     Ok(response)
 }
 
@@ -210,33 +200,6 @@ async fn cancel_run(
 ) -> Result<StatusCode, AppError> {
     run_service.cancel_run(&path.scope(), &path.run_id).await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-async fn connect_internal_bridge(
-    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
-    State(run_service): State<Arc<RunService>>,
-    Path(path): Path<BridgePath>,
-    Query(query): Query<BridgeQuery>,
-) -> Result<Response, AppError> {
-    let ws = ws.map_err(map_websocket_rejection)?;
-    let bridge_tx = run_service.claim_bridge(&path.bridge_id, &query.token)?;
-
-    Ok(ws
-        .max_message_size(1024 * 1024)
-        .on_upgrade(move |socket| async move {
-            run_service.attach_bridge_socket(socket, bridge_tx).await;
-        }))
-}
-
-#[derive(Deserialize)]
-struct BridgePath {
-    #[serde(rename = "bridgeId")]
-    bridge_id: String,
-}
-
-#[derive(Deserialize)]
-struct BridgeQuery {
-    token: String,
 }
 
 #[derive(Deserialize)]
@@ -263,17 +226,16 @@ struct RunEventsQuery {
     after: Option<i64>,
 }
 
-fn map_websocket_rejection(error: WebSocketUpgradeRejection) -> AppError {
-    AppError::request(error.to_string())
-}
-
 fn parse_json<T>(request: Result<Json<T>, JsonRejection>) -> Result<T, AppError> {
     request
         .map(|Json(value)| value)
         .map_err(|error| AppError::request(error.body_text()))
 }
 
-fn resolve_after_seq(after_query: Option<i64>, headers: &HeaderMap) -> Result<Option<i64>, AppError> {
+fn resolve_after_seq(
+    after_query: Option<i64>,
+    headers: &HeaderMap,
+) -> Result<Option<i64>, AppError> {
     if let Some(after_query) = after_query {
         return Ok(Some(after_query));
     }
@@ -291,8 +253,13 @@ fn resolve_after_seq(after_query: Option<i64>, headers: &HeaderMap) -> Result<Op
 }
 
 fn sse_event(run_id: &str, event: &RunEvent) -> Event {
-    let (event_name, id, data) = RunService::map_public_event(run_id, event)
-        .unwrap_or_else(|_| ("run.error", String::new(), "{\"message\":\"Failed to encode a run event.\"}".to_string()));
+    let (event_name, id, data) = RunService::map_public_event(run_id, event).unwrap_or_else(|_| {
+        (
+            "run.error",
+            String::new(),
+            "{\"message\":\"Failed to encode a run event.\"}".to_string(),
+        )
+    });
     let event = Event::default().event(event_name).data(data);
     if id.is_empty() {
         return event;

@@ -20,7 +20,10 @@ use crate::{
     api_docs::ApiDoc,
     error::AppError,
     readiness::ReadinessController,
-    routes::{runs, system, terminal, uploads},
+    routes::{
+        internal_artifacts, internal_run_bridges, internal_terminal_bridges, runs, system,
+        terminal, uploads,
+    },
     runs::RunService,
     session::SessionService,
     terminal::TerminalService,
@@ -68,9 +71,9 @@ pub fn create_app(state: AppState) -> Router {
         .route("/version", get(system::version))
         .nest(
             "/internal",
-            terminal::internal_router()
-                .merge(runs::internal_router())
-                .merge(uploads::internal_router()),
+            internal_terminal_bridges::router()
+                .merge(internal_run_bridges::router())
+                .merge(internal_artifacts::router()),
         )
         .nest(
             "/workspaces/{workspaceId}/configs/{configVersionId}",
@@ -90,7 +93,7 @@ pub fn create_app(state: AppState) -> Router {
 }
 
 async fn api_not_found(original_uri: OriginalUri, request: AxumRequest) -> AppError {
-    not_found_for_path(&request, original_uri.0.path())
+    not_found_for_method_path(request.method(), original_uri.0.path())
 }
 
 async fn spa_or_not_found(
@@ -166,8 +169,4 @@ fn has_extension(path: &str) -> bool {
 
 fn not_found_for_method_path(method: &Method, request_path: &str) -> AppError {
     AppError::not_found(format!("Route {method}:{request_path} not found"))
-}
-
-fn not_found_for_path(request: &AxumRequest, request_path: &str) -> AppError {
-    not_found_for_method_path(request.method(), request_path)
 }

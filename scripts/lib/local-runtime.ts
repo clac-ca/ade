@@ -85,26 +85,22 @@ async function startLocalRuntime(options: {
   await ensureImageAvailable(options.image);
 
   const usesManagedLocalSql = options.sqlConnectionString === undefined;
-  const { usesManagedLocalBlobStorage, values: blobEnv } = createContainerBlobEnv(
-    options.hostPort,
-  );
+  const { usesManagedLocalBlobStorage, values: blobEnv } =
+    createContainerBlobEnv(options.hostPort);
   const { usesManagedLocalSessionPool, values: sessionPoolEnv } =
     createContainerSessionPoolEnv(process.env, {
       appUrl: createLocalContainerAppUrl(options.hostPort),
     });
   const effectiveSqlConnectionString =
     options.sqlConnectionString ?? createLocalContainerSqlConnectionString();
+  const managedDependencies = [
+    ...(usesManagedLocalBlobStorage ? ["Blob Storage"] : []),
+    ...(usesManagedLocalSql ? ["SQL"] : []),
+    ...(usesManagedLocalSessionPool ? ["session pool"] : []),
+  ];
+  const usesManagedLocalDependencies = managedDependencies.length > 0;
 
-  if (
-    usesManagedLocalSql ||
-    usesManagedLocalSessionPool ||
-    usesManagedLocalBlobStorage
-  ) {
-    const managedDependencies = [
-      ...(usesManagedLocalBlobStorage ? ["Blob Storage"] : []),
-      ...(usesManagedLocalSql ? ["SQL"] : []),
-      ...(usesManagedLocalSessionPool ? ["session pool"] : []),
-    ];
+  if (usesManagedLocalDependencies) {
     options.logger?.info(
       `Starting managed local ${managedDependencies.join(", ")}.`,
     );
@@ -154,11 +150,7 @@ async function startLocalRuntime(options: {
           sections.push(appLogs);
         }
 
-        if (
-          usesManagedLocalSql ||
-          usesManagedLocalSessionPool ||
-          usesManagedLocalBlobStorage
-        ) {
+        if (usesManagedLocalDependencies) {
           const dependencyLogs = await readLocalDependencyLogs().catch(
             () => "",
           );
@@ -175,11 +167,7 @@ async function startLocalRuntime(options: {
       stop: async () => {
         await removeContainer(options.containerName);
 
-        if (
-          usesManagedLocalSql ||
-          usesManagedLocalSessionPool ||
-          usesManagedLocalBlobStorage
-        ) {
+        if (usesManagedLocalDependencies) {
           await downLocalDependencies({
             stdio: "ignore",
           }).catch(() => undefined);
@@ -187,11 +175,7 @@ async function startLocalRuntime(options: {
       },
     };
   } catch (error) {
-    if (
-      usesManagedLocalSql ||
-      usesManagedLocalSessionPool ||
-      usesManagedLocalBlobStorage
-    ) {
+    if (usesManagedLocalDependencies) {
       await downLocalDependencies({
         stdio: "ignore",
       }).catch(() => undefined);

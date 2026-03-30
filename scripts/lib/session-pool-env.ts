@@ -3,7 +3,6 @@ import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
-  createLocalContainerAppUrl,
   createLocalContainerSessionPoolManagementEndpoint,
   createLocalSessionPoolManagementEndpoint,
   localContainerAppUrl,
@@ -57,6 +56,22 @@ function createConfigTargetsValue(configWheelPath: string): string {
   ]);
 }
 
+function createSessionPoolValues(options: {
+  appUrl: string;
+  configTargets: string;
+  engineWheelPath: string;
+  managementEndpoint: string;
+  sessionSecret: string;
+}): Record<string, string> {
+  return {
+    [appUrlEnvName]: options.appUrl,
+    [configTargetsEnvName]: options.configTargets,
+    [engineWheelEnvName]: options.engineWheelPath,
+    [managementEndpointEnvName]: options.managementEndpoint,
+    [sessionSecretEnvName]: options.sessionSecret,
+  };
+}
+
 function createHostSessionPoolEnv(
   options: {
     appUrl?: string;
@@ -71,13 +86,13 @@ function createHostSessionPoolEnv(
     "ade_engine-",
   );
 
-  return {
-    [appUrlEnvName]: options.appUrl ?? localContainerAppUrl,
-    [configTargetsEnvName]: createConfigTargetsValue(configWheelPath),
-    [sessionSecretEnvName]: localSessionPoolSecret,
-    [managementEndpointEnvName]: createLocalSessionPoolManagementEndpoint(),
-    [engineWheelEnvName]: engineWheelPath,
-  };
+  return createSessionPoolValues({
+    appUrl: options.appUrl ?? localContainerAppUrl,
+    configTargets: createConfigTargetsValue(configWheelPath),
+    engineWheelPath,
+    managementEndpoint: createLocalSessionPoolManagementEndpoint(),
+    sessionSecret: localSessionPoolSecret,
+  });
 }
 
 function createContainerSessionPoolEnv(
@@ -89,11 +104,13 @@ function createContainerSessionPoolEnv(
   usesManagedLocalSessionPool: boolean;
   values: Record<string, string>;
 } {
-  const values: Record<string, string> = {
-    [engineWheelEnvName]:
-      readOptionalTrimmedString(env, engineWheelEnvName) ??
-      "/app/python/ade_engine.whl",
-  };
+  const engineWheelPath =
+    readOptionalTrimmedString(env, engineWheelEnvName) ??
+    "/app/python/ade_engine.whl";
+  const appUrl =
+    readOptionalTrimmedString(env, appUrlEnvName) ??
+    options.appUrl ??
+    localContainerAppUrl;
 
   const configuredManagementEndpoint = readOptionalTrimmedString(
     env,
@@ -102,32 +119,26 @@ function createContainerSessionPoolEnv(
   if (configuredManagementEndpoint === undefined) {
     return {
       usesManagedLocalSessionPool: true,
-      values: {
-        ...values,
-        [appUrlEnvName]: options.appUrl ?? localContainerAppUrl,
-        [configTargetsEnvName]: createConfigTargetsValue(
-          "/app/python/ade_config.whl",
-        ),
-        [sessionSecretEnvName]: localSessionPoolSecret,
-        [managementEndpointEnvName]:
-          createLocalContainerSessionPoolManagementEndpoint(),
-      },
+      values: createSessionPoolValues({
+        appUrl,
+        configTargets: createConfigTargetsValue("/app/python/ade_config.whl"),
+        engineWheelPath,
+        managementEndpoint: createLocalContainerSessionPoolManagementEndpoint(),
+        sessionSecret: localSessionPoolSecret,
+      }),
     };
   }
 
   return {
     usesManagedLocalSessionPool: false,
-      values: {
-        ...values,
-        [appUrlEnvName]:
-          readOptionalTrimmedString(env, appUrlEnvName) ??
-          options.appUrl ??
-          createLocalContainerAppUrl(5173),
-        [configTargetsEnvName]: readRequiredEnv(env, configTargetsEnvName),
-        [managementEndpointEnvName]: configuredManagementEndpoint,
-        [sessionSecretEnvName]: readRequiredEnv(env, sessionSecretEnvName),
-      },
-    };
+    values: createSessionPoolValues({
+      appUrl,
+      configTargets: readRequiredEnv(env, configTargetsEnvName),
+      engineWheelPath,
+      managementEndpoint: configuredManagementEndpoint,
+      sessionSecret: readRequiredEnv(env, sessionSecretEnvName),
+    }),
+  };
 }
 
 export { createContainerSessionPoolEnv, createHostSessionPoolEnv };

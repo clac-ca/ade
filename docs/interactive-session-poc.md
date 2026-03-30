@@ -6,9 +6,14 @@ containers.
 
 ## Current State
 
-ADE currently uses synchronous, request/response execution against the session
-pool. Commands are wrapped in Python and executed with `subprocess.run(...)`,
-which means stdout and stderr only arrive after the subprocess exits.
+ADE now exposes:
+
+- async runs over HTTP plus SSE
+- an interactive terminal over a public WebSocket
+
+Internally, the session-pool `/executions` surface is still one of the runtime
+primitives used to bootstrap long-running work inside Azure sessions, but it is
+not part of the public ADE API contract.
 
 ## Design 1: Reverse WebSocket PTY Bridge
 
@@ -18,7 +23,8 @@ This is the strongest design for terminal-like interaction on built-in
 Flow:
 
 1. ADE opens a relay endpoint on a host reachable from session-pool egress.
-2. ADE sends a long-running inline Python payload to `/executions`.
+2. ADE sends a long-running inline Python payload through the internal
+   session-pool `/executions` API.
 3. The inline Python creates a PTY and launches a shell.
 4. The inline Python opens an outbound WebSocket back to ADE.
 5. ADE relays stdin, stdout, stderr, resize, and signal frames.

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createContainerBlobEnv, createHostBlobEnv } from "../lib/blob-env";
+import { createContainerSessionPoolEnv } from "../lib/session-pool-env";
 import {
   createLocalBlobAccountUrl,
   createLocalContainerBlobAccountUrl,
@@ -27,7 +28,10 @@ import { readOptionalTrimmedString } from "../lib/runtime";
 test("local development defaults are fixed and predictable", () => {
   assert.equal(localApiHost, "127.0.0.1");
   assert.equal(localApiPort, 8000);
-  assert.equal(localBlobAccountKey, "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==");
+  assert.equal(
+    localBlobAccountKey,
+    "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
+  );
   assert.equal(localBlobAccountName, "devstoreaccount1");
   assert.equal(localBlobContainerName, "documents");
   assert.equal(localBlobPort, 10000);
@@ -98,4 +102,31 @@ test("managed local blob env keeps browser and runtime endpoints explicit", () =
         "http://host.docker.internal:10000/devstoreaccount1",
     },
   });
+});
+
+test("configured session pool env keeps the app url fallback boring and local", () => {
+  assert.deepEqual(
+    createContainerSessionPoolEnv(
+      {
+        ADE_CONFIG_TARGETS:
+          '[{"workspaceId":"workspace-a","configVersionId":"config-v1","wheelPath":"/tmp/config.whl"}]',
+        ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
+          "https://example.dynamicsessions.io",
+        ADE_SESSION_SECRET: "secret",
+      },
+      {},
+    ),
+    {
+      usesManagedLocalSessionPool: false,
+      values: {
+        ADE_APP_URL: "http://host.docker.internal:8000",
+        ADE_CONFIG_TARGETS:
+          '[{"workspaceId":"workspace-a","configVersionId":"config-v1","wheelPath":"/tmp/config.whl"}]',
+        ADE_ENGINE_WHEEL_PATH: "/app/python/ade_engine.whl",
+        ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
+          "https://example.dynamicsessions.io",
+        ADE_SESSION_SECRET: "secret",
+      },
+    },
+  );
 });
