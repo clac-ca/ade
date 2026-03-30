@@ -36,16 +36,24 @@ impl RunService {
         loop {
             match bridge_socket.recv().await {
                 Some(Ok(Message::Text(text))) => {
-                    match parse_bridge_message(text.as_str()).map_err(|error| AttemptFailure {
-                        emitted_error: false,
-                        error,
-                        phase: Some(RunPhase::InstallPackages),
-                        retriable: false,
-                    })? {
+                    let message = match parse_bridge_message(text.as_str()) {
+                        Ok(message) => message,
+                        Err(error) => {
+                            abandon_execution_task(&mut execution_task).await;
+                            return Err(AttemptFailure {
+                                emitted_error: false,
+                                error,
+                                phase: Some(RunPhase::InstallPackages),
+                                retriable: false,
+                            });
+                        }
+                    };
+                    match message {
                         RunBridgeClientMessage::Ready => break,
                         _ => {
                             let _ = send_json(&mut bridge_socket, &RunBridgeServerMessage::Cancel)
                                 .await;
+                            abandon_execution_task(&mut execution_task).await;
                             return Err(AttemptFailure {
                                 emitted_error: false,
                                 error: AppError::status(
@@ -59,6 +67,7 @@ impl RunService {
                     }
                 }
                 Some(Ok(Message::Close(_))) | None => {
+                    abandon_execution_task(&mut execution_task).await;
                     return Err(AttemptFailure {
                         emitted_error: false,
                         error: AppError::status(
@@ -70,6 +79,7 @@ impl RunService {
                     });
                 }
                 Some(Ok(Message::Binary(_))) => {
+                    abandon_execution_task(&mut execution_task).await;
                     return Err(AttemptFailure {
                         emitted_error: false,
                         error: AppError::request("Binary run bridge messages are not supported."),
@@ -79,6 +89,7 @@ impl RunService {
                 }
                 Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
                 Some(Err(error)) => {
+                    abandon_execution_task(&mut execution_task).await;
                     return Err(AttemptFailure {
                         emitted_error: false,
                         error: AppError::internal_with_source(
@@ -143,12 +154,18 @@ impl RunService {
                 bridge_message = bridge_socket.recv(), if !bridge_closed => {
                     match bridge_message {
                         Some(Ok(Message::Text(text))) => {
-                            let message = parse_bridge_message(text.as_str()).map_err(|error| AttemptFailure {
-                                emitted_error: false,
-                                error,
-                                phase: run.phase.or(Some(RunPhase::InstallPackages)),
-                                retriable: false,
-                            })?;
+                            let message = match parse_bridge_message(text.as_str()) {
+                                Ok(message) => message,
+                                Err(error) => {
+                                    abandon_execution_task(&mut execution_task).await;
+                                    return Err(AttemptFailure {
+                                        emitted_error: false,
+                                        error,
+                                        phase: run.phase.or(Some(RunPhase::InstallPackages)),
+                                        retriable: false,
+                                    });
+                                }
+                            };
                             match message {
                                 RunBridgeClientMessage::Ready => {}
                                 RunBridgeClientMessage::Status { phase, state } => {
@@ -207,6 +224,7 @@ impl RunService {
                             bridge_closed = true;
                         }
                         Some(Ok(Message::Binary(_))) => {
+                            abandon_execution_task(&mut execution_task).await;
                             return Err(AttemptFailure {
                                 emitted_error: false,
                                 error: AppError::request("Binary run bridge messages are not supported."),
@@ -216,6 +234,7 @@ impl RunService {
                         }
                         Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
                         Some(Err(error)) => {
+                            abandon_execution_task(&mut execution_task).await;
                             return Err(AttemptFailure {
                                 emitted_error: false,
                                 error: AppError::internal_with_source("Run bridge failed.", error),
@@ -274,12 +293,19 @@ impl RunService {
                 .await
             {
                 Ok(success) => {
+                    if active.is_cancelled() {
+                        return self.finish_cancelled(&scope, &run_id, Some(&active)).await;
+                    }
                     return self
                         .finish_success(&scope, &run_id, attempt, success, Some(&active))
                         .await;
                 }
                 Err(failure) => failure,
             };
+
+            if active.is_cancelled() {
+                return self.finish_cancelled(&scope, &run_id, Some(&active)).await;
+            }
 
             if !(failure.retriable && attempt < RUN_MAX_ATTEMPTS) {
                 return self
@@ -307,6 +333,8 @@ impl RunService {
         let mut run = self.load_run(scope, run_id).await?;
         run.status = RunStatus::Cancelled;
         run.error_message = Some("Run cancelled.".to_string());
+        run.output_path = None;
+        run.validation_issues.clear();
         self.run_store.save_run(&run).await?;
         self.emit_event(
             run_id,
@@ -338,6 +366,8 @@ impl RunService {
             RunStatus::Failed
         };
         run.error_message = Some(failure.error.to_string());
+        run.output_path = None;
+        run.validation_issues.clear();
         self.run_store.save_run(&run).await?;
 
         if !failure.emitted_error {
@@ -562,7 +592,7 @@ impl RunService {
             .timeout_in_seconds
             .unwrap_or(RUN_EXECUTION_TIMEOUT_SECONDS);
         let scope_for_execution = attempt.scope.clone();
-        let execution_task = tokio::spawn(async move {
+        let mut execution_task = tokio::spawn(async move {
             session_service
                 .execute_inline_python_detailed(
                     &scope_for_execution,
@@ -572,15 +602,18 @@ impl RunService {
                 .await
         });
 
-        let bridge_socket = self
-            .wait_for_run_bridge(pending, active)
-            .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::InstallPackages),
-                retriable: true,
-            })?;
+        let bridge_socket = match self.wait_for_run_bridge(pending, active).await {
+            Ok(bridge_socket) => bridge_socket,
+            Err(error) => {
+                abandon_execution_task(&mut execution_task).await;
+                return Err(AttemptFailure {
+                    emitted_error: false,
+                    error,
+                    phase: Some(RunPhase::InstallPackages),
+                    retriable: true,
+                });
+            }
+        };
         self.consume_run_bridge(
             attempt.run_id,
             &mut run,
@@ -678,6 +711,13 @@ fn cancelled_failure() -> AttemptFailure {
         phase: None,
         retriable: false,
     }
+}
+
+async fn abandon_execution_task<T>(execution_task: &mut JoinHandle<T>) {
+    if !execution_task.is_finished() {
+        execution_task.abort();
+    }
+    let _ = execution_task.await;
 }
 
 fn execution_failure_message(execution: &PythonExecution) -> String {
