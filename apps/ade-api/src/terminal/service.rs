@@ -87,9 +87,9 @@ impl TerminalService {
             Err(_) => {
                 let _ = send_terminal_event(
                     &mut browser_socket,
-                    TerminalServerMessage::error(
-                        "A terminal session for this workspace is still shutting down. Retry in a few seconds.".to_string(),
-                    ),
+                    TerminalServerMessage::Error {
+                        message: "A terminal session for this workspace is still shutting down. Retry in a few seconds.".to_string(),
+                    },
                 )
                 .await;
                 let _ = browser_socket.send(Message::Close(None)).await;
@@ -126,7 +126,9 @@ impl TerminalService {
             Err(error) => {
                 let _ = send_terminal_event(
                     &mut browser_socket,
-                    TerminalServerMessage::error(error.to_string()),
+                    TerminalServerMessage::Error {
+                        message: error.to_string(),
+                    },
                 )
                 .await;
                 let _ = browser_socket.send(Message::Close(None)).await;
@@ -216,9 +218,9 @@ impl TerminalService {
                         Err(_) => {
                             let _ = send_terminal_event(
                                 browser_socket,
-                                TerminalServerMessage::error(
-                                    "Terminal startup was cancelled before the bridge connected.".to_string(),
-                                ),
+                                TerminalServerMessage::Error {
+                                    message: "Terminal startup was cancelled before the bridge connected.".to_string(),
+                                },
                             ).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
                             TerminalPhase::AwaitExecution
@@ -235,7 +237,12 @@ impl TerminalService {
                             Ok(_) => {}
                             Err(error) => {
                                 self.manager.cancel(channel_id);
-                                let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(error.to_string())).await;
+                                let _ = send_terminal_event(
+                                    browser_socket,
+                                    TerminalServerMessage::Error {
+                                        message: error.to_string(),
+                                    },
+                                ).await;
                                 let _ = browser_socket.send(Message::Close(None)).await;
                                 return TerminalPhase::AwaitExecution;
                             }
@@ -244,9 +251,9 @@ impl TerminalService {
                             self.manager.cancel(channel_id);
                             let _ = send_terminal_event(
                                 browser_socket,
-                                TerminalServerMessage::error(
-                                    "Binary terminal messages are not supported.".to_string(),
-                                ),
+                                TerminalServerMessage::Error {
+                                    message: "Binary terminal messages are not supported.".to_string(),
+                                },
                             ).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
                             return TerminalPhase::AwaitExecution;
@@ -260,7 +267,9 @@ impl TerminalService {
                             self.manager.cancel(channel_id);
                             let _ = send_terminal_event(
                                 browser_socket,
-                                TerminalServerMessage::error(format!("Browser websocket failed: {error}")),
+                                TerminalServerMessage::Error {
+                                    message: format!("Browser websocket failed: {error}"),
+                                },
                             ).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
                             return TerminalPhase::AwaitExecution;
@@ -273,7 +282,10 @@ impl TerminalService {
                         Ok(execution) => execution_failure_message(&execution),
                         Err(error) => error.to_string(),
                     };
-                    let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(message)).await;
+                    let _ = send_terminal_event(
+                        browser_socket,
+                        TerminalServerMessage::Error { message },
+                    ).await;
                     let _ = browser_socket.send(Message::Close(None)).await;
                     return TerminalPhase::Finished;
                 }
@@ -281,11 +293,11 @@ impl TerminalService {
                     self.manager.cancel(channel_id);
                     let _ = send_terminal_event(
                         browser_socket,
-                        TerminalServerMessage::error(
-                            "Timed out waiting for the terminal bridge to connect.".to_string(),
-                        ),
+                        TerminalServerMessage::Error {
+                            message: "Timed out waiting for the terminal bridge to connect.".to_string(),
+                        },
                     ).await;
-                    let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
+                    let _ = send_terminal_event(browser_socket, TerminalServerMessage::Exit { code: None }).await;
                     let _ = browser_socket.send(Message::Close(None)).await;
                     return TerminalPhase::AwaitExecution;
                 }
@@ -320,16 +332,21 @@ impl TerminalService {
                                 Ok(_) => {
                                     let _ = send_terminal_event(
                                         browser_socket,
-                                        TerminalServerMessage::error(
-                                            "Terminal bridge must send a ready event before streaming output.".to_string(),
-                                        ),
+                                        TerminalServerMessage::Error {
+                                            message: "Terminal bridge must send a ready event before streaming output.".to_string(),
+                                        },
                                     ).await;
                                     let _ = send_close_message(bridge_socket).await;
                                     let _ = browser_socket.send(Message::Close(None)).await;
                                     return TerminalPhase::AwaitExecution;
                                 }
                                 Err(error) => {
-                                    let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(error.to_string())).await;
+                                    let _ = send_terminal_event(
+                                        browser_socket,
+                                        TerminalServerMessage::Error {
+                                            message: error.to_string(),
+                                        },
+                                    ).await;
                                     let _ = send_close_message(bridge_socket).await;
                                     let _ = browser_socket.send(Message::Close(None)).await;
                                     return TerminalPhase::AwaitExecution;
@@ -339,9 +356,9 @@ impl TerminalService {
                         Some(Ok(Message::Binary(_))) => {
                             let _ = send_terminal_event(
                                 browser_socket,
-                                TerminalServerMessage::error(
-                                    "Binary bridge messages are not supported.".to_string(),
-                                ),
+                                TerminalServerMessage::Error {
+                                    message: "Binary bridge messages are not supported.".to_string(),
+                                },
                             ).await;
                             let _ = send_close_message(bridge_socket).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
@@ -349,16 +366,18 @@ impl TerminalService {
                         }
                         Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
                         Some(Ok(Message::Close(_))) | None => {
-                            let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
+                            let _ = send_terminal_event(browser_socket, TerminalServerMessage::Exit { code: None }).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
                             return TerminalPhase::AwaitExecution;
                         }
                         Some(Err(error)) => {
                             let _ = send_terminal_event(
                                 browser_socket,
-                                TerminalServerMessage::error(format!("Terminal bridge failed: {error}")),
+                                TerminalServerMessage::Error {
+                                    message: format!("Terminal bridge failed: {error}"),
+                                },
                             ).await;
-                            let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
+                            let _ = send_terminal_event(browser_socket, TerminalServerMessage::Exit { code: None }).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
                             return TerminalPhase::AwaitExecution;
                         }
@@ -373,7 +392,12 @@ impl TerminalService {
                             }
                             Ok(_) => {}
                             Err(error) => {
-                                let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(error.to_string())).await;
+                                let _ = send_terminal_event(
+                                    browser_socket,
+                                    TerminalServerMessage::Error {
+                                        message: error.to_string(),
+                                    },
+                                ).await;
                                 let _ = send_close_message(bridge_socket).await;
                                 let _ = browser_socket.send(Message::Close(None)).await;
                                 return TerminalPhase::AwaitExecution;
@@ -382,9 +406,9 @@ impl TerminalService {
                         Some(Ok(Message::Binary(_))) => {
                             let _ = send_terminal_event(
                                 browser_socket,
-                                TerminalServerMessage::error(
-                                    "Binary terminal messages are not supported.".to_string(),
-                                ),
+                                TerminalServerMessage::Error {
+                                    message: "Binary terminal messages are not supported.".to_string(),
+                                },
                             ).await;
                             let _ = send_close_message(bridge_socket).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
@@ -398,7 +422,9 @@ impl TerminalService {
                         Some(Err(error)) => {
                             let _ = send_terminal_event(
                                 browser_socket,
-                                TerminalServerMessage::error(format!("Browser websocket failed: {error}")),
+                                TerminalServerMessage::Error {
+                                    message: format!("Browser websocket failed: {error}"),
+                                },
                             ).await;
                             let _ = send_close_message(bridge_socket).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
@@ -411,8 +437,11 @@ impl TerminalService {
                         Ok(execution) => execution_failure_message(&execution),
                         Err(error) => error.to_string(),
                     };
-                    let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(message)).await;
-                    let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
+                    let _ = send_terminal_event(
+                        browser_socket,
+                        TerminalServerMessage::Error { message },
+                    ).await;
+                    let _ = send_terminal_event(browser_socket, TerminalServerMessage::Exit { code: None }).await;
                     let _ = send_close_message(bridge_socket).await;
                     let _ = browser_socket.send(Message::Close(None)).await;
                     return TerminalPhase::Finished;
@@ -420,11 +449,11 @@ impl TerminalService {
                 _ = &mut startup_timeout => {
                     let _ = send_terminal_event(
                         browser_socket,
-                        TerminalServerMessage::error(
-                            "Timed out waiting for the terminal bridge to become ready.".to_string(),
-                        ),
+                        TerminalServerMessage::Error {
+                            message: "Timed out waiting for the terminal bridge to become ready.".to_string(),
+                        },
                     ).await;
-                    let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
+                    let _ = send_terminal_event(browser_socket, TerminalServerMessage::Exit { code: None }).await;
                     let _ = send_close_message(bridge_socket).await;
                     let _ = browser_socket.send(Message::Close(None)).await;
                     return TerminalPhase::AwaitExecution;
@@ -454,7 +483,12 @@ impl TerminalService {
                                 Ok(ControlFlow::Continue(())) => {}
                                 Ok(ControlFlow::Break(())) => break,
                                 Err(error) => {
-                                    let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::error(error.to_string())).await;
+                                    let _ = send_terminal_event(
+                                        &mut browser_socket,
+                                        TerminalServerMessage::Error {
+                                            message: error.to_string(),
+                                        },
+                                    ).await;
                                     let _ = send_close_message(&mut bridge_socket).await;
                                     break;
                                 }
@@ -464,7 +498,9 @@ impl TerminalService {
                             let _ = send_close_message(&mut bridge_socket).await;
                             let _ = send_terminal_event(
                                 &mut browser_socket,
-                                TerminalServerMessage::error(format!("Browser websocket failed: {error}")),
+                                TerminalServerMessage::Error {
+                                    message: format!("Browser websocket failed: {error}"),
+                                },
                             ).await;
                             break;
                         }
@@ -481,7 +517,12 @@ impl TerminalService {
                                 Ok(ControlFlow::Continue(())) => {}
                                 Ok(ControlFlow::Break(())) => break,
                                 Err(error) => {
-                                    let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::error(error.to_string())).await;
+                                    let _ = send_terminal_event(
+                                        &mut browser_socket,
+                                        TerminalServerMessage::Error {
+                                            message: error.to_string(),
+                                        },
+                                    ).await;
                                     let _ = send_close_message(&mut bridge_socket).await;
                                     break;
                                 }
@@ -490,13 +531,15 @@ impl TerminalService {
                         Some(Err(error)) => {
                             let _ = send_terminal_event(
                                 &mut browser_socket,
-                                TerminalServerMessage::error(format!("Terminal bridge failed: {error}")),
+                                TerminalServerMessage::Error {
+                                    message: format!("Terminal bridge failed: {error}"),
+                                },
                             ).await;
-                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::exit(None)).await;
+                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::Exit { code: None }).await;
                             break;
                         }
                         None => {
-                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::exit(None)).await;
+                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::Exit { code: None }).await;
                             break;
                         }
                     }
@@ -507,9 +550,11 @@ impl TerminalService {
                         Ok(execution) => {
                             let _ = send_terminal_event(
                                 &mut browser_socket,
-                                TerminalServerMessage::error(execution_failure_message(&execution)),
+                                TerminalServerMessage::Error {
+                                    message: execution_failure_message(&execution),
+                                },
                             ).await;
-                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::exit(None)).await;
+                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::Exit { code: None }).await;
                             let _ = send_close_message(&mut bridge_socket).await;
                             phase = TerminalPhase::Finished;
                             break;
@@ -517,9 +562,11 @@ impl TerminalService {
                         Err(error) => {
                             let _ = send_terminal_event(
                                 &mut browser_socket,
-                                TerminalServerMessage::error(error.to_string()),
+                                TerminalServerMessage::Error {
+                                    message: error.to_string(),
+                                },
                             ).await;
-                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::exit(None)).await;
+                            let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::Exit { code: None }).await;
                             let _ = send_close_message(&mut bridge_socket).await;
                             phase = TerminalPhase::Finished;
                             break;
@@ -529,11 +576,11 @@ impl TerminalService {
                 _ = &mut session_timeout => {
                     let _ = send_terminal_event(
                         &mut browser_socket,
-                        TerminalServerMessage::error(
-                            "Terminal session expired after 220 seconds.".to_string(),
-                        ),
+                        TerminalServerMessage::Error {
+                            message: "Terminal session expired after 220 seconds.".to_string(),
+                        },
                     ).await;
-                    let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::exit(None)).await;
+                    let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::Exit { code: None }).await;
                     let _ = send_close_message(&mut bridge_socket).await;
                     break;
                 }

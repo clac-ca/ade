@@ -22,16 +22,6 @@ pub(crate) enum TerminalServerMessage {
     Exit { code: Option<i32> },
 }
 
-impl TerminalServerMessage {
-    pub(crate) fn error(message: String) -> Self {
-        Self::Error { message }
-    }
-
-    pub(crate) fn exit(code: Option<i32>) -> Self {
-        Self::Exit { code }
-    }
-}
-
 pub(crate) async fn send_terminal_event(
     socket: &mut WebSocket,
     event: TerminalServerMessage,
@@ -125,7 +115,8 @@ pub(crate) async fn forward_bridge_message(
             "Binary bridge messages are not supported.".to_string(),
         )),
         Message::Close(_) => {
-            let _ = send_terminal_event(browser_socket, TerminalServerMessage::exit(None)).await;
+            let _ = send_terminal_event(browser_socket, TerminalServerMessage::Exit { code: None })
+                .await;
             Ok(ControlFlow::Break(()))
         }
         Message::Ping(_) | Message::Pong(_) => Ok(ControlFlow::Continue(())),

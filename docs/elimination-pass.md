@@ -370,3 +370,141 @@ Validation:
 Result:
 - One more one-use helper removed.
 - Terminal session cleanup now lives exactly where the lease ends.
+
+### Section 18: Delete the one-use session JSON request wrapper
+
+Issue:
+- `SessionPoolClient::json_request(...)` only wrapped `data_plane_request(...)`, optional `.json(...)`, and `parse_json_response(...)`.
+- It had a single caller.
+
+Standard approach:
+- If a helper only hides one obvious request-building sequence and only one call site uses it, inline the request at the call site.
+
+Change:
+- Inlined the session execution request build into `SessionPoolClient::execute(...)`.
+- Deleted `json_request(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One pass-through client helper deleted.
+- The execution path now shows the actual request shape where the execution response is handled.
+
+### Section 19: Delete one-use session metadata parsers
+
+Issue:
+- `header_string(...)` and `header_u64(...)` only existed to support `session_operation_metadata(...)`.
+
+Standard approach:
+- If small parsing helpers only exist for one function, keep them local to that function instead of promoting them to file scope.
+
+Change:
+- Moved the string and integer header parsing into local closures inside `session_operation_metadata(...)`.
+- Deleted both top-level helpers.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- Two top-level helpers deleted.
+- Session metadata parsing now reads in one place instead of bouncing between tiny helper functions.
+
+### Section 20: Delete one-use run cancellation wrappers
+
+Issue:
+- `cancelled_failure(...)` only returned one fixed `AttemptFailure` literal.
+- `ActiveRunHandle::is_cancelled(...)` only wrapped `*cancel_rx.borrow()`.
+
+Standard approach:
+- Keep one fixed literal at the couple of call sites that actually need it.
+- Avoid one-line accessors when the field access is already obvious inside the same module.
+
+Change:
+- Inlined the cancelled `AttemptFailure` at its two call sites.
+- Replaced `active.is_cancelled()` with direct `*active.cancel_rx.borrow()` checks.
+- Deleted both helpers.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- Two more tiny wrappers deleted.
+- Cancellation checks now show their exact state source directly in the run loop.
+
+### Section 21: Delete the one-use active-run removal helper
+
+Issue:
+- `ActiveRunManager::remove(...)` was only called from `Drop` on `ActiveRunHandle`.
+
+Standard approach:
+- If teardown only exists for one `Drop` impl, perform it directly in `drop(...)`.
+
+Change:
+- Deleted `ActiveRunManager::remove(...)`.
+- Inlined the map removal into `ActiveRunHandle::drop(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One more one-use helper deleted.
+- Active run cleanup now lives where the active run handle actually ends.
+
+### Section 22: Delete a one-use error body type
+
+Issue:
+- `ErrorBody` only existed for the single JSON error parsing path in `error_message(...)`.
+
+Standard approach:
+- Keep one-off response shapes local to the function that parses them instead of promoting them to file scope.
+
+Change:
+- Moved `ErrorBody` inside `error_message(...)`.
+- Deleted the file-scope type.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One more file-scope type deleted.
+- The session-pool error parse shape now lives directly with the code that consumes it.
+
+### Section 23: Delete an unused flexibility point from session URL building
+
+Issue:
+- `session_pool_url(...)` still accepted `api_version`, but the runtime always used the single ADE session API version constant.
+
+Standard approach:
+- Don’t parameterize values that are fixed by the product/runtime contract.
+
+Change:
+- Removed the `api_version` parameter from `session_pool_url(...)`.
+- Used `DEFAULT_AZURE_SESSION_API_VERSION` directly inside the helper.
+- Updated tests and the runtime call site.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One more fake extension point deleted.
+- Session URL building now reflects the real contract instead of pretending API-version selection is configurable.
+
+### Section 24: Delete terminal enum convenience constructors
+
+Issue:
+- `TerminalServerMessage::error(...)` and `TerminalServerMessage::exit(...)` only wrapped normal Rust enum variant construction.
+
+Standard approach:
+- Prefer direct enum variants unless constructors enforce real policy.
+
+Change:
+- Deleted the `impl TerminalServerMessage` convenience constructors.
+- Switched terminal code to direct `TerminalServerMessage::Error { ... }` and `TerminalServerMessage::Exit { ... }` construction.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One more wrapper layer deleted.
+- Terminal message creation now uses the plain Rust enum form directly at call sites.

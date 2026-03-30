@@ -94,20 +94,17 @@ impl SessionPoolClient {
         code: String,
         timeout_in_seconds: Option<u64>,
     ) -> Result<SessionOperationResult<PythonExecution>, AppError> {
-        let envelope: SessionOperationResult<ExecutionEnvelope> = self
-            .json_request(
-                Method::POST,
-                &["executions"],
-                identifier,
-                &[],
-                Some(InlinePythonExecutionRequest {
-                    code,
-                    code_input_type: "Inline",
-                    execution_type: "Synchronous",
-                    timeout_in_seconds,
-                }),
-            )
-            .await?;
+        let request = self
+            .data_plane_request(Method::POST, &["executions"], identifier, &[])
+            .await?
+            .json(&InlinePythonExecutionRequest {
+                code,
+                code_input_type: "Inline",
+                execution_type: "Synchronous",
+                timeout_in_seconds,
+            });
+        let envelope: SessionOperationResult<ExecutionEnvelope> =
+            parse_json_response(request, "call the session pool API").await?;
 
         Ok(SessionOperationResult {
             metadata: envelope.metadata,
@@ -167,27 +164,6 @@ impl SessionPoolClient {
         })
     }
 
-    async fn json_request<T, B>(
-        &self,
-        method: Method,
-        path_segments: &[&str],
-        identifier: &str,
-        query_pairs: &[(&str, &str)],
-        body: Option<B>,
-    ) -> Result<SessionOperationResult<T>, AppError>
-    where
-        T: DeserializeOwned,
-        B: Serialize,
-    {
-        let mut request = self
-            .data_plane_request(method, path_segments, identifier, query_pairs)
-            .await?;
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-        parse_json_response(request, "call the session pool API").await
-    }
-
     async fn data_plane_request(
         &self,
         method: Method,
@@ -199,7 +175,6 @@ impl SessionPoolClient {
             &self.pool_management_endpoint,
             path_segments,
             identifier,
-            DEFAULT_AZURE_SESSION_API_VERSION,
             query_pairs,
         );
         let request = self.client.request(method, url);
@@ -208,11 +183,6 @@ impl SessionPoolClient {
         }
         Ok(request)
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct ErrorBody {
-    message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -283,7 +253,6 @@ fn session_pool_url(
     base_endpoint: &Url,
     path_segments: &[&str],
     identifier: &str,
-    api_version: &str,
     query_pairs: &[(&str, &str)],
 ) -> Url {
     let mut url = base_endpoint.clone();
@@ -299,7 +268,7 @@ fn session_pool_url(
     {
         let mut query = url.query_pairs_mut();
         query.append_pair("identifier", identifier);
-        query.append_pair("api-version", api_version);
+        query.append_pair("api-version", DEFAULT_AZURE_SESSION_API_VERSION);
         for (name, value) in query_pairs {
             query.append_pair(name, value);
         }
@@ -336,16 +305,30 @@ where
 }
 
 fn session_operation_metadata(headers: &reqwest::header::HeaderMap) -> SessionOperationMetadata {
+    let header_string = |name| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    let header_u64 = |name| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    };
     let timings = RunTimings {
-        allocation_time_ms: header_u64(headers, "x-ms-allocation-time"),
-        container_execution_duration_ms: header_u64(headers, "x-ms-container-execution-duration"),
-        overall_execution_time_ms: header_u64(headers, "x-ms-overall-execution-time"),
-        preparation_time_ms: header_u64(headers, "x-ms-preparation-time"),
+        allocation_time_ms: header_u64("x-ms-allocation-time"),
+        container_execution_duration_ms: header_u64("x-ms-container-execution-duration"),
+        overall_execution_time_ms: header_u64("x-ms-overall-execution-time"),
+        preparation_time_ms: header_u64("x-ms-preparation-time"),
     };
 
     SessionOperationMetadata {
-        operation_id: header_string(headers, "operation-id"),
-        session_guid: header_string(headers, "x-ms-session-guid"),
+        operation_id: header_string("operation-id"),
+        session_guid: header_string("x-ms-session-guid"),
         timings: if timings.allocation_time_ms.is_some()
             || timings.container_execution_duration_ms.is_some()
             || timings.overall_execution_time_ms.is_some()
@@ -358,23 +341,12 @@ fn session_operation_metadata(headers: &reqwest::header::HeaderMap) -> SessionOp
     }
 }
 
-fn header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn header_u64(headers: &reqwest::header::HeaderMap, name: &str) -> Option<u64> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-}
-
 async fn error_message(response: reqwest::Response) -> Result<String, AppError> {
+    #[derive(Deserialize)]
+    struct ErrorBody {
+        message: Option<String>,
+    }
+
     let bytes = response.bytes().await.map_err(|error| {
         AppError::internal_with_source(
             "Failed to read the session-pool error response.".to_string(),
@@ -430,7 +402,6 @@ mod tests {
             &Url::parse("https://example.com/session-pool/").unwrap(),
             &["files", "input #1.xlsx", "content"],
             "cfg-123",
-            "2025-10-02-preview",
             &[("path", "runs/run 1/output")],
         );
 
@@ -446,7 +417,6 @@ mod tests {
             &Url::parse("https://example.com/session-pool/").unwrap(),
             &["files"],
             "cfg-123",
-            "2025-10-02-preview",
             &[("recursive", "true")],
         );
 

@@ -154,7 +154,12 @@ impl RunService {
                         let _ = bridge_socket.send(Message::Text(message.into())).await;
                     }
                     execution_task.abort();
-                    return Err(cancelled_failure());
+                    return Err(AttemptFailure {
+                        emitted_error: true,
+                        error: AppError::request("Run cancelled."),
+                        phase: None,
+                        retriable: false,
+                    });
                 }
                 bridge_message = bridge_socket.recv(), if !bridge_closed => {
                     match bridge_message {
@@ -279,7 +284,7 @@ impl RunService {
         active: ActiveRunHandle,
     ) -> Result<(), AppError> {
         for attempt in 1..=RUN_MAX_ATTEMPTS {
-            if active.is_cancelled() {
+            if *active.cancel_rx.borrow() {
                 return self.finish_cancelled(&scope, &run_id, Some(&active)).await;
             }
 
@@ -298,7 +303,7 @@ impl RunService {
                 .await
             {
                 Ok(success) => {
-                    if active.is_cancelled() {
+                    if *active.cancel_rx.borrow() {
                         return self.finish_cancelled(&scope, &run_id, Some(&active)).await;
                     }
                     return self
@@ -308,7 +313,7 @@ impl RunService {
                 Err(failure) => failure,
             };
 
-            if active.is_cancelled() {
+            if *active.cancel_rx.borrow() {
                 return self.finish_cancelled(&scope, &run_id, Some(&active)).await;
             }
 
@@ -521,8 +526,13 @@ impl RunService {
         run.last_session_guid = attempt_session_guid.clone();
         self.run_store.save_run(&run).await.map_err(store_failure)?;
 
-        if active.is_cancelled() {
-            return Err(cancelled_failure());
+        if *active.cancel_rx.borrow() {
+            return Err(AttemptFailure {
+                emitted_error: true,
+                error: AppError::request("Run cancelled."),
+                phase: None,
+                retriable: false,
+            });
         }
 
         let (bridge_id, bridge_rx) = self.bridge_manager.create();
@@ -695,15 +705,6 @@ impl RunService {
                 Err(AppError::status(StatusCode::BAD_GATEWAY, "Timed out waiting for the run bridge to connect."))
             }
         }
-    }
-}
-
-fn cancelled_failure() -> AttemptFailure {
-    AttemptFailure {
-        emitted_error: true,
-        error: AppError::request("Run cancelled."),
-        phase: None,
-        retriable: false,
     }
 }
 

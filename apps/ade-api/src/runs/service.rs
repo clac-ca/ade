@@ -115,13 +115,6 @@ impl ActiveRunManager {
         true
     }
 
-    fn remove(&self, run_id: &str) {
-        self.inner
-            .lock()
-            .expect("active run lock poisoned")
-            .remove(run_id);
-    }
-
     fn subscribe(&self, run_id: &str) -> Option<broadcast::Receiver<RunEvent>> {
         self.inner
             .lock()
@@ -138,15 +131,13 @@ struct ActiveRunHandle {
     sender: broadcast::Sender<RunEvent>,
 }
 
-impl ActiveRunHandle {
-    fn is_cancelled(&self) -> bool {
-        *self.cancel_rx.borrow()
-    }
-}
-
 impl Drop for ActiveRunHandle {
     fn drop(&mut self) {
-        self.manager.remove(&self.run_id);
+        self.manager
+            .inner
+            .lock()
+            .expect("active run lock poisoned")
+            .remove(&self.run_id);
     }
 }
 
