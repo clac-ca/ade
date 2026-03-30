@@ -7,7 +7,6 @@ use std::{
 
 use tokio::{
     net::TcpListener,
-    signal,
     sync::Notify,
     task::JoinHandle,
     time::{MissedTickBehavior, interval},
@@ -18,11 +17,10 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     api::{AppState, create_app},
-    db::{Database, DatabaseProbe},
+    db::DatabaseProbe,
     error::AppError,
     readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::RunService,
-    session::SessionService,
     terminal::TerminalService,
 };
 
@@ -31,24 +29,21 @@ pub struct ServerOptions {
     pub port: u16,
     pub probe_interval_ms: u64,
     pub run_service: Arc<RunService>,
-    pub session_service: Arc<SessionService>,
     pub terminal_service: Arc<TerminalService>,
-    pub sql_connection_string: String,
     pub stale_after_ms: u64,
     pub web_root: Option<PathBuf>,
-    pub database: Option<Arc<dyn DatabaseProbe>>,
+    pub database: Arc<dyn DatabaseProbe>,
 }
 
 pub struct ServerInstance {
     app: axum::Router,
     readiness: ReadinessController,
-    database: Option<Arc<dyn DatabaseProbe>>,
+    database: Arc<dyn DatabaseProbe>,
     host: String,
     port: u16,
     probe_interval_ms: u64,
     server_task: Option<JoinHandle<Result<(), std::io::Error>>>,
     shutdown: Option<Arc<Notify>>,
-    sql_connection_string: String,
     probe_task: Option<JoinHandle<()>>,
 }
 
@@ -78,20 +73,29 @@ impl ServerInstance {
             probe_interval_ms: options.probe_interval_ms,
             server_task: None,
             shutdown: None,
-            sql_connection_string: options.sql_connection_string,
             probe_task: None,
         }
     }
 
     pub async fn start(&mut self) -> Result<(), AppError> {
         self.readiness.mark_starting();
+        let database = Arc::clone(&self.database);
 
-        let database = match self.database.clone() {
-            Some(database) => database,
-            None => Arc::new(Database::connect(&self.sql_connection_string).await?),
-        };
-
-        verify_startup_probe(&self.readiness, database.as_ref()).await?;
+        match database.ping().await {
+            Ok(()) => {
+                self.readiness.record_database_success(unix_time_ms());
+                self.readiness.mark_ready();
+            }
+            Err(error) => {
+                self.readiness
+                    .record_database_failure(unix_time_ms(), Some(&error.to_string()));
+                self.readiness.mark_degraded(Some(&error.to_string()));
+                return Err(AppError::startup_with_source(
+                    "Failed to verify SQL connectivity during startup.",
+                    error,
+                ));
+            }
+        }
 
         let listener_host: IpAddr = self
             .host
@@ -126,7 +130,6 @@ impl ServerInstance {
             .await;
         }));
         self.shutdown = Some(shutdown);
-        self.database = Some(database);
 
         Ok(())
     }
@@ -155,32 +158,9 @@ impl ServerInstance {
                 })?;
         }
 
-        if let Some(database) = self.database.take() {
-            database.close().await?;
-        }
+        self.database.close().await?;
 
         Ok(())
-    }
-}
-
-async fn verify_startup_probe(
-    readiness: &ReadinessController,
-    database: &dyn DatabaseProbe,
-) -> Result<(), AppError> {
-    match database.ping().await {
-        Ok(()) => {
-            readiness.record_database_success(unix_time_ms());
-            readiness.mark_ready();
-            Ok(())
-        }
-        Err(error) => {
-            readiness.record_database_failure(unix_time_ms(), Some(&error.to_string()));
-            readiness.mark_degraded(Some(&error.to_string()));
-            Err(AppError::startup_with_source(
-                "Failed to verify SQL connectivity during startup.",
-                error,
-            ))
-        }
     }
 }
 
@@ -239,34 +219,6 @@ pub fn init_tracing() {
         .with_target(false)
         .compact()
         .try_init();
-}
-
-pub async fn run_server_until_shutdown(options: ServerOptions) -> Result<(), AppError> {
-    let mut server = ServerInstance::new(options);
-    server.start().await?;
-    wait_for_termination_signal().await;
-    server.stop().await
-}
-
-async fn wait_for_termination_signal() {
-    let ctrl_c = async {
-        let _ = signal::ctrl_c().await;
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        let mut signal = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
-        signal.recv().await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        () = ctrl_c => {}
-        () = terminate => {}
-    }
 }
 
 #[cfg(test)]
@@ -396,11 +348,9 @@ mod tests {
             probe_interval_ms: 10,
             run_service: fixture_run_service(Arc::clone(&session_service)),
             terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
-            session_service,
-            sql_connection_string: "unused".to_string(),
             stale_after_ms: DEFAULT_READINESS_STALE_AFTER_MS,
             web_root: None,
-            database: Some(database),
+            database,
         });
 
         let error = server.start().await.unwrap_err();
@@ -426,11 +376,9 @@ mod tests {
             probe_interval_ms: 10,
             run_service: fixture_run_service(Arc::clone(&session_service)),
             terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
-            session_service,
-            sql_connection_string: "unused".to_string(),
             stale_after_ms: DEFAULT_READINESS_STALE_AFTER_MS,
             web_root: None,
-            database: Some(database),
+            database,
         });
 
         server.start().await.unwrap();

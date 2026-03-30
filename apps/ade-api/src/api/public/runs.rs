@@ -79,13 +79,13 @@ async fn create_run(
 )]
 async fn get_run(
     State(run_service): State<Arc<RunService>>,
-    Path(path): Path<RunPath>,
+    Path((workspace_id, config_version_id, run_id)): Path<(String, String, String)>,
 ) -> Result<Json<RunDetailResponse>, AppError> {
-    Ok(Json(
-        run_service
-            .get_run_detail(&path.scope(), &path.run_id)
-            .await?,
-    ))
+    let scope = Scope {
+        workspace_id,
+        config_version_id,
+    };
+    Ok(Json(run_service.get_run_detail(&scope, &run_id).await?))
 }
 
 #[utoipa::path(
@@ -105,7 +105,7 @@ async fn get_run(
 )]
 async fn stream_run_events(
     State(run_service): State<Arc<RunService>>,
-    Path(path): Path<RunPath>,
+    Path((workspace_id, config_version_id, run_id)): Path<(String, String, String)>,
     Query(query): Query<RunEventsQuery>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
@@ -123,8 +123,10 @@ async fn stream_run_events(
             None => None,
         }
     };
-    let scope = path.scope();
-    let run_id = path.run_id.clone();
+    let scope = Scope {
+        workspace_id,
+        config_version_id,
+    };
     let feed = run_service
         .subscribe_run_events(&scope, &run_id, after_seq)
         .await?;
@@ -226,29 +228,14 @@ async fn stream_run_events(
 )]
 async fn cancel_run(
     State(run_service): State<Arc<RunService>>,
-    Path(path): Path<RunPath>,
+    Path((workspace_id, config_version_id, run_id)): Path<(String, String, String)>,
 ) -> Result<StatusCode, AppError> {
-    run_service.cancel_run(&path.scope(), &path.run_id).await?;
+    let scope = Scope {
+        workspace_id,
+        config_version_id,
+    };
+    run_service.cancel_run(&scope, &run_id).await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
-pub(crate) struct RunPath {
-    #[serde(rename = "configVersionId")]
-    config_version_id: String,
-    #[serde(rename = "runId")]
-    run_id: String,
-    #[serde(rename = "workspaceId")]
-    workspace_id: String,
-}
-
-impl RunPath {
-    fn scope(&self) -> Scope {
-        Scope {
-            workspace_id: self.workspace_id.clone(),
-            config_version_id: self.config_version_id.clone(),
-        }
-    }
 }
 
 #[derive(Deserialize)]

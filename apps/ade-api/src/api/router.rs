@@ -58,7 +58,11 @@ pub fn create_app(state: AppState) -> Router {
             "/workspaces/{workspaceId}/configs/{configVersionId}",
             public::scoped_router(),
         )
-        .fallback(api_not_found);
+        .fallback(
+            |original_uri: OriginalUri, request: AxumRequest| async move {
+                not_found_for_method_path(request.method(), original_uri.0.path())
+            },
+        );
 
     Router::new()
         .route("/api/", get(public::system::api_root))
@@ -67,10 +71,6 @@ pub fn create_app(state: AppState) -> Router {
         .fallback(spa_or_not_found)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
-}
-
-async fn api_not_found(original_uri: OriginalUri, request: AxumRequest) -> AppError {
-    not_found_for_method_path(request.method(), original_uri.0.path())
 }
 
 async fn spa_or_not_found(

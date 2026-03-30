@@ -587,3 +587,238 @@ Validation:
 Result:
 - One more one-use server helper deleted.
 - Startup now shows the graceful-shutdown wiring directly where the server is built.
+
+### Section 29: Delete one-field path wrapper structs in internal routes
+
+Issue:
+- Several internal routes used tiny `#[derive(Deserialize)]` structs only to hold a single captured path string.
+
+Standard approach:
+- Axum supports `Path<String>` directly for a single captured segment or wildcard path. When there is only one captured value, the direct extractor is the simplest form.
+
+Change:
+- Switched the internal artifact, run-bridge, and terminal-bridge routes to `Path<String>`.
+- Deleted the one-field wrapper structs.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- Three more route-local structs deleted.
+- Internal route handlers now use the plain Axum path-extractor form directly.
+
+### Section 30: Delete the one-use signal wait helper
+
+Issue:
+- `wait_for_termination_signal(...)` was only called once and only wrapped Tokio's standard `ctrl_c` / `SIGTERM` `select!` block.
+
+Standard approach:
+- Keep the signal wait inline at the top-level server run path when it is only used once and does not carry reusable policy.
+
+Change:
+- Moved the signal wait block directly into `run_server_until_shutdown(...)`.
+- Deleted `wait_for_termination_signal(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `pnpm build`
+- `pnpm test:session:local`
+
+Result:
+- One more one-use server helper deleted.
+- The top-level run path now shows startup, wait, and shutdown in one place.
+
+### Section 31: Delete one-use session response helpers
+
+Issue:
+- `session_operation_metadata(...)` and `error_message(...)` only existed to support `parse_json_response(...)` in the same file.
+
+Standard approach:
+- Keep response parsing together when the helper logic is only meaningful inside one generic parser.
+
+Change:
+- Moved error-body parsing and response-header metadata extraction directly into `parse_json_response(...)`.
+- Deleted `session_operation_metadata(...)`.
+- Deleted `error_message(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `pnpm build`
+- `pnpm test:session:local`
+
+Result:
+- Two more one-use helpers deleted.
+- Session response handling now reads in one place instead of bouncing through file-scope helpers.
+
+### Section 32: Keep the shared run failure wrapper
+
+Issue:
+- `store_failure(...)` looked like a one-use helper at first glance.
+
+Standard approach:
+- Delete thin helpers first, but keep them if the removal just duplicates the same shared policy across several call sites.
+
+Change:
+- Tried deleting `store_failure(...)`.
+- The build failed because that helper was actually shared across several run-store and runtime-event save paths.
+- Restored it after confirming it still carries one repeated policy: "non-retriable store failure with no emitted structured error."
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- This helper stays.
+- The deletion attempt was useful because it proved the helper is real shared behavior, not accidental indirection.
+
+### Section 33: Delete the one-use API 404 adapter
+
+Issue:
+- `api_not_found(...)` only adapted Axum fallback extractors into one call to `not_found_for_method_path(...)`.
+
+Standard approach:
+- Axum supports inline fallback closures directly. If the adapter adds no behavior, keep the closure at the router composition point.
+
+Change:
+- Inlined the API fallback closure in `create_app(...)`.
+- Deleted `api_not_found(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `pnpm build`
+- `pnpm test:session:local`
+
+Result:
+- One more one-use router adapter deleted.
+- The API fallback path now reads directly in the router setup.
+
+### Section 34: Delete the public run path wrapper
+
+Issue:
+- `RunPath` only existed to carry three route captures and a tiny `scope()` helper for the three public run handlers.
+
+Standard approach:
+- Axum supports tuple `Path` extraction by route position. If the handler only needs the captured strings, extracting the tuple directly is the plain form.
+
+Change:
+- Switched the public run handlers to `Path<(String, String, String)>`.
+- Built `Scope` inline where needed.
+- Deleted `RunPath` and its `scope()` helper.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `pnpm build`
+- `pnpm test:session:local`
+
+Result:
+- One more route-local type deleted.
+- The public run handlers now show their path inputs directly instead of hopping through a wrapper struct.
+
+### Section 35: Delete dead server configuration state
+
+Issue:
+- `ServerOptions.session_service` was still being threaded through main and server tests even though `ServerInstance` never read it.
+
+Standard approach:
+- Do not keep constructor fields that are only passed around and never consumed. Delete dead configuration instead of preserving it "just in case."
+
+Change:
+- Removed `session_service` from `ServerOptions`.
+- Deleted the now-dead field wiring in the API entrypoint and server tests.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `pnpm build`
+- `pnpm test:session:local`
+
+Result:
+- One dead server option removed.
+- Server construction now carries only the state it actually uses.
+
+### Section 36: Delete the unused server database fallback branch
+
+Issue:
+- `ServerInstance::start(...)` still carried a fallback branch that created its own `Database` from `sql_connection_string` when `database` was missing.
+- The real entrypoint already creates the database up front, and the server tests already inject a probe directly.
+
+Standard approach:
+- Prefer explicit constructor requirements over optional dependencies plus internal fallback creation when all real callers already provide the dependency.
+
+Change:
+- Made `ServerOptions.database` required instead of optional.
+- Removed `ServerOptions.sql_connection_string`.
+- Removed the internal `Database::connect(...)` fallback branch from `ServerInstance::start(...)`.
+- Simplified `ServerInstance` to always hold a concrete database probe.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `pnpm build`
+- `pnpm test:session:local`
+
+Result:
+- One unused startup branch removed.
+- Server startup now has one obvious path: receive a database, probe it, run the server.
+
+### Section 37: Delete the one-use startup probe helper
+
+Issue:
+- After removing the optional database fallback branch, `verify_startup_probe(...)` only wrapped one `database.ping()` match in one place.
+
+Standard approach:
+- If a startup check is only used once and the logic is still clear inline, keep it in the startup path instead of bouncing through a helper.
+
+Change:
+- Inlined the startup probe match into `ServerInstance::start(...)`.
+- Deleted `verify_startup_probe(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `pnpm build`
+- `pnpm test:session:local`
+
+Result:
+- One more one-use server helper deleted.
+- The startup path now shows readiness marking and startup failure handling directly.
+
+### Section 38: Delete the binary-only server orchestration helper
+
+Issue:
+- `run_server_until_shutdown(...)` was only called from `main.rs` and only existed to wrap `ServerInstance::new(...)`, `start()`, signal waiting, and `stop()`.
+
+Standard approach:
+- Keep binary-only orchestration in the binary entrypoint. Library code should keep reusable stateful pieces like `ServerInstance`, not a one-off top-level wrapper.
+
+Change:
+- Moved server construction, signal waiting, and shutdown orchestration into `main.rs`.
+- Deleted `run_server_until_shutdown(...)`.
+- Removed it from the library re-export surface.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `pnpm build`
+- `pnpm test:session:local`
+
+Result:
+- One more binary-only helper deleted.
+- The library now exposes the reusable server pieces, and the binary owns its own process lifecycle.
+
+### Section 39: Delete binary-only `run()` wrappers
+
+Issue:
+- `main.rs` and `bin/migrate.rs` each still had a one-use `run()` helper that only wrapped the actual binary body and fed its error back to `main()`.
+
+Standard approach:
+- If a binary-only helper adds no reusable policy, keep the body in `main()` and use a local async block for the error boundary.
+
+Change:
+- Inlined the API server startup body into `main()` in `main.rs`.
+- Inlined the migration body into `main()` in `bin/migrate.rs`.
+- Deleted both one-use `run()` helpers.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `pnpm build`
+- `pnpm test:session:local`
+
+Result:
+- Two more binary-only helpers deleted.
+- The binaries now show their full control flow directly at the entrypoint.

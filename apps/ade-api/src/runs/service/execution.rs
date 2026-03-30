@@ -190,7 +190,9 @@ impl RunService {
                                             operation_id: None,
                                             timings: None,
                                         },
-                                    ).await.map_err(store_failure)?;
+                                    )
+                                    .await
+                                    .map_err(store_failure)?;
                                 }
                                 RunBridgeClientMessage::Log { level, message, phase } => {
                                     self.handle_runtime_event(
@@ -198,7 +200,9 @@ impl RunService {
                                         run,
                                         Some(active),
                                         RunEventPayload::Log { level, message, phase },
-                                    ).await.map_err(store_failure)?;
+                                    )
+                                    .await
+                                    .map_err(store_failure)?;
                                 }
                                 RunBridgeClientMessage::Error { phase, message, retriable } => {
                                     structured_error = Some((message.clone(), phase, retriable));
@@ -211,7 +215,9 @@ impl RunService {
                                             message,
                                             retriable,
                                         },
-                                    ).await.map_err(store_failure)?;
+                                    )
+                                    .await
+                                    .map_err(store_failure)?;
                                 }
                                 RunBridgeClientMessage::Result { output_path, validation_issues } => {
                                     result = Some(AttemptSuccess {
@@ -226,7 +232,14 @@ impl RunService {
                                             output_path,
                                             validation_issues,
                                         },
-                                    ).await.map_err(store_failure)?;
+                                    )
+                                    .await
+                                    .map_err(|error| AttemptFailure {
+                                        emitted_error: false,
+                                        error,
+                                        phase: None,
+                                        retriable: false,
+                                    })?;
                                 }
                             }
                         }

@@ -289,22 +289,33 @@ where
     let status = response.status();
 
     if !status.is_success() {
-        let message = error_message(response).await?;
+        #[derive(Deserialize)]
+        struct ErrorBody {
+            message: Option<String>,
+        }
+
+        let bytes = response.bytes().await.map_err(|error| {
+            AppError::internal_with_source(
+                "Failed to read the session-pool error response.".to_string(),
+                error,
+            )
+        })?;
+        let message = if let Ok(body) = serde_json::from_slice::<ErrorBody>(&bytes)
+            && let Some(message) = body.message
+        {
+            message
+        } else {
+            let fallback = String::from_utf8_lossy(&bytes).trim().to_string();
+            if fallback.is_empty() {
+                "The session pool did not return an error message.".to_string()
+            } else {
+                fallback
+            }
+        };
         return Err(map_session_pool_http_error(status, message));
     }
 
-    let metadata = session_operation_metadata(response.headers());
-    let value = response.json::<T>().await.map_err(|error| {
-        AppError::internal_with_source(
-            format!("Failed to decode the session-pool response while trying to {operation}."),
-            error,
-        )
-    })?;
-
-    Ok(SessionOperationResult { metadata, value })
-}
-
-fn session_operation_metadata(headers: &reqwest::header::HeaderMap) -> SessionOperationMetadata {
+    let headers = response.headers().clone();
     let header_string = |name| {
         headers
             .get(name)
@@ -325,8 +336,7 @@ fn session_operation_metadata(headers: &reqwest::header::HeaderMap) -> SessionOp
         overall_execution_time_ms: header_u64("x-ms-overall-execution-time"),
         preparation_time_ms: header_u64("x-ms-preparation-time"),
     };
-
-    SessionOperationMetadata {
+    let metadata = SessionOperationMetadata {
         operation_id: header_string("operation-id"),
         session_guid: header_string("x-ms-session-guid"),
         timings: if timings.allocation_time_ms.is_some()
@@ -338,33 +348,15 @@ fn session_operation_metadata(headers: &reqwest::header::HeaderMap) -> SessionOp
         } else {
             None
         },
-    }
-}
-
-async fn error_message(response: reqwest::Response) -> Result<String, AppError> {
-    #[derive(Deserialize)]
-    struct ErrorBody {
-        message: Option<String>,
-    }
-
-    let bytes = response.bytes().await.map_err(|error| {
+    };
+    let value = response.json::<T>().await.map_err(|error| {
         AppError::internal_with_source(
-            "Failed to read the session-pool error response.".to_string(),
+            format!("Failed to decode the session-pool response while trying to {operation}."),
             error,
         )
     })?;
-    if let Ok(body) = serde_json::from_slice::<ErrorBody>(&bytes)
-        && let Some(message) = body.message
-    {
-        return Ok(message);
-    }
 
-    let fallback = String::from_utf8_lossy(&bytes).trim().to_string();
-    Ok(if fallback.is_empty() {
-        "The session pool did not return an error message.".to_string()
-    } else {
-        fallback
-    })
+    Ok(SessionOperationResult { metadata, value })
 }
 
 fn map_session_pool_http_error(status: reqwest::StatusCode, message: String) -> AppError {

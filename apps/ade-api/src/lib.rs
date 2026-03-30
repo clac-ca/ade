@@ -12,9 +12,7 @@ pub mod terminal;
 
 pub use api::{AppState, create_app};
 
-pub use server::{
-    ServerInstance, ServerOptions, init_tracing, run_server_until_shutdown, unix_time_ms,
-};
+pub use server::{ServerInstance, ServerOptions, init_tracing, unix_time_ms};
 
 pub mod embedded_migrations {
     use refinery::embed_migrations;

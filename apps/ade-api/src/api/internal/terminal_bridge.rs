@@ -20,22 +20,16 @@ pub fn router() -> Router<crate::api::AppState> {
 async fn connect(
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     State(terminal_service): State<Arc<TerminalService>>,
-    Path(path): Path<BridgePath>,
+    Path(channel_id): Path<String>,
     Query(query): Query<BridgeQuery>,
 ) -> Result<Response, AppError> {
     let ws = ws.map_err(|error| AppError::request(error.to_string()))?;
-    let bridge_tx = terminal_service.claim_bridge(&path.channel_id, &query.token)?;
+    let bridge_tx = terminal_service.claim_bridge(&channel_id, &query.token)?;
     Ok(ws
         .max_message_size(1024 * 1024)
         .on_upgrade(move |socket| async move {
             let _ = bridge_tx.send(socket);
         }))
-}
-
-#[derive(Deserialize)]
-struct BridgePath {
-    #[serde(rename = "channelId")]
-    channel_id: String,
 }
 
 #[derive(Deserialize)]
