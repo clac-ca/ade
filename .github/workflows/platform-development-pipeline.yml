@@ -43,11 +43,8 @@ concurrency:
 permissions:
   contents: read
 
-defaults:
-  run:
-    shell: bash
-
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   IMAGE_NAME: ${{ github.repository_owner }}/ade-platform
   REGISTRY: ghcr.io
 
@@ -143,14 +140,6 @@ jobs:
             apps/ade-api/target
           key: ${{ steps.rust_cache.outputs.cache-primary-key }}
 
-      - name: Extract image tags and labels
-        id: meta
-        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,prefix=sha-
-
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push'
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
@@ -167,18 +156,53 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
-      - name: Build release candidate image (PR)
-        if: github.event_name == 'pull_request'
+      - name: Restore BuildKit Cargo cache
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        id: buildkit_cargo_cache
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-target
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-registry
+          key: ${{ github.event_name == 'push' && format('buildkit-cargo-main-{0}-{1}', runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'apps/ade-api/Cargo.lock', 'apps/ade-api/Cargo.toml')) || format('buildkit-cargo-pr-{0}-{1}-{2}', github.event.pull_request.number, runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'apps/ade-api/Cargo.lock', 'apps/ade-api/Cargo.toml')) }}
+          restore-keys: |
+            ${{ github.event_name == 'pull_request' && format('buildkit-cargo-pr-{0}-{1}-', github.event.pull_request.number, runner.os) || '' }}
+            buildkit-cargo-main-${{ runner.os }}-
+
+      - name: Restore BuildKit Cargo cache mounts
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        uses: reproducible-containers/buildkit-cache-dance@5de31fc1534ed8789e63d41ea933c5df9944a261 # v3.1.0
+        with:
+          cache-map: |
+            {
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-api-target": {
+                "target": "/build/apps/ade-api/target",
+                "id": "ade-api-target"
+              },
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git": {
+                "target": "/usr/local/cargo/git/db",
+                "id": "ade-api-cargo-git"
+              },
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-registry": {
+                "target": "/usr/local/cargo/registry",
+                "id": "ade-api-cargo-registry"
+              }
+            }
+          skip-extraction: ${{ steps.buildkit_cargo_cache.outputs.cache-hit == 'true' }}
+
+      - name: Build release candidate image (PR same-repo)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
         with:
           build-args: |
             SERVICE_VERSION=${{ steps.version.outputs.release_version }}
-          cache-from: type=gha,scope=ade-platform-release-candidate
+          cache-from: |
+            type=gha,scope=ade-platform-release-candidate-pr-${{ github.event.pull_request.number }}
+            type=gha,scope=ade-platform-release-candidate-main
+          cache-to: type=gha,scope=ade-platform-release-candidate-pr-${{ github.event.pull_request.number }},mode=max
           context: .
           file: ./Dockerfile
-          labels: ${{ steps.meta.outputs.labels }}
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
 
       - name: Build release candidate image (push)
         if: github.event_name == 'push'
@@ -187,13 +211,13 @@ jobs:
         with:
           build-args: |
             SERVICE_VERSION=${{ steps.version.outputs.release_version }}
-          cache-from: type=gha,scope=ade-platform-release-candidate
-          cache-to: type=gha,scope=ade-platform-release-candidate,mode=max
+          cache-from: |
+            type=gha,scope=ade-platform-release-candidate-main
+          cache-to: type=gha,scope=ade-platform-release-candidate-main,mode=max
           context: .
           file: ./Dockerfile
-          labels: ${{ steps.meta.outputs.labels }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
 
       - name: Export release candidate image ref
         if: github.event_name == 'push'
