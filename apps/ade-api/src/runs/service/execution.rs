@@ -521,7 +521,20 @@ impl RunService {
         }
 
         let pending = self.bridge_manager.create();
-        let bridge_url = self.build_bridge_url(&pending.bridge_id);
+        let expires_at_ms = unix_time_ms() + BRIDGE_TOKEN_TTL_MS;
+        let token = create_bridge_token(&self.session_secret, &pending.bridge_id, expires_at_ms);
+        let mut bridge_url = self.app_url.clone();
+        let scheme = if bridge_url.scheme() == "http" {
+            "ws"
+        } else {
+            "wss"
+        };
+        bridge_url
+            .set_scheme(scheme)
+            .expect("ADE_APP_URL scheme was validated at startup");
+        bridge_url.set_path(&format!("/api/internal/run-bridges/{}", pending.bridge_id));
+        bridge_url.set_query(None);
+        bridge_url.query_pairs_mut().append_pair("token", &token);
         let access_expires_at = time::OffsetDateTime::now_utc()
             + time::Duration::seconds(
                 attempt.timeout_in_seconds.unwrap_or(RUN_ACCESS_TTL_SECONDS) as i64,
@@ -550,7 +563,7 @@ impl RunService {
             config_package_name: runtime.config_package_name,
             config_version: runtime.config_version.clone(),
             config_wheel_path: session_path(&runtime.config_filename),
-            bridge_url,
+            bridge_url: bridge_url.to_string(),
             engine_package_name: runtime.engine_package_name,
             engine_version: runtime.engine_version.clone(),
             engine_wheel_path: session_path(&runtime.engine_filename),
@@ -674,24 +687,6 @@ impl RunService {
                 Err(AppError::status(StatusCode::BAD_GATEWAY, "Timed out waiting for the run bridge to connect."))
             }
         }
-    }
-
-    fn build_bridge_url(&self, bridge_id: &str) -> String {
-        let expires_at_ms = unix_time_ms() + BRIDGE_TOKEN_TTL_MS;
-        let token = create_bridge_token(&self.session_secret, bridge_id, expires_at_ms);
-        let mut bridge_url = self.app_url.clone();
-        let scheme = if bridge_url.scheme() == "http" {
-            "ws"
-        } else {
-            "wss"
-        };
-        bridge_url
-            .set_scheme(scheme)
-            .expect("ADE_APP_URL scheme was validated at startup");
-        bridge_url.set_path(&format!("/api/internal/run-bridges/{bridge_id}"));
-        bridge_url.set_query(None);
-        bridge_url.query_pairs_mut().append_pair("token", &token);
-        bridge_url.to_string()
     }
 }
 

@@ -138,3 +138,24 @@ Validation:
 Result:
 - Fewer tiny helpers in the run, session, and terminal paths.
 - The remaining helpers now correspond more closely to real state transitions or reusable operations.
+
+### Section 7: Delete one-use bridge URL builders
+
+Issue:
+- `terminal/service.rs` and `runs/service/execution.rs` each still had a dedicated `build_bridge_url(...)` helper used once.
+- Those helpers were simple local string construction and no longer hid any extra policy.
+
+Standard approach:
+- If a helper is used once and the call site stays readable, prefer putting the code where the data is assembled.
+
+Change:
+- Inlined terminal bridge URL construction into `run_browser_terminal(...)`.
+- Inlined run bridge URL construction into `run_attempt(...)`.
+- Removed both `build_bridge_url(...)` helper methods.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One fewer jump in each path where the bootstrap config is assembled.
+- The bootstrap inputs now read straight through at the call site.

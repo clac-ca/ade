@@ -91,10 +91,23 @@ impl TerminalService {
         };
 
         let pending = self.create_pending_terminal();
-        let bridge_url = self.build_bridge_url(&pending.channel_id, &pending.token);
+        let mut bridge_url = self.app_url.clone();
+        let scheme = if bridge_url.scheme() == "http" {
+            "ws"
+        } else {
+            "wss"
+        };
+        bridge_url
+            .set_scheme(scheme)
+            .expect("ADE_APP_URL scheme was validated at startup");
+        bridge_url.set_path(&format!("/api/internal/terminals/{}", pending.channel_id));
+        bridge_url.set_query(None);
+        bridge_url
+            .query_pairs_mut()
+            .append_pair("token", &pending.token);
 
         let bootstrap_code = match render_bootstrap_code(&TerminalBootstrapConfig {
-            bridge_url,
+            bridge_url: bridge_url.to_string(),
             cols: DEFAULT_TERMINAL_COLS,
             rows: DEFAULT_TERMINAL_ROWS,
         }) {
@@ -160,22 +173,6 @@ impl TerminalService {
     ) -> Result<oneshot::Sender<WebSocket>, AppError> {
         verify_bridge_token(&self.session_secret, channel_id, token, unix_time_ms())?;
         self.manager.claim(channel_id)
-    }
-
-    pub(crate) fn build_bridge_url(&self, channel_id: &str, token: &str) -> String {
-        let mut bridge_url = self.app_url.clone();
-        let scheme = if bridge_url.scheme() == "http" {
-            "ws"
-        } else {
-            "wss"
-        };
-        bridge_url
-            .set_scheme(scheme)
-            .expect("ADE_APP_URL scheme was validated at startup");
-        bridge_url.set_path(&format!("/api/internal/terminals/{channel_id}"));
-        bridge_url.set_query(None);
-        bridge_url.query_pairs_mut().append_pair("token", token);
-        bridge_url.to_string()
     }
 
     fn create_pending_terminal(&self) -> PendingBrowserTerminal {
