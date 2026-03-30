@@ -175,7 +175,10 @@ jobs:
         id: buildkit_cargo_cache
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
-          path: ${{ runner.temp }}/buildkit-cargo-cache
+          path: |
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-target
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-registry
           key: ${{ github.event_name == 'push' && format('buildkit-cargo-main-{0}-{1}', runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'apps/ade-api/Cargo.lock', 'apps/ade-api/Cargo.toml')) || format('buildkit-cargo-pr-{0}-{1}-{2}', github.event.pull_request.number, runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'apps/ade-api/Cargo.lock', 'apps/ade-api/Cargo.toml')) }}
           restore-keys: |
             ${{ github.event_name == 'pull_request' && format('buildkit-cargo-pr-{0}-{1}-', github.event.pull_request.number, runner.os) || '' }}
@@ -185,19 +188,17 @@ jobs:
         if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         uses: reproducible-containers/buildkit-cache-dance@5de31fc1534ed8789e63d41ea933c5df9944a261 # v3.1.0
         with:
-          builder: ${{ steps.buildx.outputs.name }}
-          cache-dir: ${{ runner.temp }}/buildkit-cargo-cache
           cache-map: |
             {
-              "ade-api-target": {
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-api-target": {
                 "target": "/build/apps/ade-api/target",
                 "id": "ade-api-target"
               },
-              "ade-api-cargo-git": {
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git": {
                 "target": "/usr/local/cargo/git/db",
                 "id": "ade-api-cargo-git"
               },
-              "ade-api-cargo-registry": {
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-registry": {
                 "target": "/usr/local/cargo/registry",
                 "id": "ade-api-cargo-registry"
               }
