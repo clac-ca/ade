@@ -43,10 +43,6 @@ concurrency:
 permissions:
   contents: read
 
-defaults:
-  run:
-    shell: bash
-
 env:
   IMAGE_NAME: ${{ github.repository_owner }}/ade-platform
   REGISTRY: ghcr.io
@@ -143,14 +139,6 @@ jobs:
             apps/ade-api/target
           key: ${{ steps.rust_cache.outputs.cache-primary-key }}
 
-      - name: Extract image tags and labels
-        id: meta
-        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,prefix=sha-
-
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push'
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
@@ -214,9 +202,6 @@ jobs:
           cache-to: type=gha,scope=ade-platform-release-candidate-pr-${{ github.event.pull_request.number }},mode=max
           context: .
           file: ./Dockerfile
-          labels: ${{ steps.meta.outputs.labels }}
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
 
       - name: Build release candidate image (PR fork)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
@@ -228,9 +213,6 @@ jobs:
             type=gha,scope=ade-platform-release-candidate-main
           context: .
           file: ./Dockerfile
-          labels: ${{ steps.meta.outputs.labels }}
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
 
       - name: Build release candidate image (push)
         if: github.event_name == 'push'
@@ -244,9 +226,8 @@ jobs:
           cache-to: type=gha,scope=ade-platform-release-candidate-main,mode=max
           context: .
           file: ./Dockerfile
-          labels: ${{ steps.meta.outputs.labels }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
 
       - name: Export release candidate image ref
         if: github.event_name == 'push'
