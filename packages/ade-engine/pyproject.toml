@@ -1,6 +1,6 @@
 [project]
 name = "ade-engine"
-version = "0.0.0"
+version = "2026.3.30.5"
 description = "Core spreadsheet extraction engine for ADE"
 readme = "README.md"
 requires-python = ">=3.12"
