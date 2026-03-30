@@ -3,10 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use axum::{
-    extract::ws::{Message, WebSocket},
-    http::StatusCode,
-};
+use axum::{extract::ws::WebSocket, http::StatusCode};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -52,7 +49,7 @@ pub(crate) enum RunBridgeServerMessage {
 
 #[derive(Clone, Default)]
 pub(crate) struct PendingRunBridgeManager {
-    inner: Arc<Mutex<HashMap<String, PendingRunBridgeEntry>>>,
+    inner: Arc<Mutex<HashMap<String, oneshot::Sender<WebSocket>>>>,
 }
 
 impl PendingRunBridgeManager {
@@ -68,33 +65,20 @@ impl PendingRunBridgeManager {
             .lock()
             .expect("pending run bridge lock poisoned")
             .remove(bridge_id)
-            .map(|entry| entry.bridge_tx)
             .ok_or_else(|| AppError::not_found("Run bridge not found."))
     }
 
-    pub(crate) fn create(&self) -> PendingRunBridge {
+    pub(crate) fn create(&self) -> (String, oneshot::Receiver<WebSocket>) {
         let bridge_id = Uuid::new_v4().simple().to_string();
         let (bridge_tx, bridge_rx) = oneshot::channel();
 
         self.inner
             .lock()
             .expect("pending run bridge lock poisoned")
-            .insert(bridge_id.clone(), PendingRunBridgeEntry { bridge_tx });
+            .insert(bridge_id.clone(), bridge_tx);
 
-        PendingRunBridge {
-            bridge_id,
-            bridge_rx,
-        }
+        (bridge_id, bridge_rx)
     }
-}
-
-pub(crate) struct PendingRunBridge {
-    pub(crate) bridge_id: String,
-    pub(crate) bridge_rx: oneshot::Receiver<WebSocket>,
-}
-
-struct PendingRunBridgeEntry {
-    bridge_tx: oneshot::Sender<WebSocket>,
 }
 
 pub(crate) fn create_bridge_token(secret: &str, bridge_id: &str, expires_at_ms: u64) -> String {
@@ -111,19 +95,6 @@ pub(crate) fn create_bridge_token(secret: &str, bridge_id: &str, expires_at_ms: 
 pub(crate) fn parse_bridge_message(text: &str) -> Result<RunBridgeClientMessage, AppError> {
     serde_json::from_str::<RunBridgeClientMessage>(text)
         .map_err(|error| AppError::request(format!("Invalid run bridge message: {error}")))
-}
-
-pub(crate) async fn send_json(
-    socket: &mut WebSocket,
-    payload: &impl Serialize,
-) -> Result<(), AppError> {
-    let message = serde_json::to_string(payload).map_err(|error| {
-        AppError::internal_with_source("Failed to encode a websocket payload.", error)
-    })?;
-    socket
-        .send(Message::Text(message.into()))
-        .await
-        .map_err(|error| AppError::internal_with_source("Failed to write to a websocket.", error))
 }
 
 pub(crate) fn verify_bridge_token(

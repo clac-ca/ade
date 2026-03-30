@@ -51,8 +51,11 @@ impl RunService {
                     match message {
                         RunBridgeClientMessage::Ready => break,
                         _ => {
-                            let _ = send_json(&mut bridge_socket, &RunBridgeServerMessage::Cancel)
-                                .await;
+                            if let Ok(message) =
+                                serde_json::to_string(&RunBridgeServerMessage::Cancel)
+                            {
+                                let _ = bridge_socket.send(Message::Text(message.into())).await;
+                            }
                             abandon_execution_task(&mut execution_task).await;
                             return Err(AttemptFailure {
                                 emitted_error: false,
@@ -147,7 +150,9 @@ impl RunService {
 
             tokio::select! {
                 _ = cancel_rx.changed() => {
-                    let _ = send_json(&mut bridge_socket, &RunBridgeServerMessage::Cancel).await;
+                    if let Ok(message) = serde_json::to_string(&RunBridgeServerMessage::Cancel) {
+                        let _ = bridge_socket.send(Message::Text(message.into())).await;
+                    }
                     execution_task.abort();
                     return Err(cancelled_failure());
                 }
@@ -520,9 +525,9 @@ impl RunService {
             return Err(cancelled_failure());
         }
 
-        let pending = self.bridge_manager.create();
+        let (bridge_id, bridge_rx) = self.bridge_manager.create();
         let expires_at_ms = unix_time_ms() + BRIDGE_TOKEN_TTL_MS;
-        let token = create_bridge_token(&self.session_secret, &pending.bridge_id, expires_at_ms);
+        let token = create_bridge_token(&self.session_secret, &bridge_id, expires_at_ms);
         let mut bridge_url = self.app_url.clone();
         let scheme = if bridge_url.scheme() == "http" {
             "ws"
@@ -532,12 +537,12 @@ impl RunService {
         bridge_url
             .set_scheme(scheme)
             .expect("ADE_APP_URL scheme was validated at startup");
-        bridge_url.set_path(&format!("/api/internal/run-bridges/{}", pending.bridge_id));
+        bridge_url.set_path(&format!("/api/internal/run-bridges/{bridge_id}"));
         bridge_url.set_query(None);
         bridge_url.query_pairs_mut().append_pair("token", &token);
         let access_expires_at = time::OffsetDateTime::now_utc()
             + time::Duration::seconds(
-                attempt.timeout_in_seconds.unwrap_or(RUN_ACCESS_TTL_SECONDS) as i64,
+                attempt.timeout_in_seconds.unwrap_or(RUN_ACCESS_TTL_SECONDS) as i64
             );
         let input_download = self
             .artifact_store
@@ -610,7 +615,10 @@ impl RunService {
                 .await
         });
 
-        let bridge_socket = match self.wait_for_run_bridge(pending, active).await {
+        let bridge_socket = match self
+            .wait_for_run_bridge(&bridge_id, bridge_rx, active)
+            .await
+        {
             Ok(bridge_socket) => bridge_socket,
             Err(error) => {
                 abandon_execution_task(&mut execution_task).await;
@@ -665,25 +673,25 @@ impl RunService {
 
     async fn wait_for_run_bridge(
         &self,
-        pending: PendingRunBridge,
+        bridge_id: &str,
+        bridge_rx: oneshot::Receiver<WebSocket>,
         active: &ActiveRunHandle,
     ) -> Result<WebSocket, AppError> {
         let timeout = tokio::time::sleep(BRIDGE_READY_TIMEOUT);
         tokio::pin!(timeout);
-        let bridge_rx = pending.bridge_rx;
         tokio::pin!(bridge_rx);
         let mut cancel_rx = active.cancel_rx.clone();
 
         tokio::select! {
             _ = cancel_rx.changed() => {
-                self.bridge_manager.cancel(&pending.bridge_id);
+                self.bridge_manager.cancel(bridge_id);
                 Err(AppError::request("Run cancelled."))
             }
             result = &mut bridge_rx => {
                 result.map_err(|_| AppError::status(StatusCode::BAD_GATEWAY, "Run bridge did not connect."))
             }
             _ = &mut timeout => {
-                self.bridge_manager.cancel(&pending.bridge_id);
+                self.bridge_manager.cancel(bridge_id);
                 Err(AppError::status(StatusCode::BAD_GATEWAY, "Timed out waiting for the run bridge to connect."))
             }
         }

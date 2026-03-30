@@ -38,8 +38,8 @@ use super::{
         render_bootstrap_code, session_path,
     },
     bridge::{
-        PendingRunBridge, PendingRunBridgeManager, RunBridgeClientMessage, RunBridgeServerMessage,
-        create_bridge_token, parse_bridge_message, send_json, verify_bridge_token,
+        PendingRunBridgeManager, RunBridgeClientMessage, RunBridgeServerMessage,
+        create_bridge_token, parse_bridge_message, verify_bridge_token,
     },
     events::{RunEventFeed, run_events_path},
     models::{

@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    ops::ControlFlow,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -19,12 +20,11 @@ use crate::{
 use super::{
     bootstrap::{TerminalBootstrapConfig, render_bootstrap_code},
     bridge::{
-        PendingBrowserTerminal, PendingTerminalManager, create_bridge_token, generate_channel_id,
-        verify_bridge_token,
+        PendingTerminalManager, create_bridge_token, generate_channel_id, verify_bridge_token,
     },
     protocol::{
-        BrowserStartupOutcome, TerminalPhase, TerminalRelayOutcome, TerminalServerMessage,
-        forward_bridge_message, forward_browser_message, parse_server_message, send_close_message,
+        TerminalClientMessage, TerminalServerMessage, forward_bridge_message,
+        forward_browser_message, parse_client_message, parse_server_message, send_close_message,
         send_terminal_event,
     },
 };
@@ -35,6 +35,13 @@ const BRIDGE_TOKEN_TTL_MS: u64 = 60_000;
 const DEFAULT_TERMINAL_COLS: u16 = 120;
 const DEFAULT_TERMINAL_ROWS: u16 = 32;
 const TERMINAL_EXECUTION_TIMEOUT_SECONDS: u64 = 220;
+
+#[derive(Debug)]
+enum TerminalPhase<T> {
+    AwaitExecution,
+    Continue(T),
+    Finished,
+}
 
 #[derive(Clone)]
 pub struct TerminalService {
@@ -90,7 +97,13 @@ impl TerminalService {
             }
         };
 
-        let pending = self.create_pending_terminal();
+        let channel_id = generate_channel_id(&self.session_secret);
+        let token = create_bridge_token(
+            &self.session_secret,
+            &channel_id,
+            unix_time_ms() + BRIDGE_TOKEN_TTL_MS,
+        );
+        let bridge_rx = self.manager.create(channel_id.clone());
         let mut bridge_url = self.app_url.clone();
         let scheme = if bridge_url.scheme() == "http" {
             "ws"
@@ -100,11 +113,9 @@ impl TerminalService {
         bridge_url
             .set_scheme(scheme)
             .expect("ADE_APP_URL scheme was validated at startup");
-        bridge_url.set_path(&format!("/api/internal/terminals/{}", pending.channel_id));
+        bridge_url.set_path(&format!("/api/internal/terminals/{channel_id}"));
         bridge_url.set_query(None);
-        bridge_url
-            .query_pairs_mut()
-            .append_pair("token", &pending.token);
+        bridge_url.query_pairs_mut().append_pair("token", &token);
 
         let bootstrap_code = match render_bootstrap_code(&TerminalBootstrapConfig {
             bridge_url: bridge_url.to_string(),
@@ -119,18 +130,28 @@ impl TerminalService {
                 )
                 .await;
                 let _ = browser_socket.send(Message::Close(None)).await;
-                self.manager.cancel(&pending.channel_id);
+                self.manager.cancel(&channel_id);
                 return;
             }
         };
 
-        let mut execution_task =
-            spawn_terminal_execution(Arc::clone(&self.session_service), scope, bootstrap_code);
+        let session_service = Arc::clone(&self.session_service);
+        let mut execution_task = tokio::spawn(async move {
+            Ok(session_service
+                .execute_inline_python_detailed(
+                    &scope,
+                    bootstrap_code,
+                    Some(TERMINAL_EXECUTION_TIMEOUT_SECONDS),
+                )
+                .await?
+                .value)
+        });
         let startup_deadline = Instant::now() + BRIDGE_READY_TIMEOUT;
 
         let mut bridge_socket = match self
             .wait_for_bridge_socket(
-                pending,
+                &channel_id,
+                bridge_rx,
                 &mut browser_socket,
                 &mut execution_task,
                 startup_deadline,
@@ -175,26 +196,16 @@ impl TerminalService {
         self.manager.claim(channel_id)
     }
 
-    fn create_pending_terminal(&self) -> PendingBrowserTerminal {
-        let channel_id = generate_channel_id(&self.session_secret);
-        let token = create_bridge_token(
-            &self.session_secret,
-            &channel_id,
-            unix_time_ms() + BRIDGE_TOKEN_TTL_MS,
-        );
-        self.manager.create(channel_id, token)
-    }
-
     async fn wait_for_bridge_socket(
         &self,
-        pending: PendingBrowserTerminal,
+        channel_id: &str,
+        bridge_rx: oneshot::Receiver<WebSocket>,
         browser_socket: &mut WebSocket,
         execution_task: &mut JoinHandle<Result<PythonExecution, AppError>>,
         startup_deadline: Instant,
     ) -> TerminalPhase<WebSocket> {
         let startup_timeout = tokio::time::sleep_until(startup_deadline);
         tokio::pin!(startup_timeout);
-        let bridge_rx = pending.bridge_rx;
         tokio::pin!(bridge_rx);
 
         loop {
@@ -215,22 +226,49 @@ impl TerminalService {
                     };
                 }
                 browser_message = browser_socket.recv() => {
-                    match BrowserStartupOutcome::from_message(browser_message) {
-                        BrowserStartupOutcome::Ignore => {}
-                        BrowserStartupOutcome::Disconnect => {
-                            self.manager.cancel(&pending.channel_id);
+                    match browser_message {
+                        Some(Ok(Message::Text(text))) => match parse_client_message(text.as_str()) {
+                            Ok(TerminalClientMessage::Close) => {
+                                self.manager.cancel(channel_id);
+                                return TerminalPhase::AwaitExecution;
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                self.manager.cancel(channel_id);
+                                let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(error.to_string())).await;
+                                let _ = browser_socket.send(Message::Close(None)).await;
+                                return TerminalPhase::AwaitExecution;
+                            }
+                        },
+                        Some(Ok(Message::Binary(_))) => {
+                            self.manager.cancel(channel_id);
+                            let _ = send_terminal_event(
+                                browser_socket,
+                                TerminalServerMessage::error(
+                                    "Binary terminal messages are not supported.".to_string(),
+                                ),
+                            ).await;
+                            let _ = browser_socket.send(Message::Close(None)).await;
                             return TerminalPhase::AwaitExecution;
                         }
-                        BrowserStartupOutcome::Error(message) => {
-                            self.manager.cancel(&pending.channel_id);
-                            let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(message)).await;
+                        Some(Ok(Message::Close(_))) | None => {
+                            self.manager.cancel(channel_id);
+                            return TerminalPhase::AwaitExecution;
+                        }
+                        Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+                        Some(Err(error)) => {
+                            self.manager.cancel(channel_id);
+                            let _ = send_terminal_event(
+                                browser_socket,
+                                TerminalServerMessage::error(format!("Browser websocket failed: {error}")),
+                            ).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
                             return TerminalPhase::AwaitExecution;
                         }
                     }
                 }
                 result = &mut *execution_task => {
-                    self.manager.cancel(&pending.channel_id);
+                    self.manager.cancel(channel_id);
                     let message = match join_execution_result(result) {
                         Ok(execution) => execution_failure_message(&execution),
                         Err(error) => error.to_string(),
@@ -240,7 +278,7 @@ impl TerminalService {
                     return TerminalPhase::Finished;
                 }
                 _ = &mut startup_timeout => {
-                    self.manager.cancel(&pending.channel_id);
+                    self.manager.cancel(channel_id);
                     let _ = send_terminal_event(
                         browser_socket,
                         TerminalServerMessage::error(
@@ -327,14 +365,41 @@ impl TerminalService {
                     }
                 }
                 browser_message = browser_socket.recv() => {
-                    match BrowserStartupOutcome::from_message(browser_message) {
-                        BrowserStartupOutcome::Ignore => {}
-                        BrowserStartupOutcome::Disconnect => {
+                    match browser_message {
+                        Some(Ok(Message::Text(text))) => match parse_client_message(text.as_str()) {
+                            Ok(TerminalClientMessage::Close) => {
+                                let _ = send_close_message(bridge_socket).await;
+                                return TerminalPhase::AwaitExecution;
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(error.to_string())).await;
+                                let _ = send_close_message(bridge_socket).await;
+                                let _ = browser_socket.send(Message::Close(None)).await;
+                                return TerminalPhase::AwaitExecution;
+                            }
+                        },
+                        Some(Ok(Message::Binary(_))) => {
+                            let _ = send_terminal_event(
+                                browser_socket,
+                                TerminalServerMessage::error(
+                                    "Binary terminal messages are not supported.".to_string(),
+                                ),
+                            ).await;
+                            let _ = send_close_message(bridge_socket).await;
+                            let _ = browser_socket.send(Message::Close(None)).await;
+                            return TerminalPhase::AwaitExecution;
+                        }
+                        Some(Ok(Message::Close(_))) | None => {
                             let _ = send_close_message(bridge_socket).await;
                             return TerminalPhase::AwaitExecution;
                         }
-                        BrowserStartupOutcome::Error(message) => {
-                            let _ = send_terminal_event(browser_socket, TerminalServerMessage::error(message)).await;
+                        Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+                        Some(Err(error)) => {
+                            let _ = send_terminal_event(
+                                browser_socket,
+                                TerminalServerMessage::error(format!("Browser websocket failed: {error}")),
+                            ).await;
                             let _ = send_close_message(bridge_socket).await;
                             let _ = browser_socket.send(Message::Close(None)).await;
                             return TerminalPhase::AwaitExecution;
@@ -386,8 +451,8 @@ impl TerminalService {
                     match browser_message {
                         Some(Ok(message)) => {
                             match forward_browser_message(message, &mut bridge_socket).await {
-                                Ok(TerminalRelayOutcome::Continue) => {}
-                                Ok(TerminalRelayOutcome::Close) => break,
+                                Ok(ControlFlow::Continue(())) => {}
+                                Ok(ControlFlow::Break(())) => break,
                                 Err(error) => {
                                     let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::error(error.to_string())).await;
                                     let _ = send_close_message(&mut bridge_socket).await;
@@ -413,8 +478,8 @@ impl TerminalService {
                     match bridge_message {
                         Some(Ok(message)) => {
                             match forward_bridge_message(message, &mut browser_socket).await {
-                                Ok(TerminalRelayOutcome::Continue) => {}
-                                Ok(TerminalRelayOutcome::Close) => break,
+                                Ok(ControlFlow::Continue(())) => {}
+                                Ok(ControlFlow::Break(())) => break,
                                 Err(error) => {
                                     let _ = send_terminal_event(&mut browser_socket, TerminalServerMessage::error(error.to_string())).await;
                                     let _ = send_close_message(&mut bridge_socket).await;
@@ -508,14 +573,6 @@ impl ActiveTerminalManager {
             manager: self.clone(),
         })
     }
-
-    fn release(&self, key: &str) {
-        let _ = self
-            .inner
-            .lock()
-            .expect("active terminal session lock poisoned")
-            .remove(key);
-    }
 }
 
 struct ActiveTerminalLease {
@@ -525,25 +582,13 @@ struct ActiveTerminalLease {
 
 impl Drop for ActiveTerminalLease {
     fn drop(&mut self) {
-        self.manager.release(&self.key);
+        let _ = self
+            .manager
+            .inner
+            .lock()
+            .expect("active terminal session lock poisoned")
+            .remove(&self.key);
     }
-}
-
-fn spawn_terminal_execution(
-    session_service: Arc<SessionService>,
-    scope: Scope,
-    bootstrap_code: String,
-) -> JoinHandle<Result<PythonExecution, AppError>> {
-    tokio::spawn(async move {
-        Ok(session_service
-            .execute_inline_python_detailed(
-                &scope,
-                bootstrap_code,
-                Some(TERMINAL_EXECUTION_TIMEOUT_SECONDS),
-            )
-            .await?
-            .value)
-    })
 }
 
 fn spawn_execution_cleanup(
@@ -578,7 +623,10 @@ fn execution_failure_message(execution: &PythonExecution) -> String {
     if !execution.stdout.trim().is_empty() {
         return execution.stdout.trim().to_string();
     }
-    format!("Terminal execution failed with status {}.", execution.status)
+    format!(
+        "Terminal execution failed with status {}.",
+        execution.status
+    )
 }
 
 #[cfg(test)]
@@ -658,13 +706,13 @@ mod tests {
     #[test]
     fn pending_bridges_are_removed_on_cancel_and_claim() {
         let manager = PendingTerminalManager::default();
-        let pending = manager.create("channel-a".to_string(), "token".to_string());
+        let _bridge_rx = manager.create("channel-a".to_string());
 
-        manager.cancel(&pending.channel_id);
-        assert!(manager.claim(&pending.channel_id).is_err());
+        manager.cancel("channel-a");
+        assert!(manager.claim("channel-a").is_err());
 
-        let pending = manager.create("channel-b".to_string(), "token".to_string());
-        let _attachment = manager.claim(&pending.channel_id).unwrap();
-        assert!(manager.claim(&pending.channel_id).is_err());
+        let _bridge_rx = manager.create("channel-b".to_string());
+        let _attachment = manager.claim("channel-b").unwrap();
+        assert!(manager.claim("channel-b").is_err());
     }
 }

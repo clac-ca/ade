@@ -17,28 +17,23 @@ static CHANNEL_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default, Clone)]
 pub(crate) struct PendingTerminalManager {
-    inner: Arc<Mutex<HashMap<String, PendingBridgeEntry>>>,
+    inner: Arc<Mutex<HashMap<String, oneshot::Sender<WebSocket>>>>,
 }
 
 impl PendingTerminalManager {
-    pub(crate) fn create(&self, channel_id: String, token: String) -> PendingBrowserTerminal {
+    pub(crate) fn create(&self, channel_id: String) -> oneshot::Receiver<WebSocket> {
         let (bridge_tx, bridge_rx) = oneshot::channel();
-        let entry = PendingBridgeEntry { bridge_tx };
 
         self.inner
             .lock()
             .expect("pending terminal bridge lock poisoned")
-            .insert(channel_id.clone(), entry);
+            .insert(channel_id, bridge_tx);
 
-        PendingBrowserTerminal {
-            channel_id,
-            bridge_rx,
-            token,
-        }
+        bridge_rx
     }
 
     pub(crate) fn claim(&self, channel_id: &str) -> Result<oneshot::Sender<WebSocket>, AppError> {
-        let Some(entry) = self
+        let Some(bridge_tx) = self
             .inner
             .lock()
             .expect("pending terminal bridge lock poisoned")
@@ -47,7 +42,7 @@ impl PendingTerminalManager {
             return Err(AppError::not_found("Terminal bridge not found."));
         };
 
-        Ok(entry.bridge_tx)
+        Ok(bridge_tx)
     }
 
     pub(crate) fn cancel(&self, channel_id: &str) {
@@ -59,18 +54,12 @@ impl PendingTerminalManager {
     }
 }
 
-pub(crate) struct PendingBridgeEntry {
-    pub(crate) bridge_tx: oneshot::Sender<WebSocket>,
-}
-
-pub(crate) struct PendingBrowserTerminal {
-    pub(crate) channel_id: String,
-    pub(crate) bridge_rx: oneshot::Receiver<WebSocket>,
-    pub(crate) token: String,
-}
-
 pub(crate) fn create_bridge_token(secret: &str, channel_id: &str, expires_at_ms: u64) -> String {
-    let signature = bridge_signature(secret, channel_id, expires_at_ms);
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key is valid");
+    mac.update(channel_id.as_bytes());
+    mac.update(b":");
+    mac.update(expires_at_ms.to_string().as_bytes());
+    let signature = mac.finalize().into_bytes();
     format!("{expires_at_ms}.{}", hex::encode(signature))
 }
 
@@ -108,14 +97,6 @@ pub(crate) fn verify_bridge_token(
     })?;
 
     Ok(())
-}
-
-fn bridge_signature(secret: &str, channel_id: &str, expires_at_ms: u64) -> Vec<u8> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key is valid");
-    mac.update(channel_id.as_bytes());
-    mac.update(b":");
-    mac.update(expires_at_ms.to_string().as_bytes());
-    mac.finalize().into_bytes().to_vec()
 }
 
 pub(crate) fn generate_channel_id(secret: &str) -> String {

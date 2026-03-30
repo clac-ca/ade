@@ -159,3 +159,214 @@ Validation:
 Result:
 - One fewer jump in each path where the bootstrap config is assembled.
 - The bootstrap inputs now read straight through at the call site.
+
+### Section 8: Delete one-field bridge entry wrappers and the last one-use terminal setup helper
+
+Issue:
+- `terminal/bridge.rs` and `runs/bridge.rs` still stored `oneshot::Sender<WebSocket>` inside one-field wrapper structs.
+- `terminal/service.rs` still had `create_pending_terminal(...)`, used once.
+
+Standard approach:
+- If the map value is already the final type you need, store that type directly.
+- If a helper only composes a few values once at one call site, inline it.
+
+Change:
+- Replaced the bridge-manager map values with `oneshot::Sender<WebSocket>` directly.
+- Removed `PendingBridgeEntry` and `PendingRunBridgeEntry`.
+- Inlined `create_pending_terminal(...)` into `run_browser_terminal(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- The bridge managers now use the simplest possible storage shape.
+- Terminal startup no longer jumps through one more helper before the real bootstrap setup.
+
+### Section 9: Remove protocol-local control-flow types
+
+Issue:
+- `terminal/protocol.rs` still carried `BrowserStartupOutcome`, `TerminalPhase`, and `TerminalRelayOutcome`.
+- Only the actual wire types belong in `protocol.rs`; the startup and relay control-flow enums were service implementation details.
+- `TerminalRelayOutcome` also duplicated Rust's built-in `ControlFlow`.
+
+Standard approach:
+- Keep file-local control-flow state next to the service logic that uses it.
+- Prefer `std::ops::ControlFlow` over a custom `continue/close` enum when the standard type already matches.
+
+Change:
+- Moved `BrowserStartupOutcome` and `TerminalPhase` into `terminal/service.rs`.
+- Replaced `TerminalRelayOutcome` with `std::ops::ControlFlow<()>`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- `terminal/protocol.rs` is back to actual terminal protocol code.
+- One custom enum is deleted and the service control flow now uses the standard library type.
+
+### Section 10: Stop reparsing the session-pool endpoint on every request
+
+Issue:
+- `SessionPoolClient::from_env(...)` already parsed the session-pool endpoint to inspect the host.
+- The client still stored the raw string and reparsed it for every request, which kept config-error branches alive in the hot path.
+
+Standard approach:
+- Parse configuration once at startup and store the typed value.
+- Request code should build on validated state instead of revalidating config for every call.
+
+Change:
+- Stored the session-pool endpoint as `Url` in `SessionPoolClient`.
+- Validated that it can be used as a base URL in `from_env(...)`.
+- Changed `session_pool_url(...)` to build from the stored `Url` directly and removed the per-request `Result`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- Request construction now uses typed config instead of reparsing a string.
+- The request path no longer carries configuration failure branches that only belong at startup.
+
+### Section 11: Delete the terminal startup message enum and a one-use token helper
+
+Issue:
+- `terminal/service.rs` still used `BrowserStartupOutcome` only to wrap a direct `match` on browser startup messages.
+- `terminal/bridge.rs` still had a one-use `bridge_signature(...)` helper called only by `create_bridge_token(...)`.
+
+Standard approach:
+- If a helper or enum only renames a single local branch table, keep the branch table at the call site.
+- One-use crypto helpers should stay inline unless they hide shared policy.
+
+Change:
+- Inlined startup browser-message handling into `wait_for_bridge_socket(...)` and `wait_for_ready_message(...)`.
+- Deleted `BrowserStartupOutcome`.
+- Inlined the token signature calculation into `create_bridge_token(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One service-private enum deleted.
+- One one-use bridge helper deleted.
+- The terminal startup flow now reads directly from the actual browser/bridge state transitions.
+
+### Section 12: Delete the one-use upload path splitter
+
+Issue:
+- `session/client.rs` still had `split_session_file_path(...)`, used only once in `upload_file(...)`.
+- Its dedicated unit test only existed to support that helper.
+
+Standard approach:
+- If a helper only wraps a local `rsplit_once(...)` and the call site stays readable, inline it.
+
+Change:
+- Inlined the filename/directory split into `upload_file(...)`.
+- Deleted `split_session_file_path(...)`.
+- Deleted the helper-specific unit test.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One function and one dedicated test deleted.
+- The upload code now keeps the path split where the multipart request is assembled.
+
+### Section 13: Delete pending-bridge wrapper structs
+
+Issue:
+- `PendingBrowserTerminal` and `PendingRunBridge` were still just small transport bundles for ids plus a one-shot receiver.
+
+Standard approach:
+- Keep ids and receivers as plain local values when that is all the caller needs.
+- Let managers return the actual values the caller consumes, not one more wrapper type.
+
+Change:
+- `PendingTerminalManager::create(...)` now returns `oneshot::Receiver<WebSocket>`.
+- `PendingRunBridgeManager::create(...)` now returns `(String, oneshot::Receiver<WebSocket>)`.
+- Deleted `PendingBrowserTerminal` and `PendingRunBridge`.
+- Updated terminal and run startup code to keep bridge ids and receivers as locals.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- Two transport-only wrapper structs deleted.
+- Startup code now carries plain ids and receivers instead of extra bundle types.
+
+### Section 14: Delete the one-use terminal spawn helper
+
+Issue:
+- `spawn_terminal_execution(...)` only wrapped one `tokio::spawn(...)` call and was used once.
+
+Standard approach:
+- When a helper only exists to name one local spawn block, inline it at the call site.
+
+Change:
+- Inlined the terminal execution `tokio::spawn(...)` block into `run_browser_terminal(...)`.
+- Deleted `spawn_terminal_execution(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One more one-use helper removed.
+- Terminal startup now reads straight through from bootstrap construction to task spawn.
+
+### Section 15: Delete the one-use session file conversion and host predicate
+
+Issue:
+- `AzureFileRecord::into_session_file(...)` only wrapped one local struct conversion in `upload_file(...)`.
+- `is_dynamicsessions_host(...)` only wrapped a single host comparison used once at startup.
+
+Standard approach:
+- Keep one-off data reshaping at the point where the response is decoded if the mapping still fits on screen.
+- Inline tiny startup predicates when the branch stays obvious and there is only one caller.
+
+Change:
+- Inlined `AzureFileRecord -> SessionFile` conversion into `upload_file(...)`.
+- Inlined the Dynamicsessions host check into `SessionPoolClient::from_env(...)`.
+- Deleted the dedicated helper and its dedicated unit test.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- Two one-use helpers deleted.
+- The session upload path and startup auth inference now read directly where the values are used.
+
+### Section 16: Delete the generic run-bridge JSON sender
+
+Issue:
+- `runs/bridge.rs` still had `send_json(...)`, but it only sent the single `Cancel` control message in two places.
+
+Standard approach:
+- If a helper only hides one direct write of one concrete payload, send that payload directly at the call site.
+
+Change:
+- Deleted `send_json(...)`.
+- Inlined `RunBridgeServerMessage::Cancel` serialization and websocket send at the two cancel call sites in `execution.rs`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One generic bridge helper deleted.
+- Run cancellation is now expressed directly where the cancel signal is emitted.
+
+### Section 17: Delete the one-use active-session release helper
+
+Issue:
+- `ActiveTerminalManager::release(...)` was only called from `ActiveTerminalLease::drop(...)`.
+
+Standard approach:
+- If cleanup only exists to support one `Drop` impl, perform the cleanup directly in `drop(...)`.
+
+Change:
+- Deleted `ActiveTerminalManager::release(...)`.
+- Inlined the hash-set removal into `ActiveTerminalLease::drop(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One more one-use helper removed.
+- Terminal session cleanup now lives exactly where the lease ends.

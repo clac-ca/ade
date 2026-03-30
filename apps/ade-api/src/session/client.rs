@@ -48,7 +48,7 @@ pub(crate) struct SessionOperationResult<T> {
 
 pub(crate) struct SessionPoolClient {
     client: Client,
-    pool_management_endpoint: String,
+    pool_management_endpoint: Url,
     uses_azure_auth: bool,
 }
 
@@ -64,17 +64,26 @@ impl SessionPoolClient {
                 },
             )?;
 
-        let endpoint = Url::parse(&pool_management_endpoint).map_err(|error| {
+        let mut endpoint = Url::parse(&format!(
+            "{}/",
+            pool_management_endpoint.trim_end_matches('/')
+        ))
+        .map_err(|error| {
             AppError::config_with_source(
                 "Session pool endpoint is not a valid URL.".to_string(),
                 error,
             )
         })?;
-        let uses_azure_auth = endpoint.host_str().is_some_and(is_dynamicsessions_host);
+        endpoint.path_segments_mut().map_err(|()| {
+            AppError::config("Session pool endpoint cannot be used as a base URL.".to_string())
+        })?;
+        let uses_azure_auth = endpoint.host_str().is_some_and(|host| {
+            host == "dynamicsessions.io" || host.ends_with(".dynamicsessions.io")
+        });
 
         Ok(Self {
             client: Client::new(),
-            pool_management_endpoint,
+            pool_management_endpoint: endpoint,
             uses_azure_auth,
         })
     }
@@ -122,7 +131,10 @@ impl SessionPoolClient {
         content_type: Option<String>,
         content: Vec<u8>,
     ) -> Result<SessionOperationResult<SessionFile>, AppError> {
-        let (directory, name) = split_session_file_path(&filename);
+        let (directory, name) = match filename.rsplit_once('/') {
+            Some((directory, name)) if !directory.is_empty() => (Some(directory), name),
+            _ => (None, filename.as_str()),
+        };
         let mut part = Part::bytes(content).file_name(name.to_string());
         if let Some(content_type) = content_type {
             part = part.mime_str(&content_type).map_err(|error| {
@@ -144,7 +156,14 @@ impl SessionPoolClient {
             parse_json_response(request, "upload a session pool file").await?;
         Ok(SessionOperationResult {
             metadata: record.metadata,
-            value: record.value.into_session_file(),
+            value: SessionFile {
+                filename: match record.value.directory.as_deref() {
+                    Some("" | ".") | None => record.value.name,
+                    Some(directory) => format!("{directory}/{}", record.value.name),
+                },
+                last_modified_time: record.value.last_modified_at,
+                size: record.value.size_in_bytes,
+            },
         })
     }
 
@@ -182,7 +201,7 @@ impl SessionPoolClient {
             identifier,
             DEFAULT_AZURE_SESSION_API_VERSION,
             query_pairs,
-        )?;
+        );
         let request = self.client.request(method, url);
         if self.uses_azure_auth {
             return Ok(request.bearer_auth(data_plane_token().await?));
@@ -223,21 +242,6 @@ struct AzureFileRecord {
     size_in_bytes: usize,
 }
 
-impl AzureFileRecord {
-    fn into_session_file(self) -> SessionFile {
-        let filename = match self.directory.as_deref() {
-            Some("" | ".") | None => self.name,
-            Some(directory) => format!("{directory}/{}", self.name),
-        };
-
-        SessionFile {
-            filename,
-            last_modified_time: self.last_modified_at,
-            size: self.size_in_bytes,
-        }
-    }
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InlinePythonExecutionRequest {
@@ -275,28 +279,18 @@ async fn data_plane_token() -> Result<String, AppError> {
     Ok(token.token.secret().to_string())
 }
 
-fn is_dynamicsessions_host(host: &str) -> bool {
-    host == "dynamicsessions.io" || host.ends_with(".dynamicsessions.io")
-}
-
 fn session_pool_url(
-    base_endpoint: &str,
+    base_endpoint: &Url,
     path_segments: &[&str],
     identifier: &str,
     api_version: &str,
     query_pairs: &[(&str, &str)],
-) -> Result<Url, AppError> {
-    let mut url =
-        Url::parse(&format!("{}/", base_endpoint.trim_end_matches('/'))).map_err(|error| {
-            AppError::config_with_source(
-                "Session pool endpoint is not a valid URL.".to_string(),
-                error,
-            )
-        })?;
+) -> Url {
+    let mut url = base_endpoint.clone();
     {
-        let mut segments = url.path_segments_mut().map_err(|()| {
-            AppError::config("Session pool endpoint cannot be used as a base URL.".to_string())
-        })?;
+        let mut segments = url
+            .path_segments_mut()
+            .expect("session pool endpoint was validated at startup");
         segments.pop_if_empty();
         for segment in path_segments {
             segments.push(segment);
@@ -310,14 +304,7 @@ fn session_pool_url(
             query.append_pair(name, value);
         }
     }
-    Ok(url)
-}
-
-fn split_session_file_path(path: &str) -> (Option<&str>, &str) {
-    match path.rsplit_once('/') {
-        Some((directory, name)) if !directory.is_empty() => (Some(directory), name),
-        _ => (None, path),
-    }
+    url
 }
 
 async fn parse_json_response<T>(
@@ -422,12 +409,9 @@ fn map_session_pool_http_error(status: reqwest::StatusCode, message: String) -> 
 #[cfg(test)]
 mod tests {
     use axum::response::IntoResponse;
-    use reqwest::StatusCode as ReqwestStatusCode;
+    use reqwest::{StatusCode as ReqwestStatusCode, Url};
 
-    use super::{
-        is_dynamicsessions_host, map_session_pool_http_error, session_pool_url,
-        split_session_file_path,
-    };
+    use super::{map_session_pool_http_error, session_pool_url};
 
     #[test]
     fn session_pool_http_errors_preserve_upstream_status_codes() {
@@ -443,13 +427,12 @@ mod tests {
     #[test]
     fn file_download_urls_encode_path_segments_without_losing_slashes() {
         let url = session_pool_url(
-            "https://example.com/session-pool",
+            &Url::parse("https://example.com/session-pool/").unwrap(),
             &["files", "input #1.xlsx", "content"],
             "cfg-123",
             "2025-10-02-preview",
             &[("path", "runs/run 1/output")],
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             url.as_str(),
@@ -460,35 +443,16 @@ mod tests {
     #[test]
     fn list_file_urls_append_recursive_query_parameters() {
         let url = session_pool_url(
-            "https://example.com/session-pool",
+            &Url::parse("https://example.com/session-pool/").unwrap(),
             &["files"],
             "cfg-123",
             "2025-10-02-preview",
             &[("recursive", "true")],
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             url.as_str(),
             "https://example.com/session-pool/files?identifier=cfg-123&api-version=2025-10-02-preview&recursive=true"
         );
-    }
-
-    #[test]
-    fn split_session_file_paths_into_directory_and_name() {
-        let (directory, name) = split_session_file_path("runs/run-1/output/file.xlsx");
-        assert_eq!(directory, Some("runs/run-1/output"));
-        assert_eq!(name, "file.xlsx");
-
-        let (directory, name) = split_session_file_path("notes.txt");
-        assert_eq!(directory, None);
-        assert_eq!(name, "notes.txt");
-    }
-
-    #[test]
-    fn auth_is_inferred_from_dynamicsessions_hosts() {
-        assert!(is_dynamicsessions_host("canadacentral.dynamicsessions.io"));
-        assert!(is_dynamicsessions_host("dynamicsessions.io"));
-        assert!(!is_dynamicsessions_host("127.0.0.1"));
     }
 }
