@@ -130,7 +130,10 @@ function buildCancelPath(
   return `${buildRunsPath(workspaceId, configVersionId)}/${encodeURIComponent(runId)}/cancel`;
 }
 
-function buildUploadsPath(workspaceId: string, configVersionId: string): string {
+function buildUploadsPath(
+  workspaceId: string,
+  configVersionId: string,
+): string {
   return `/api/workspaces/${encodeURIComponent(workspaceId)}/configs/${encodeURIComponent(configVersionId)}/uploads`;
 }
 
@@ -244,7 +247,9 @@ export function RunPocPage() {
     };
   }, []);
 
-  function isActiveEventSource(source: EventSource | null): source is EventSource {
+  function isActiveEventSource(
+    source: EventSource | null,
+  ): source is EventSource {
     return source !== null && eventSourceRef.current === source;
   }
 
@@ -292,6 +297,30 @@ export function RunPocPage() {
     return guard(payload) ? payload : null;
   }
 
+  function addRunEventListener<T>(
+    source: EventSource,
+    eventName: string,
+    guard: (value: unknown) => value is T,
+    invalidMessage: string,
+    onPayload: (payload: T) => void,
+  ) {
+    source.addEventListener(eventName, (event) => {
+      if (!isActiveEventSource(source)) {
+        return;
+      }
+
+      const message = event as MessageEvent<string>;
+      noteSeq(message.lastEventId);
+      const payload = parseEventData(message.data, guard);
+      if (!payload) {
+        setRunStatus("error", invalidMessage);
+        return;
+      }
+
+      onPayload(payload);
+    });
+  }
+
   function connectToRun(targetRunId: string, after: number | null) {
     closeEventSource();
     setRunStatus("connecting", "Connecting to the run event stream...");
@@ -308,125 +337,77 @@ export function RunPocPage() {
       appendLogLine(`[run] connected to ${targetRunId}`);
     });
 
-    source.addEventListener("run.created", (event) => {
-      if (!isActiveEventSource(source)) {
-        return;
-      }
+    addRunEventListener(
+      source,
+      "run.created",
+      isRunCreatedEvent,
+      "Received an invalid run.created payload.",
+      (payload) => {
+        setRunId(payload.runId);
+        setRunStatus("streaming", `Run ${payload.runId} created.`);
+        appendLogLine(`[run] created ${payload.runId} (${payload.status})`);
+      },
+    );
 
-      noteSeq((event as MessageEvent<string>).lastEventId);
-      const payload = parseEventData(
-        (event as MessageEvent<string>).data,
-        isRunCreatedEvent,
-      );
-      if (!payload) {
-        setRunStatus("error", "Received an invalid run.created payload.");
-        return;
-      }
+    addRunEventListener(
+      source,
+      "run.status",
+      isRunStatusEvent,
+      "Received an invalid run.status payload.",
+      (payload) => {
+        setRunStatus("streaming", `Run phase: ${payload.phase}.`);
+        appendLogLine(`[${payload.phase}] ${payload.state}`);
+      },
+    );
 
-      setRunId(payload.runId);
-      setRunStatus("streaming", `Run ${payload.runId} created.`);
-      appendLogLine(`[run] created ${payload.runId} (${payload.status})`);
-    });
+    addRunEventListener(
+      source,
+      "run.log",
+      isRunLogEvent,
+      "Received an invalid run.log payload.",
+      (payload) => {
+        appendLogLine(`[${payload.phase}/${payload.level}] ${payload.message}`);
+      },
+    );
 
-    source.addEventListener("run.status", (event) => {
-      if (!isActiveEventSource(source)) {
-        return;
-      }
+    addRunEventListener(
+      source,
+      "run.error",
+      isRunErrorEvent,
+      "Received an invalid run.error payload.",
+      (payload) => {
+        setRunStatus("error", payload.message);
+        appendLogLine(
+          `[error${payload.phase ? `/${payload.phase}` : ""}] ${payload.message}`,
+        );
+      },
+    );
 
-      noteSeq((event as MessageEvent<string>).lastEventId);
-      const payload = parseEventData(
-        (event as MessageEvent<string>).data,
-        isRunStatusEvent,
-      );
-      if (!payload) {
-        setRunStatus("error", "Received an invalid run.status payload.");
-        return;
-      }
+    addRunEventListener(
+      source,
+      "run.result",
+      isRunResultEvent,
+      "Received an invalid run.result payload.",
+      (payload) => {
+        setOutputPath(payload.outputPath);
+        appendLogLine(`[result] ${payload.outputPath}`);
+      },
+    );
 
-      setRunStatus("streaming", `Run phase: ${payload.phase}.`);
-      appendLogLine(`[${payload.phase}] ${payload.state}`);
-    });
-
-    source.addEventListener("run.log", (event) => {
-      if (!isActiveEventSource(source)) {
-        return;
-      }
-
-      noteSeq((event as MessageEvent<string>).lastEventId);
-      const payload = parseEventData(
-        (event as MessageEvent<string>).data,
-        isRunLogEvent,
-      );
-      if (!payload) {
-        setRunStatus("error", "Received an invalid run.log payload.");
-        return;
-      }
-
-      appendLogLine(`[${payload.phase}/${payload.level}] ${payload.message}`);
-    });
-
-    source.addEventListener("run.error", (event) => {
-      if (!isActiveEventSource(source)) {
-        return;
-      }
-
-      noteSeq((event as MessageEvent<string>).lastEventId);
-      const payload = parseEventData(
-        (event as MessageEvent<string>).data,
-        isRunErrorEvent,
-      );
-      if (!payload) {
-        setRunStatus("error", "Received an invalid run.error payload.");
-        return;
-      }
-
-      setRunStatus("error", payload.message);
-      appendLogLine(
-        `[error${payload.phase ? `/${payload.phase}` : ""}] ${payload.message}`,
-      );
-    });
-
-    source.addEventListener("run.result", (event) => {
-      if (!isActiveEventSource(source)) {
-        return;
-      }
-
-      noteSeq((event as MessageEvent<string>).lastEventId);
-      const payload = parseEventData(
-        (event as MessageEvent<string>).data,
-        isRunResultEvent,
-      );
-      if (!payload) {
-        setRunStatus("error", "Received an invalid run.result payload.");
-        return;
-      }
-
-      setOutputPath(payload.outputPath);
-      appendLogLine(`[result] ${payload.outputPath}`);
-    });
-
-    source.addEventListener("run.completed", (event) => {
-      if (!isActiveEventSource(source)) {
-        return;
-      }
-
-      noteSeq((event as MessageEvent<string>).lastEventId);
-      const payload = parseEventData(
-        (event as MessageEvent<string>).data,
-        isRunCompletedEvent,
-      );
-      if (!payload) {
-        setRunStatus("error", "Received an invalid run.completed payload.");
-        return;
-      }
-
-      setRunStatus("completed", `Run ${payload.finalStatus}.`);
-      appendLogLine(`[complete] ${payload.finalStatus}`);
-      source.close();
-      if (eventSourceRef.current === source) {
-        eventSourceRef.current = null;
-      }
-    });
+    addRunEventListener(
+      source,
+      "run.completed",
+      isRunCompletedEvent,
+      "Received an invalid run.completed payload.",
+      (payload) => {
+        setRunStatus("completed", `Run ${payload.finalStatus}.`);
+        appendLogLine(`[complete] ${payload.finalStatus}`);
+        source.close();
+        if (eventSourceRef.current === source) {
+          eventSourceRef.current = null;
+        }
+      },
+    );
 
     source.onerror = () => {
       if (!isActiveEventSource(source)) {
@@ -474,17 +455,20 @@ export function RunPocPage() {
     ]);
 
     setRunStatus("uploading", "Requesting upload instructions...");
-    const uploadResponse = await fetch(buildUploadsPath(workspaceId, configVersionId), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    const uploadResponse = await fetch(
+      buildUploadsPath(workspaceId, configVersionId),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: file.type || undefined,
+          size: file.size,
+        }),
       },
-      body: JSON.stringify({
-        filename: file.name,
-        contentType: file.type || undefined,
-        size: file.size,
-      }),
-    });
+    );
 
     if (!uploadResponse.ok) {
       setRunStatus("error", await readErrorMessage(uploadResponse));
@@ -511,15 +495,18 @@ export function RunPocPage() {
     appendLogLine(`[upload] completed ${uploadPayload.uploadId}`);
     setRunStatus("starting", "Creating run...");
 
-    const runResponse = await fetch(buildRunsPath(workspaceId, configVersionId), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    const runResponse = await fetch(
+      buildRunsPath(workspaceId, configVersionId),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          inputPath: uploadPayload.filePath,
+        }),
       },
-      body: JSON.stringify({
-        inputPath: uploadPayload.filePath,
-      }),
-    });
+    );
 
     if (!runResponse.ok) {
       setRunStatus("error", await readErrorMessage(runResponse));
@@ -543,9 +530,12 @@ export function RunPocPage() {
       return;
     }
 
-    const response = await fetch(buildCancelPath(workspaceId, configVersionId, runId), {
-      method: "POST",
-    });
+    const response = await fetch(
+      buildCancelPath(workspaceId, configVersionId, runId),
+      {
+        method: "POST",
+      },
+    );
     if (!response.ok) {
       setRunStatus("error", await readErrorMessage(response));
       return;
@@ -697,7 +687,10 @@ export function RunPocPage() {
         </p>
       </div>
 
-      <pre className="terminal-poc__viewport run-poc__viewport" ref={logViewportRef}>
+      <pre
+        className="terminal-poc__viewport run-poc__viewport"
+        ref={logViewportRef}
+      >
         {logLines.join("\n")}
       </pre>
     </section>

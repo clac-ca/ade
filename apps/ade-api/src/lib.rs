@@ -12,6 +12,9 @@ pub mod session;
 pub mod terminal;
 
 pub mod routes {
+    pub mod internal_artifacts;
+    pub mod internal_run_bridges;
+    pub mod internal_terminal_bridges;
     pub mod runs;
     pub mod system;
     pub mod terminal;
