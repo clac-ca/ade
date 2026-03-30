@@ -23,7 +23,7 @@ COPY apps/ade-web ./apps/ade-web
 
 RUN pnpm --filter @ade/web build
 
-FROM rust:1.94.0-alpine AS chef
+FROM rust:1.94.1-alpine AS chef
 
 WORKDIR /build
 
@@ -55,7 +55,7 @@ RUN cargo build --locked --release --bin ade-api --bin ade-migrate \
     && install -Dm755 /build/apps/ade-api/target/release/ade-api /build/bin/ade-api \
     && install -Dm755 /build/apps/ade-api/target/release/ade-migrate /build/bin/ade-migrate
 
-FROM python:3.12-slim AS python-builder
+FROM python:3.14-slim AS python-builder
 
 WORKDIR /build
 
@@ -67,7 +67,7 @@ COPY packages/ade-config ./packages/ade-config
 RUN python -m build --wheel --outdir /dist /build/packages/ade-engine \
     && python -m build --wheel --outdir /dist /build/packages/ade-config
 
-FROM alpine:3.22
+FROM alpine:3.23
 
 WORKDIR /app
 
