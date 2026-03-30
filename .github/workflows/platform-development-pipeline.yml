@@ -44,6 +44,7 @@ permissions:
   contents: read
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   IMAGE_NAME: ${{ github.repository_owner }}/ade-platform
   REGISTRY: ghcr.io
 
