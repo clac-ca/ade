@@ -203,17 +203,6 @@ jobs:
           context: .
           file: ./Dockerfile
 
-      - name: Build release candidate image (PR fork)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
-        with:
-          build-args: |
-            SERVICE_VERSION=${{ steps.version.outputs.release_version }}
-          cache-from: |
-            type=gha,scope=ade-platform-release-candidate-main
-          context: .
-          file: ./Dockerfile
-
       - name: Build release candidate image (push)
         if: github.event_name == 'push'
         id: push

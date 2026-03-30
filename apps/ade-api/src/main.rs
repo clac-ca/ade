@@ -34,7 +34,6 @@ async fn main() {
     init_tracing();
 
     let result: Result<(), AppError> = async {
-        // Snapshot the process environment once so every service sees the same inputs.
         let env: EnvBag = std::env::vars().collect();
         let config = AppConfig::from_env(&env)?;
         let args = ServerArgs::parse();
