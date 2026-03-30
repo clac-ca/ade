@@ -42,16 +42,22 @@ FROM chef AS api-builder
 
 WORKDIR /build/apps/ade-api
 
-ARG SERVICE_VERSION=0.1.0
-ENV ADE_PLATFORM_VERSION="${SERVICE_VERSION}"
-
 COPY --from=planner /build/apps/ade-api/recipe.json recipe.json
 
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN --mount=type=cache,id=ade-api-target,target=/build/apps/ade-api/target \
+    --mount=type=cache,id=ade-api-cargo-git,target=/usr/local/cargo/git/db \
+    --mount=type=cache,id=ade-api-cargo-registry,target=/usr/local/cargo/registry \
+    cargo chef cook --release --recipe-path recipe.json
 
 COPY apps/ade-api ./
 
-RUN cargo build --locked --release --bin ade-api --bin ade-migrate \
+ARG SERVICE_VERSION=0.1.0
+ENV ADE_PLATFORM_VERSION="${SERVICE_VERSION}"
+
+RUN --mount=type=cache,id=ade-api-target,target=/build/apps/ade-api/target \
+    --mount=type=cache,id=ade-api-cargo-git,target=/usr/local/cargo/git/db \
+    --mount=type=cache,id=ade-api-cargo-registry,target=/usr/local/cargo/registry \
+    cargo build --locked --release --bin ade-api --bin ade-migrate \
     && install -Dm755 /build/apps/ade-api/target/release/ade-api /build/bin/ade-api \
     && install -Dm755 /build/apps/ade-api/target/release/ade-migrate /build/bin/ade-migrate
 
