@@ -142,10 +142,6 @@ impl ActiveRunHandle {
     fn is_cancelled(&self) -> bool {
         *self.cancel_rx.borrow()
     }
-
-    fn sender(&self) -> &broadcast::Sender<RunEvent> {
-        &self.sender
-    }
 }
 
 impl Drop for ActiveRunHandle {
@@ -187,14 +183,6 @@ impl RunService {
             session_secret: session_service.session_secret().to_string(),
             session_service,
         })
-    }
-
-    pub(crate) async fn attach_bridge_socket(
-        &self,
-        socket: WebSocket,
-        bridge_tx: oneshot::Sender<WebSocket>,
-    ) {
-        let _ = bridge_tx.send(socket);
     }
 
     pub(crate) async fn create_run(
@@ -399,7 +387,7 @@ impl RunService {
     ) -> Result<RunEvent, AppError> {
         let event = self.run_store.append_event(run_id, event).await?;
         if let Some(active) = active {
-            let _ = active.sender().send(event.clone());
+            let _ = active.sender.send(event.clone());
         }
         Ok(event)
     }

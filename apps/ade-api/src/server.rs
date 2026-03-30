@@ -65,7 +65,6 @@ impl ServerInstance {
         let app = create_app(AppState {
             readiness: readiness.clone(),
             run_service: options.run_service,
-            session_service: options.session_service,
             terminal_service: options.terminal_service,
             web_root: options.web_root,
         });

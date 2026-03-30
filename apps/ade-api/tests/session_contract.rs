@@ -385,21 +385,6 @@ fn app_with_session_and_url(
     config_targets: &[(&str, &str, &FsPath)],
     engine_wheel_path: &FsPath,
 ) -> axum::Router {
-    app_with_session_and_url_and_terminal_service(
-        endpoint,
-        app_url,
-        config_targets,
-        engine_wheel_path,
-    )
-    .0
-}
-
-fn app_with_session_and_url_and_terminal_service(
-    endpoint: &str,
-    app_url: &str,
-    config_targets: &[(&str, &str, &FsPath)],
-    engine_wheel_path: &FsPath,
-) -> (axum::Router, Arc<TerminalService>) {
     let config_targets = config_targets
         .iter()
         .map(|(workspace_id, config_version_id, wheel_path)| {
@@ -457,15 +442,12 @@ fn app_with_session_and_url_and_terminal_service(
     let terminal_service =
         Arc::new(TerminalService::from_env(&env, Arc::clone(&session_service)).unwrap());
 
-    let app = create_app(AppState {
+    create_app(AppState {
         readiness: ready_state(),
         run_service,
-        terminal_service: Arc::clone(&terminal_service),
-        session_service,
+        terminal_service,
         web_root: None,
-    });
-
-    (app, terminal_service)
+    })
 }
 
 fn artifact_root(engine_wheel_path: &FsPath) -> PathBuf {
@@ -1294,7 +1276,7 @@ async fn internal_bridge_route_can_only_attach_once() {
 
 #[tokio::test]
 async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
-    let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+    let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
         auto_connect_terminal_bridge: false,
         terminal_execution_delay_ms: 300,
         ..PoolStubOptions::default()
@@ -1304,7 +1286,7 @@ async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let (app, terminal_service) = app_with_session_and_url_and_terminal_service(
+    let app = app_with_session_and_url(
         &endpoint,
         &format!("http://{address}"),
         &[("workspace-a", "config-v1", config_v1.as_path())],
@@ -1318,11 +1300,14 @@ async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
         format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/terminal");
     let (mut browser_socket, _response) = connect_async(&terminal_url).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(terminal_service.pending_count(), 1);
+    let bridge_url = {
+        let execution_codes = state.lock().unwrap().execution_codes.clone();
+        extract_bridge_url(&execution_codes[0]).unwrap()
+    };
 
     browser_socket.close(None).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(terminal_service.pending_count(), 0);
+    assert!(connect_async(&bridge_url).await.is_err());
 
     app_handle.abort();
     stub_handle.abort();

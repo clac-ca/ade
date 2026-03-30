@@ -91,18 +91,7 @@ impl TerminalService {
         };
 
         let pending = self.create_pending_terminal();
-        let bridge_url = match self.build_bridge_url(&pending.channel_id, &pending.token) {
-            Ok(url) => url,
-            Err(error) => {
-                let _ = send_terminal_event(
-                    &mut browser_socket,
-                    TerminalServerMessage::error(error.to_string()),
-                )
-                .await;
-                let _ = browser_socket.send(Message::Close(None)).await;
-                return;
-            }
-        };
+        let bridge_url = self.build_bridge_url(&pending.channel_id, &pending.token);
 
         let bootstrap_code = match render_bootstrap_code(&TerminalBootstrapConfig {
             bridge_url,
@@ -173,41 +162,20 @@ impl TerminalService {
         self.manager.claim(channel_id)
     }
 
-    pub(crate) async fn attach_bridge_socket(
-        &self,
-        socket: WebSocket,
-        bridge_tx: oneshot::Sender<WebSocket>,
-    ) {
-        let _ = bridge_tx.send(socket);
-    }
-
-    pub(crate) fn build_bridge_url(
-        &self,
-        channel_id: &str,
-        token: &str,
-    ) -> Result<String, AppError> {
+    pub(crate) fn build_bridge_url(&self, channel_id: &str, token: &str) -> String {
         let mut bridge_url = self.app_url.clone();
-        let scheme = match bridge_url.scheme() {
-            "http" => "ws",
-            "https" => "wss",
-            _ => {
-                return Err(AppError::config(
-                    "ADE_APP_URL must use http or https.".to_string(),
-                ));
-            }
+        let scheme = if bridge_url.scheme() == "http" {
+            "ws"
+        } else {
+            "wss"
         };
         bridge_url
             .set_scheme(scheme)
-            .map_err(|()| AppError::internal("Failed to derive the terminal bridge URL."))?;
+            .expect("ADE_APP_URL scheme was validated at startup");
         bridge_url.set_path(&format!("/api/internal/terminals/{channel_id}"));
         bridge_url.set_query(None);
         bridge_url.query_pairs_mut().append_pair("token", token);
-        Ok(bridge_url.to_string())
-    }
-
-    #[doc(hidden)]
-    pub fn pending_count(&self) -> usize {
-        self.manager.pending_count()
+        bridge_url.to_string()
     }
 
     fn create_pending_terminal(&self) -> PendingBrowserTerminal {
@@ -506,7 +474,7 @@ struct ActiveTerminalManager {
 
 impl ActiveTerminalManager {
     fn try_acquire(&self, scope: &Scope) -> Result<ActiveTerminalLease, ()> {
-        let key = terminal_scope_key(scope);
+        let key = format!("{}:{}", scope.workspace_id, scope.config_version_id);
         let mut active = self
             .inner
             .lock()
@@ -548,13 +516,14 @@ fn spawn_terminal_execution(
     bootstrap_code: String,
 ) -> JoinHandle<Result<PythonExecution, AppError>> {
     tokio::spawn(async move {
-        session_service
-            .execute_inline_python(
+        Ok(session_service
+            .execute_inline_python_detailed(
                 &scope,
                 bootstrap_code,
                 Some(TERMINAL_EXECUTION_TIMEOUT_SECONDS),
             )
-            .await
+            .await?
+            .value)
     })
 }
 
@@ -566,10 +535,6 @@ fn spawn_execution_cleanup(
         let _ = execution_task.await;
         drop(lease);
     });
-}
-
-fn terminal_scope_key(scope: &Scope) -> String {
-    format!("{}:{}", scope.workspace_id, scope.config_version_id)
 }
 
 fn join_execution_result(
@@ -692,12 +657,11 @@ mod tests {
         let manager = PendingTerminalManager::default();
         let pending = manager.create("channel-a".to_string(), "token".to_string());
 
-        assert_eq!(manager.pending_count(), 1);
         manager.cancel(&pending.channel_id);
-        assert_eq!(manager.pending_count(), 0);
+        assert!(manager.claim(&pending.channel_id).is_err());
 
         let pending = manager.create("channel-b".to_string(), "token".to_string());
         let _attachment = manager.claim(&pending.channel_id).unwrap();
-        assert_eq!(manager.pending_count(), 0);
+        assert!(manager.claim(&pending.channel_id).is_err());
     }
 }

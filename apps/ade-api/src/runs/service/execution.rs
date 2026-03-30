@@ -521,14 +521,7 @@ impl RunService {
         }
 
         let pending = self.bridge_manager.create();
-        let bridge_url =
-            self.build_bridge_url(&pending.bridge_id)
-                .map_err(|error| AttemptFailure {
-                    emitted_error: false,
-                    error,
-                    phase: Some(RunPhase::InstallPackages),
-                    retriable: false,
-                })?;
+        let bridge_url = self.build_bridge_url(&pending.bridge_id);
         let access_expires_at =
             run_access_expiry(attempt.timeout_in_seconds.unwrap_or(RUN_ACCESS_TTL_SECONDS));
         let input_download = self
@@ -681,26 +674,22 @@ impl RunService {
         }
     }
 
-    fn build_bridge_url(&self, bridge_id: &str) -> Result<String, AppError> {
+    fn build_bridge_url(&self, bridge_id: &str) -> String {
         let expires_at_ms = unix_time_ms() + BRIDGE_TOKEN_TTL_MS;
         let token = create_bridge_token(&self.session_secret, bridge_id, expires_at_ms);
         let mut bridge_url = self.app_url.clone();
-        let scheme = match bridge_url.scheme() {
-            "http" => "ws",
-            "https" => "wss",
-            _ => {
-                return Err(AppError::config(
-                    "ADE_APP_URL must use http or https.".to_string(),
-                ));
-            }
+        let scheme = if bridge_url.scheme() == "http" {
+            "ws"
+        } else {
+            "wss"
         };
         bridge_url
             .set_scheme(scheme)
-            .map_err(|()| AppError::internal("Failed to derive the run bridge URL."))?;
+            .expect("ADE_APP_URL scheme was validated at startup");
         bridge_url.set_path(&format!("/api/internal/run-bridges/{bridge_id}"));
         bridge_url.set_query(None);
         bridge_url.query_pairs_mut().append_pair("token", &token);
-        Ok(bridge_url.to_string())
+        bridge_url.to_string()
     }
 }
 

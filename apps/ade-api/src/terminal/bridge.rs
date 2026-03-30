@@ -57,13 +57,6 @@ impl PendingTerminalManager {
             .expect("pending terminal bridge lock poisoned")
             .remove(channel_id);
     }
-
-    pub(crate) fn pending_count(&self) -> usize {
-        self.inner
-            .lock()
-            .expect("pending terminal bridge lock poisoned")
-            .len()
-    }
 }
 
 pub(crate) struct PendingBridgeEntry {

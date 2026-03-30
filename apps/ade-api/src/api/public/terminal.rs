@@ -33,14 +33,10 @@ async fn connect_terminal(
     State(terminal_service): State<Arc<TerminalService>>,
     Path(scope): Path<Scope>,
 ) -> Result<Response, AppError> {
-    let ws = ws.map_err(map_websocket_rejection)?;
+    let ws = ws.map_err(|error| AppError::request(error.to_string()))?;
     Ok(ws
         .max_message_size(1024 * 1024)
         .on_upgrade(move |socket| async move {
             terminal_service.run_browser_terminal(scope, socket).await;
         }))
-}
-
-fn map_websocket_rejection(error: WebSocketUpgradeRejection) -> AppError {
-    AppError::request(error.to_string())
 }

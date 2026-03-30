@@ -70,19 +70,6 @@ impl SessionService {
         })
     }
 
-    pub(crate) async fn execute_inline_python(
-        &self,
-        scope: &Scope,
-        code: String,
-        timeout_in_seconds: Option<u64>,
-    ) -> Result<PythonExecution, AppError> {
-        Ok(self
-            .client
-            .execute(&self.session_identifier(scope), code, timeout_in_seconds)
-            .await?
-            .value)
-    }
-
     pub(crate) fn session_secret(&self) -> &str {
         &self.session_secret
     }

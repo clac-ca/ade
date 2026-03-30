@@ -112,7 +112,6 @@ fn app_state(readiness: ReadinessController) -> AppState {
             .unwrap(),
         ),
         terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
-        session_service,
         web_root: Some(fixture_web_root()),
     }
 }

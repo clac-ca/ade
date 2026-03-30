@@ -37,16 +37,5 @@ async fn create_upload(
     let request = request
         .map(|Json(value)| value)
         .map_err(|error| AppError::request(error.body_text()))?;
-    match run_service.create_upload(&scope, request).await {
-        Ok(response) => Ok(Json(response)),
-        Err(error) => {
-            tracing::error!(
-                workspace_id = %scope.workspace_id,
-                config_version_id = %scope.config_version_id,
-                error = ?error,
-                "Failed to create upload access."
-            );
-            Err(error)
-        }
-    }
+    Ok(Json(run_service.create_upload(&scope, request).await?))
 }

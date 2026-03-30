@@ -21,7 +21,6 @@ use crate::{
     error::AppError,
     readiness::ReadinessController,
     runs::RunService,
-    session::SessionService,
     terminal::TerminalService,
 };
 
@@ -29,7 +28,6 @@ use crate::{
 pub struct AppState {
     pub readiness: ReadinessController,
     pub run_service: Arc<RunService>,
-    pub session_service: Arc<SessionService>,
     pub terminal_service: Arc<TerminalService>,
     pub web_root: Option<PathBuf>,
 }
@@ -37,12 +35,6 @@ pub struct AppState {
 impl FromRef<AppState> for ReadinessController {
     fn from_ref(state: &AppState) -> Self {
         state.readiness.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<SessionService> {
-    fn from_ref(state: &AppState) -> Self {
-        Arc::clone(&state.session_service)
     }
 }
 
