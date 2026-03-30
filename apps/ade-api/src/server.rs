@@ -20,7 +20,7 @@ use crate::{
     api::{AppState, create_app},
     db::{Database, DatabaseProbe},
     error::AppError,
-    readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
+    readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::RunService,
     session::SessionService,
     terminal::TerminalService,
@@ -55,9 +55,12 @@ pub struct ServerInstance {
 impl ServerInstance {
     #[must_use]
     pub fn new(options: ServerOptions) -> Self {
-        let readiness = ReadinessController::new(CreateReadinessControllerOptions {
-            stale_after_ms: Some(options.stale_after_ms),
-            ..CreateReadinessControllerOptions::default()
+        let readiness = ReadinessController::new(ReadinessSnapshot {
+            database: DatabaseReadiness {
+                stale_after_ms: options.stale_after_ms,
+                ..DatabaseReadiness::default()
+            },
+            ..ReadinessSnapshot::default()
         });
         let app = create_app(AppState {
             readiness: readiness.clone(),

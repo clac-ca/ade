@@ -16,19 +16,30 @@ pub struct DatabaseReadiness {
     pub stale_after_ms: u64,
 }
 
+impl Default for DatabaseReadiness {
+    fn default() -> Self {
+        Self {
+            last_checked_at: None,
+            last_error: None,
+            ok: false,
+            stale_after_ms: 15_000,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadinessSnapshot {
     pub database: DatabaseReadiness,
     pub phase: ReadinessPhase,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CreateReadinessControllerOptions {
-    pub database_ok: Option<bool>,
-    pub last_checked_at: Option<u64>,
-    pub last_error: Option<String>,
-    pub phase: Option<ReadinessPhase>,
-    pub stale_after_ms: Option<u64>,
+impl Default for ReadinessSnapshot {
+    fn default() -> Self {
+        Self {
+            database: DatabaseReadiness::default(),
+            phase: ReadinessPhase::Starting,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -36,19 +47,17 @@ pub struct ReadinessController {
     inner: Arc<Mutex<ReadinessSnapshot>>,
 }
 
+impl Default for ReadinessController {
+    fn default() -> Self {
+        Self::new(ReadinessSnapshot::default())
+    }
+}
+
 impl ReadinessController {
     #[must_use]
-    pub fn new(options: CreateReadinessControllerOptions) -> Self {
+    pub fn new(snapshot: ReadinessSnapshot) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ReadinessSnapshot {
-                database: DatabaseReadiness {
-                    last_checked_at: options.last_checked_at,
-                    last_error: options.last_error,
-                    ok: options.database_ok.unwrap_or(false),
-                    stale_after_ms: options.stale_after_ms.unwrap_or(15_000),
-                },
-                phase: options.phase.unwrap_or(ReadinessPhase::Starting),
-            })),
+            inner: Arc::new(Mutex::new(snapshot)),
         }
     }
 
@@ -127,7 +136,7 @@ mod tests {
 
     #[test]
     fn readiness_becomes_stale_when_no_probe_has_run() {
-        let controller = ReadinessController::new(CreateReadinessControllerOptions::default());
+        let controller = ReadinessController::default();
         let readiness = controller.snapshot();
 
         assert!(is_readiness_stale(&readiness, 1));

@@ -22,11 +22,7 @@ pub(super) struct RunPythonConfig {
 }
 
 pub(super) fn build_run_code(config: &RunPythonConfig) -> Result<String, AppError> {
-    render_python_template(RUN_TEMPLATE, config)
-}
-
-fn render_python_template(template: &str, config: &impl Serialize) -> Result<String, AppError> {
-    if !template.contains("{{CONFIG_JSON}}") {
+    if !RUN_TEMPLATE.contains("{{CONFIG_JSON}}") {
         return Err(AppError::internal(
             "Python execution template is missing the CONFIG_JSON placeholder.",
         ));
@@ -38,5 +34,5 @@ fn render_python_template(template: &str, config: &impl Serialize) -> Result<Str
     let encoded = serde_json::to_string(&config_json).map_err(|error| {
         AppError::internal_with_source("Failed to encode a Python template value.", error)
     })?;
-    Ok(template.replace("{{CONFIG_JSON}}", &encoded))
+    Ok(RUN_TEMPLATE.replace("{{CONFIG_JSON}}", &encoded))
 }

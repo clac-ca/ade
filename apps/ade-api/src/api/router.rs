@@ -102,7 +102,11 @@ async fn spa_or_not_found(
 
     let request_version = request.version();
     let request_headers = request.headers().clone();
-    let static_response = serve_path(&web_root, request).await?;
+    let static_response = ServeDir::new(&web_root)
+        .oneshot(request)
+        .await
+        .unwrap()
+        .map(Body::new);
 
     if static_response.status() != StatusCode::NOT_FOUND {
         return Ok(static_response);
@@ -113,11 +117,6 @@ async fn spa_or_not_found(
     }
 
     Err(not_found_for_method_path(&request_method, &request_path))
-}
-
-async fn serve_path(web_root: &Path, request: AxumRequest) -> Result<Response, AppError> {
-    let response = ServeDir::new(web_root).oneshot(request).await.unwrap();
-    Ok(response.map(Body::new))
 }
 
 async fn serve_index_html(

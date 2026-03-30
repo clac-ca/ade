@@ -7,7 +7,7 @@ use std::{
 
 use ade_api::{
     api::{AppState, create_app},
-    readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
+    readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::{InMemoryRunStore, RunService},
     session::SessionService,
     terminal::TerminalService,
@@ -82,14 +82,14 @@ struct SseEvent {
 }
 
 fn ready_state() -> ReadinessController {
-    let readiness = ReadinessController::new(CreateReadinessControllerOptions {
-        database_ok: Some(true),
-        last_checked_at: Some(unix_time_ms()),
-        phase: Some(ReadinessPhase::Ready),
-        ..CreateReadinessControllerOptions::default()
-    });
-    readiness.mark_ready();
-    readiness
+    ReadinessController::new(ReadinessSnapshot {
+        database: DatabaseReadiness {
+            ok: true,
+            last_checked_at: Some(unix_time_ms()),
+            ..DatabaseReadiness::default()
+        },
+        phase: ReadinessPhase::Ready,
+    })
 }
 
 async fn stub_upload_file(

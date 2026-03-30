@@ -420,3 +420,119 @@ Result:
   - choose server-side file path
   - mint access grant
   - return API response
+
+## Area 12: Direct State Instead of Option Builders
+
+Research:
+
+- Rust already has `Default` for simple zero-config construction, and plain struct literals make state explicit:
+  - <https://doc.rust-lang.org/std/default/trait.Default.html>
+
+Comparison:
+
+- `apps/ade-api/src/readiness.rs` used `CreateReadinessControllerOptions`, an options struct full of `Option<_>` fields, only to build `ReadinessSnapshot`.
+- Most call sites then used `CreateReadinessControllerOptions::default()` or set one or two fields just to unwrap them again inside `ReadinessController::new(...)`.
+
+Gap:
+
+- The code represented real readiness state as "optional inputs to future state".
+- That made the constructor harder to read than the actual data it was building.
+
+Implemented:
+
+- Removed `CreateReadinessControllerOptions`.
+- Added `Default` for:
+  - `DatabaseReadiness`
+  - `ReadinessSnapshot`
+  - `ReadinessController`
+- Changed `ReadinessController::new(...)` to accept a plain `ReadinessSnapshot`.
+- Updated server and test call sites to use either:
+  - `ReadinessController::default()`
+  - explicit `ReadinessSnapshot` literals
+
+Examples:
+
+- Before: `database_ok: Some(true), phase: Some(ReadinessPhase::Ready)`.
+- After: `database: DatabaseReadiness { ok: true, ..Default::default() }, phase: ReadinessPhase::Ready`.
+
+Result:
+
+- Readiness setup now uses the real state types directly.
+- The constructor no longer unwraps optional values that only existed for builder-style ceremony.
+
+## Area 13: Delete One-Use Artifact Helpers
+
+Research:
+
+- The standard approach is to expose the constant or inline the logic when there is only one real use and no shared policy to protect.
+
+Comparison:
+
+- `apps/ade-api/src/artifacts.rs` had:
+  - `local_artifact_token_header()` returning a constant
+  - `resolve_access_url(...)` used only by run bootstrap config construction
+
+Gap:
+
+- Both helpers required a mental jump for logic that fit directly at the use site.
+
+Implemented:
+
+- Exposed `LOCAL_ARTIFACT_TOKEN_HEADER` directly to the internal artifact route.
+- Removed `resolve_access_url(...)`.
+- Inlined the URL resolution logic into `bootstrap_artifact_access(...)`.
+
+Result:
+
+- Artifact auth and bootstrap URL handling now read directly from the data they use.
+- There is less indirection between artifact access grants and the internal routes/bootstrap code.
+
+## Area 14: Remove Generic Template Plumbing
+
+Research:
+
+- When there is one template and one render path, the most standard solution is one render function for that template, not a reusable mini-template API.
+
+Comparison:
+
+- `apps/ade-api/src/session/python.rs` had `build_run_code(...)` calling a private generic `render_python_template(...)`.
+- That helper accepted `template: &str`, but the module only has one template.
+
+Gap:
+
+- The generic helper implied extensibility that the module does not need.
+
+Implemented:
+
+- Folded `render_python_template(...)` into `build_run_code(...)`.
+
+Result:
+
+- The run-code builder now does exactly one thing: render the run template.
+- The file has one fewer helper to resolve.
+
+## Area 15: Remove Small Allocation and One-Use Router Wrapper
+
+Research:
+
+- Use the smallest obvious collection for fixed-size data, and call library primitives directly when the wrapper adds nothing.
+
+Comparison:
+
+- `apps/ade-api/src/session/client.rs` built `vec![("path", path)]` for an optional single query pair.
+- `apps/ade-api/src/api/router.rs` wrapped a one-line `ServeDir::oneshot(...)` call in `serve_path(...)`, even though the helper was used once.
+
+Gap:
+
+- The session client allocated a heap `Vec` for a single borrowed query pair.
+- The router added another function name for an already direct tower-http call.
+
+Implemented:
+
+- Replaced the one-item query `Vec` with an optional one-item array/slice.
+- Deleted `serve_path(...)` and inlined the `ServeDir` call into `spa_or_not_found(...)`.
+
+Result:
+
+- The session upload path is more precise about the data it actually needs.
+- The SPA fallback now reads directly as standard tower-http static serving code.

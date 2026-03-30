@@ -3,10 +3,7 @@ use std::collections::BTreeMap;
 use reqwest::Url;
 use serde::Serialize;
 
-use crate::{
-    artifacts::{ArtifactAccessGrant, resolve_access_url},
-    error::AppError,
-};
+use crate::{artifacts::ArtifactAccessGrant, error::AppError};
 
 const BOOTSTRAP_TEMPLATE: &str = include_str!("bootstrap.py.tmpl");
 
@@ -40,11 +37,19 @@ pub(crate) fn bootstrap_artifact_access(
     app_url: &Url,
     access: ArtifactAccessGrant,
 ) -> Result<BootstrapArtifactAccess, AppError> {
-    let resolved_url = resolve_access_url(app_url, &access)?;
+    let url = match Url::parse(&access.url) {
+        Ok(url) => url.to_string(),
+        Err(_) => app_url
+            .join(&access.url)
+            .map_err(|error| {
+                AppError::internal_with_source("Failed to resolve an artifact access URL.", error)
+            })?
+            .to_string(),
+    };
     Ok(BootstrapArtifactAccess {
         headers: access.headers,
         method: access.method.to_string(),
-        url: resolved_url,
+        url,
     })
 }
 

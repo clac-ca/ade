@@ -129,13 +129,15 @@ impl SessionPoolClient {
                 AppError::request(format!("Invalid uploaded file content type: {error}"))
             })?;
         }
-        let query_pairs = directory
-            .as_deref()
-            .map(|path| vec![("path", path)])
-            .unwrap_or_default();
+        let query_pairs = directory.map(|path| [("path", path)]);
 
         let request = self
-            .data_plane_request(Method::POST, &["files"], identifier, &query_pairs)
+            .data_plane_request(
+                Method::POST,
+                &["files"],
+                identifier,
+                query_pairs.as_ref().map_or(&[], |pairs| pairs.as_slice()),
+            )
             .await?
             .multipart(Form::new().part("file", part));
         let record: SessionOperationResult<AzureFileRecord> =

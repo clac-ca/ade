@@ -10,7 +10,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{artifacts::local_artifact_token_header, error::AppError, runs::RunService};
+use crate::{artifacts::LOCAL_ARTIFACT_TOKEN_HEADER, error::AppError, runs::RunService};
 
 pub fn router() -> Router<crate::api::AppState> {
     Router::new().route("/artifacts/{*path}", get(download).put(upload))
@@ -52,7 +52,7 @@ struct InternalArtifactPath {
 
 fn required_token(headers: &HeaderMap) -> Result<&str, AppError> {
     headers
-        .get(local_artifact_token_header())
+        .get(LOCAL_ARTIFACT_TOKEN_HEADER)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| AppError::status(StatusCode::UNAUTHORIZED, "Missing artifact access token."))
 }
