@@ -1,10 +1,10 @@
-use std::{path::Path, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use axum::{
     Router,
     body::Body,
     extract::{FromRef, OriginalUri, Request as AxumRequest, State},
-    http::{HeaderMap, Method, Request as HttpRequest, StatusCode, Version},
+    http::{Method, Request as HttpRequest, StatusCode},
     response::Response,
     routing::get,
 };
@@ -104,43 +104,33 @@ async fn spa_or_not_found(
         return Ok(static_response);
     }
 
-    if request_path == "/" || !has_extension(&request_path) {
-        return serve_index_html(&web_root, request_method, request_version, request_headers).await;
+    if request_path == "/"
+        || request_path
+            .rsplit('/')
+            .next()
+            .is_some_and(|segment| !segment.contains('.'))
+    {
+        let mut request = HttpRequest::builder()
+            .method(request_method)
+            .uri("/index.html")
+            .version(request_version)
+            .body(Body::empty())
+            .map_err(|error| {
+                AppError::internal_with_source(
+                    "Failed to build the SPA fallback request.".to_string(),
+                    error,
+                )
+            })?;
+        *request.headers_mut() = request_headers;
+
+        let response = ServeFile::new(web_root.join("index.html"))
+            .oneshot(request)
+            .await
+            .unwrap();
+        return Ok(response.map(Body::new));
     }
 
     Err(not_found_for_method_path(&request_method, &request_path))
-}
-
-async fn serve_index_html(
-    web_root: &Path,
-    method: Method,
-    version: Version,
-    headers: HeaderMap,
-) -> Result<Response, AppError> {
-    let mut request = HttpRequest::builder()
-        .method(method)
-        .uri("/index.html")
-        .version(version)
-        .body(Body::empty())
-        .map_err(|error| {
-            AppError::internal_with_source(
-                "Failed to build the SPA fallback request.".to_string(),
-                error,
-            )
-        })?;
-    *request.headers_mut() = headers;
-
-    let response = ServeFile::new(web_root.join("index.html"))
-        .oneshot(request)
-        .await
-        .unwrap();
-    Ok(response.map(Body::new))
-}
-
-fn has_extension(path: &str) -> bool {
-    path.rsplit('/')
-        .next()
-        .is_some_and(|segment| segment.contains('.'))
 }
 
 fn not_found_for_method_path(method: &Method, request_path: &str) -> AppError {

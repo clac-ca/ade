@@ -21,7 +21,12 @@ async fn download(
     Path(path): Path<InternalArtifactPath>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let token = required_token(&headers)?;
+    let token = headers
+        .get(LOCAL_ARTIFACT_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            AppError::status(StatusCode::UNAUTHORIZED, "Missing artifact access token.")
+        })?;
     let (content_type, body) = run_service
         .download_local_artifact(&path.path, token)
         .await?;
@@ -34,7 +39,12 @@ async fn upload(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, AppError> {
-    let token = required_token(&headers)?;
+    let token = headers
+        .get(LOCAL_ARTIFACT_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            AppError::status(StatusCode::UNAUTHORIZED, "Missing artifact access token.")
+        })?;
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -48,11 +58,4 @@ async fn upload(
 #[derive(Deserialize)]
 struct InternalArtifactPath {
     path: String,
-}
-
-fn required_token(headers: &HeaderMap) -> Result<&str, AppError> {
-    headers
-        .get(LOCAL_ARTIFACT_TOKEN_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| AppError::status(StatusCode::UNAUTHORIZED, "Missing artifact access token."))
 }

@@ -104,8 +104,12 @@ impl ServerInstance {
             })?;
 
         let shutdown = Arc::new(Notify::new());
-        let server = axum::serve(listener, Shared::new(self.app.clone()))
-            .with_graceful_shutdown(wait_for_shutdown(Arc::clone(&shutdown)));
+        let server = axum::serve(listener, Shared::new(self.app.clone())).with_graceful_shutdown({
+            let shutdown = Arc::clone(&shutdown);
+            async move {
+                shutdown.notified().await;
+            }
+        });
         let readiness = self.readiness.clone();
         let database_for_probe = Arc::clone(&database);
         let probe_interval_ms = self.probe_interval_ms;
@@ -178,10 +182,6 @@ async fn verify_startup_probe(
             ))
         }
     }
-}
-
-async fn wait_for_shutdown(shutdown: Arc<Notify>) {
-    shutdown.notified().await;
 }
 
 async fn run_probe_loop(

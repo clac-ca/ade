@@ -109,7 +109,20 @@ async fn stream_run_events(
     Query(query): Query<RunEventsQuery>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let after_seq = resolve_after_seq(query.after, &headers)?;
+    let after_seq = if let Some(after_query) = query.after {
+        Some(after_query)
+    } else {
+        match headers.get("last-event-id") {
+            Some(value) => Some(
+                value
+                    .to_str()
+                    .map_err(|_| AppError::request("Invalid Last-Event-ID header."))?
+                    .parse::<i64>()
+                    .map_err(|_| AppError::request("Invalid Last-Event-ID header."))?,
+            ),
+            None => None,
+        }
+    };
     let scope = path.scope();
     let run_id = path.run_id.clone();
     let feed = run_service
@@ -118,6 +131,20 @@ async fn stream_run_events(
     let stream_run_service = Arc::clone(&run_service);
     let stream_run_id = run_id.clone();
     let stream_scope = scope.clone();
+    let sse_event = |run_id: &str, event: &RunEvent| {
+        let (event_name, id, data) = map_public_event(run_id, event).unwrap_or_else(|_| {
+            (
+                "run.error",
+                String::new(),
+                "{\"message\":\"Failed to encode a run event.\"}".to_string(),
+            )
+        });
+        let event = Event::default().event(event_name).data(data);
+        if id.is_empty() {
+            return event;
+        }
+        event.id(id)
+    };
 
     let events = stream! {
         let mut delivered_seq = after_seq.unwrap_or(0);
@@ -227,39 +254,4 @@ impl RunPath {
 #[derive(Deserialize)]
 struct RunEventsQuery {
     after: Option<i64>,
-}
-
-fn resolve_after_seq(
-    after_query: Option<i64>,
-    headers: &HeaderMap,
-) -> Result<Option<i64>, AppError> {
-    if let Some(after_query) = after_query {
-        return Ok(Some(after_query));
-    }
-
-    let Some(value) = headers.get("last-event-id") else {
-        return Ok(None);
-    };
-    let value = value
-        .to_str()
-        .map_err(|_| AppError::request("Invalid Last-Event-ID header."))?;
-    let parsed = value
-        .parse::<i64>()
-        .map_err(|_| AppError::request("Invalid Last-Event-ID header."))?;
-    Ok(Some(parsed))
-}
-
-fn sse_event(run_id: &str, event: &RunEvent) -> Event {
-    let (event_name, id, data) = map_public_event(run_id, event).unwrap_or_else(|_| {
-        (
-            "run.error",
-            String::new(),
-            "{\"message\":\"Failed to encode a run event.\"}".to_string(),
-        )
-    });
-    let event = Event::default().event(event_name).data(data);
-    if id.is_empty() {
-        return event;
-    }
-    event.id(id)
 }

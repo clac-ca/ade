@@ -508,3 +508,82 @@ Validation:
 Result:
 - One more wrapper layer deleted.
 - Terminal message creation now uses the plain Rust enum form directly at call sites.
+
+### Section 25: Delete the one-use artifact token helper
+
+Issue:
+- `required_token(...)` in the internal artifact route only wrapped a direct header lookup and was used twice in the same file.
+
+Standard approach:
+- If the route can read the required header clearly at the call site, keep the extraction local instead of hopping through a tiny helper.
+
+Change:
+- Inlined artifact-token extraction into `download(...)` and `upload(...)`.
+- Deleted `required_token(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One more route-local helper deleted.
+- The artifact routes now show their auth requirement directly where the token is needed.
+
+### Section 26: Delete the one-use SPA extension helper
+
+Issue:
+- `has_extension(...)` only wrapped one `rsplit('/')` check inside `spa_or_not_found(...)`.
+
+Standard approach:
+- If a small predicate is only used once and the inline condition is still readable, keep it at the decision point.
+
+Change:
+- Inlined the path-segment extension check into `spa_or_not_found(...)`.
+- Deleted `has_extension(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- Another one-use helper deleted.
+- SPA fallback logic now reads as one direct decision instead of bouncing through a named wrapper.
+
+### Section 27: Delete top-level SSE route helpers
+
+Issue:
+- `resolve_after_seq(...)` was only used in `stream_run_events(...)`.
+- `sse_event(...)` only existed to support the same handler.
+
+Standard approach:
+- Keep route-local parsing and mapping next to the handler when the logic is only meaningful in that handler.
+
+Change:
+- Inlined `Last-Event-ID` / `after` resolution into `stream_run_events(...)`.
+- Moved run-event to SSE-event mapping into a local closure inside the handler.
+- Deleted both top-level helpers.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- Two more route-only helpers deleted.
+- The SSE replay/resume logic now reads in one place instead of bouncing to file-scope helpers.
+
+### Section 28: Delete the one-use shutdown future helper
+
+Issue:
+- `wait_for_shutdown(...)` only wrapped `shutdown.notified().await` for the graceful-shutdown path.
+
+Standard approach:
+- If a future is only used once and only forwards one awaited notification, inline the async block at the call site.
+
+Change:
+- Inlined the graceful-shutdown future inside `ServerInstance::start(...)`.
+- Deleted `wait_for_shutdown(...)`.
+
+Validation:
+- `cargo test --locked --manifest-path apps/ade-api/Cargo.toml`
+- `cargo check --manifest-path apps/ade-api/Cargo.toml`
+
+Result:
+- One more one-use server helper deleted.
+- Startup now shows the graceful-shutdown wiring directly where the server is built.
