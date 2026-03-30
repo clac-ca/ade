@@ -1,4 +1,3 @@
-use std::error::Error as StdError;
 use std::sync::Arc;
 
 use axum::{
@@ -10,10 +9,10 @@ use axum::{
 use crate::{
     error::AppError,
     runs::{CreateUploadRequest, CreateUploadResponse, RunService},
-    session::Scope,
+    scope::Scope,
 };
 
-pub fn workspace_router() -> Router<crate::router::AppState> {
+pub fn router() -> Router<crate::api::AppState> {
     Router::new().route("/uploads", post(create_upload))
 }
 
@@ -35,35 +34,8 @@ async fn create_upload(
     Path(scope): Path<Scope>,
     request: Result<Json<CreateUploadRequest>, JsonRejection>,
 ) -> Result<Json<CreateUploadResponse>, AppError> {
-    let request = parse_json(request)?;
-    match run_service.create_upload(&scope, request).await {
-        Ok(response) => Ok(Json(response)),
-        Err(error) => {
-            tracing::error!(
-                workspace_id = %scope.workspace_id,
-                config_version_id = %scope.config_version_id,
-                error = %error,
-                error_details = ?error,
-                error_sources = %error_sources(&error),
-                "Failed to create upload access."
-            );
-            Err(error)
-        }
-    }
-}
-
-fn parse_json<T>(request: Result<Json<T>, JsonRejection>) -> Result<T, AppError> {
-    request
+    let request = request
         .map(|Json(value)| value)
-        .map_err(|error| AppError::request(error.body_text()))
-}
-
-fn error_sources(error: &AppError) -> String {
-    let mut sources = Vec::new();
-    let mut source = StdError::source(error);
-    while let Some(current) = source {
-        sources.push(current.to_string());
-        source = StdError::source(current);
-    }
-    sources.join(" | ")
+        .map_err(|error| AppError::request(error.body_text()))?;
+    Ok(Json(run_service.create_upload(&scope, request).await?))
 }

@@ -12,12 +12,14 @@ use serde::Deserialize;
 
 use crate::{
     error::AppError,
-    run_store::RunEvent,
-    runs::{AsyncRunResponse, RunDetailResponse, RunService},
-    session::{CreateRunRequest, Scope},
+    runs::{
+        AsyncRunResponse, CreateRunRequest, RunDetailResponse, RunEvent, RunService,
+        events::map_public_event,
+    },
+    scope::Scope,
 };
 
-pub fn workspace_router() -> Router<crate::router::AppState> {
+pub fn router() -> Router<crate::api::AppState> {
     Router::new()
         .route("/runs", post(create_run))
         .route("/runs/{runId}", get(get_run))
@@ -43,9 +45,10 @@ async fn create_run(
     Path(scope): Path<Scope>,
     request: Result<Json<CreateRunRequest>, JsonRejection>,
 ) -> Result<Response, AppError> {
-    let response = run_service
-        .create_run(scope.clone(), parse_json(request)?)
-        .await?;
+    let request = request
+        .map(|Json(value)| value)
+        .map_err(|error| AppError::request(error.body_text()))?;
+    let response = run_service.create_run(scope.clone(), request).await?;
     let location = format!(
         "/api/workspaces/{}/configs/{}/runs/{}",
         scope.workspace_id, scope.config_version_id, response.run_id
@@ -226,12 +229,6 @@ struct RunEventsQuery {
     after: Option<i64>,
 }
 
-fn parse_json<T>(request: Result<Json<T>, JsonRejection>) -> Result<T, AppError> {
-    request
-        .map(|Json(value)| value)
-        .map_err(|error| AppError::request(error.body_text()))
-}
-
 fn resolve_after_seq(
     after_query: Option<i64>,
     headers: &HeaderMap,
@@ -253,7 +250,7 @@ fn resolve_after_seq(
 }
 
 fn sse_event(run_id: &str, event: &RunEvent) -> Event {
-    let (event_name, id, data) = RunService::map_public_event(run_id, event).unwrap_or_else(|_| {
+    let (event_name, id, data) = map_public_event(run_id, event).unwrap_or_else(|_| {
         (
             "run.error",
             String::new(),

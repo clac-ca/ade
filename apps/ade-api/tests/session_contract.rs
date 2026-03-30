@@ -6,10 +6,9 @@ use std::{
 };
 
 use ade_api::{
-    readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
-    router::{AppState, create_app},
-    run_store::InMemoryRunStore,
-    runs::RunService,
+    api::{AppState, create_app},
+    readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
+    runs::{InMemoryRunStore, RunService},
     session::SessionService,
     terminal::TerminalService,
     unix_time_ms,
@@ -35,6 +34,7 @@ struct PoolStubState {
     artifact_upload_urls: Vec<String>,
     execution_codes: Vec<String>,
     identifiers: Vec<String>,
+    run_execution_count: usize,
     uploaded_files: HashMap<String, Vec<u8>>,
     uploaded_names: Vec<String>,
 }
@@ -50,6 +50,8 @@ struct PoolStubOptions {
     auto_connect_run_bridge: bool,
     auto_connect_terminal_bridge: bool,
     run_bridge_delay_ms: u64,
+    run_bridge_disconnect_before_ready_attempts: usize,
+    run_execution_delay_ms: u64,
     terminal_bridge_delay_ms: u64,
     terminal_execution_delay_ms: u64,
 }
@@ -60,6 +62,8 @@ impl Default for PoolStubOptions {
             auto_connect_run_bridge: true,
             auto_connect_terminal_bridge: true,
             run_bridge_delay_ms: 0,
+            run_bridge_disconnect_before_ready_attempts: 0,
+            run_execution_delay_ms: 0,
             terminal_bridge_delay_ms: 0,
             terminal_execution_delay_ms: 0,
         }
@@ -83,14 +87,14 @@ struct SseEvent {
 }
 
 fn ready_state() -> ReadinessController {
-    let readiness = ReadinessController::new(CreateReadinessControllerOptions {
-        database_ok: Some(true),
-        last_checked_at: Some(unix_time_ms()),
-        phase: Some(ReadinessPhase::Ready),
-        ..CreateReadinessControllerOptions::default()
-    });
-    readiness.mark_ready();
-    readiness
+    ReadinessController::new(ReadinessSnapshot {
+        database: DatabaseReadiness {
+            ok: true,
+            last_checked_at: Some(unix_time_ms()),
+            ..DatabaseReadiness::default()
+        },
+        phase: ReadinessPhase::Ready,
+    })
 }
 
 async fn stub_upload_file(
@@ -189,10 +193,29 @@ async fn stub_execute(
     if code.contains("websockets.sync.client")
         && let Some(bridge_url) = extract_bridge_url(&code)
     {
+        let run_execution_count = {
+            let mut state = stub.state.lock().unwrap();
+            state.run_execution_count += 1;
+            state.run_execution_count
+        };
         let config = extract_execution_config(&code).expect("run config");
 
         if stub.options.run_bridge_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(stub.options.run_bridge_delay_ms)).await;
+        }
+
+        if run_execution_count <= stub.options.run_bridge_disconnect_before_ready_attempts {
+            if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
+                let _ = socket.close(None).await;
+            }
+            return Json(json!({
+                "status": "Succeeded",
+                "result": {
+                    "stdout": "",
+                    "stderr": "",
+                    "executionTimeInMilliseconds": 4,
+                }
+            }));
         }
 
         if stub.options.auto_connect_run_bridge {
@@ -239,12 +262,7 @@ async fn stub_execute(
                     ))
                     .await;
 
-                request_artifact(
-                    &client,
-                    output_upload,
-                    Some(b"normalized-output".to_vec()),
-                )
-                .await;
+                request_artifact(&client, output_upload, Some(b"normalized-output".to_vec())).await;
                 {
                     let mut state = stub.state.lock().unwrap();
                     state
@@ -267,6 +285,10 @@ async fn stub_execute(
                     .await;
                 let _ = socket.close(None).await;
             }
+        }
+
+        if stub.options.run_execution_delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(stub.options.run_execution_delay_ms)).await;
         }
 
         return Json(json!({
@@ -363,21 +385,6 @@ fn app_with_session_and_url(
     config_targets: &[(&str, &str, &FsPath)],
     engine_wheel_path: &FsPath,
 ) -> axum::Router {
-    app_with_session_and_url_and_terminal_service(
-        endpoint,
-        app_url,
-        config_targets,
-        engine_wheel_path,
-    )
-    .0
-}
-
-fn app_with_session_and_url_and_terminal_service(
-    endpoint: &str,
-    app_url: &str,
-    config_targets: &[(&str, &str, &FsPath)],
-    engine_wheel_path: &FsPath,
-) -> (axum::Router, Arc<TerminalService>) {
     let config_targets = config_targets
         .iter()
         .map(|(workspace_id, config_version_id, wheel_path)| {
@@ -435,15 +442,12 @@ fn app_with_session_and_url_and_terminal_service(
     let terminal_service =
         Arc::new(TerminalService::from_env(&env, Arc::clone(&session_service)).unwrap());
 
-    let app = create_app(AppState {
+    create_app(AppState {
         readiness: ready_state(),
         run_service,
-        terminal_service: Arc::clone(&terminal_service),
-        session_service,
+        terminal_service,
         web_root: None,
-    });
-
-    (app, terminal_service)
+    })
 }
 
 fn artifact_root(engine_wheel_path: &FsPath) -> PathBuf {
@@ -540,11 +544,7 @@ fn resolve_url(base_url: &str, url: &str) -> String {
         return url.to_string();
     }
 
-    Url::parse(base_url)
-        .unwrap()
-        .join(url)
-        .unwrap()
-        .to_string()
+    Url::parse(base_url).unwrap().join(url).unwrap().to_string()
 }
 
 async fn upload_input(
@@ -602,7 +602,14 @@ async fn start_run(client: &Client, base_url: &str, input_path: &str) -> reqwest
 async fn wait_for_terminal_status(client: &Client, url: &str, expected: &str) -> Value {
     let mut detail = Value::Null;
     for _ in 0..40 {
-        detail = client.get(url).send().await.unwrap().json::<Value>().await.unwrap();
+        detail = client
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
         if detail["status"] == expected {
             return detail;
         }
@@ -610,6 +617,26 @@ async fn wait_for_terminal_status(client: &Client, url: &str, expected: &str) ->
     }
 
     panic!("run never reached status {expected}: {detail}");
+}
+
+async fn wait_for_output_path(client: &Client, url: &str) -> Value {
+    let mut detail = Value::Null;
+    for _ in 0..40 {
+        detail = client
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        if detail["outputPath"].is_string() {
+            return detail;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    panic!("run never exposed outputPath: {detail}");
 }
 
 #[tokio::test]
@@ -651,7 +678,11 @@ async fn uploads_route_returns_server_chosen_paths_and_direct_upload_instruction
     assert_eq!(payload["upload"]["method"], "PUT");
     assert_eq!(
         payload["upload"]["headers"]["x-ade-artifact-token"].as_str(),
-        Some(payload["upload"]["headers"]["x-ade-artifact-token"].as_str().unwrap())
+        Some(
+            payload["upload"]["headers"]["x-ade-artifact-token"]
+                .as_str()
+                .unwrap()
+        )
     );
     assert_eq!(
         payload["upload"]["headers"]["content-type"],
@@ -663,7 +694,12 @@ async fn uploads_route_returns_server_chosen_paths_and_direct_upload_instruction
             .unwrap()
             .contains("/api/internal/artifacts/workspaces/workspace-a/configs/config-v1/uploads/")
     );
-    assert!(payload["upload"]["expiresAt"].as_str().unwrap().contains('T'));
+    assert!(
+        payload["upload"]["expiresAt"]
+            .as_str()
+            .unwrap()
+            .contains('T')
+    );
 
     stub_handle.abort();
 }
@@ -717,11 +753,13 @@ async fn create_run_returns_accepted_metadata_and_persists_output_via_artifact_s
     );
     assert!(location.ends_with(&format!("/runs/{run_id}")));
 
-    let detail = wait_for_terminal_status(&client, &format!("{base_url}{location}"), "succeeded").await;
+    let detail =
+        wait_for_terminal_status(&client, &format!("{base_url}{location}"), "succeeded").await;
     let output_path = detail["outputPath"].as_str().unwrap();
-    assert_eq!(output_path, format!(
-        "workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx"
-    ));
+    assert_eq!(
+        output_path,
+        format!("workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx")
+    );
     assert_eq!(detail["validationIssues"], json!([]));
 
     let output_bytes = std::fs::read(artifact_root(&engine).join(output_path)).unwrap();
@@ -781,7 +819,8 @@ async fn run_events_stream_over_sse_and_resume_from_last_event_id() {
         b"name,email\nalice,alice@example.com\n".to_vec(),
     )
     .await;
-    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap()).await
+    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap())
+        .await
         .json::<Value>()
         .await
         .unwrap();
@@ -806,17 +845,13 @@ async fn run_events_stream_over_sse_and_resume_from_last_event_id() {
     assert_eq!(events.first().unwrap().event, "run.created");
     assert_eq!(events.last().unwrap().event, "run.completed");
     assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
-    assert!(
-        events.iter().any(|event| event.event == "run.log"
-            && serde_json::from_str::<Value>(&event.data).unwrap()["message"] == "Loaded 12 rows")
-    );
-    assert!(
-        events.iter().any(|event| event.event == "run.result"
-            && serde_json::from_str::<Value>(&event.data).unwrap()["outputPath"]
-                == format!(
-                    "workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx"
-                ))
-    );
+    assert!(events.iter().any(|event| event.event == "run.log"
+        && serde_json::from_str::<Value>(&event.data).unwrap()["message"] == "Loaded 12 rows"));
+    assert!(events.iter().any(|event| event.event == "run.result"
+        && serde_json::from_str::<Value>(&event.data).unwrap()["outputPath"]
+            == format!(
+                "workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx"
+            )));
 
     let resume_from = events[2].id;
     let resumed_text = client
@@ -872,7 +907,8 @@ async fn cancelling_a_run_marks_it_cancelled_and_emits_final_sse_event() {
         b"name,email\nalice,alice@example.com\n".to_vec(),
     )
     .await;
-    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap()).await
+    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap())
+        .await
         .json::<Value>()
         .await
         .unwrap();
@@ -912,6 +948,187 @@ async fn cancelling_a_run_marks_it_cancelled_and_emits_final_sse_event() {
         serde_json::from_str::<Value>(&events.last().unwrap().data).unwrap()["finalStatus"],
         "cancelled"
     );
+
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn cancelling_before_bridge_ready_stops_the_session_attempt() {
+    let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        run_bridge_delay_ms: 150,
+        ..PoolStubOptions::default()
+    })
+    .await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{address}");
+    let upload = upload_input(
+        &client,
+        &base_url,
+        "input.csv",
+        "text/csv",
+        b"name,email\nalice,alice@example.com\n".to_vec(),
+    )
+    .await;
+    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap())
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    let run_id = created["runId"].as_str().unwrap();
+
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    let cancel = client
+        .post(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/cancel"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancel.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let detail = wait_for_terminal_status(
+        &client,
+        &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}"),
+        "cancelled",
+    )
+    .await;
+    assert_eq!(detail["outputPath"], Value::Null);
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let state = state.lock().unwrap();
+    assert!(state.artifact_download_urls.is_empty());
+    assert!(state.artifact_upload_urls.is_empty());
+
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn cancelling_after_a_partial_result_clears_stale_output_state() {
+    let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        run_execution_delay_ms: 200,
+        ..PoolStubOptions::default()
+    })
+    .await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{address}");
+    let upload = upload_input(
+        &client,
+        &base_url,
+        "input.csv",
+        "text/csv",
+        b"name,email\nalice,alice@example.com\n".to_vec(),
+    )
+    .await;
+    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap())
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    let run_id = created["runId"].as_str().unwrap();
+    let detail_url =
+        format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}");
+
+    let partial = wait_for_output_path(&client, &detail_url).await;
+    assert!(partial["outputPath"].is_string());
+
+    let cancel = client
+        .post(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/cancel"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancel.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let detail = wait_for_terminal_status(&client, &detail_url, "cancelled").await;
+    assert_eq!(detail["outputPath"], Value::Null);
+    assert_eq!(detail["validationIssues"], json!([]));
+    assert_eq!(detail["errorMessage"], "Run cancelled.");
+
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn transient_run_bridge_startup_failures_retry_once_and_then_succeed() {
+    let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        run_bridge_disconnect_before_ready_attempts: 1,
+        ..PoolStubOptions::default()
+    })
+    .await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{address}");
+    let upload = upload_input(
+        &client,
+        &base_url,
+        "input.csv",
+        "text/csv",
+        b"name,email\nalice,alice@example.com\n".to_vec(),
+    )
+    .await;
+    let created = start_run(&client, &base_url, upload["filePath"].as_str().unwrap())
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    let run_id = created["runId"].as_str().unwrap();
+
+    let detail = wait_for_terminal_status(
+        &client,
+        &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}"),
+        "succeeded",
+    )
+    .await;
+    assert!(detail["outputPath"].is_string());
+
+    let state = state.lock().unwrap();
+    assert_eq!(state.run_execution_count, 2);
+    assert_eq!(state.artifact_download_urls.len(), 1);
+    assert_eq!(state.artifact_upload_urls.len(), 1);
 
     app_handle.abort();
     stub_handle.abort();
@@ -1059,7 +1276,7 @@ async fn internal_bridge_route_can_only_attach_once() {
 
 #[tokio::test]
 async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
-    let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+    let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
         auto_connect_terminal_bridge: false,
         terminal_execution_delay_ms: 300,
         ..PoolStubOptions::default()
@@ -1069,7 +1286,7 @@ async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let (app, terminal_service) = app_with_session_and_url_and_terminal_service(
+    let app = app_with_session_and_url(
         &endpoint,
         &format!("http://{address}"),
         &[("workspace-a", "config-v1", config_v1.as_path())],
@@ -1083,11 +1300,14 @@ async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
         format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/terminal");
     let (mut browser_socket, _response) = connect_async(&terminal_url).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(terminal_service.pending_count(), 1);
+    let bridge_url = {
+        let execution_codes = state.lock().unwrap().execution_codes.clone();
+        extract_bridge_url(&execution_codes[0]).unwrap()
+    };
 
     browser_socket.close(None).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(terminal_service.pending_count(), 0);
+    assert!(connect_async(&bridge_url).await.is_err());
 
     app_handle.abort();
     stub_handle.abort();

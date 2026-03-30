@@ -17,10 +17,10 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
+    api::{AppState, create_app},
     db::{Database, DatabaseProbe},
     error::AppError,
-    readiness::{CreateReadinessControllerOptions, ReadinessController, ReadinessPhase},
-    router::{AppState, create_app},
+    readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::RunService,
     session::SessionService,
     terminal::TerminalService,
@@ -55,14 +55,16 @@ pub struct ServerInstance {
 impl ServerInstance {
     #[must_use]
     pub fn new(options: ServerOptions) -> Self {
-        let readiness = ReadinessController::new(CreateReadinessControllerOptions {
-            stale_after_ms: Some(options.stale_after_ms),
-            ..CreateReadinessControllerOptions::default()
+        let readiness = ReadinessController::new(ReadinessSnapshot {
+            database: DatabaseReadiness {
+                stale_after_ms: options.stale_after_ms,
+                ..DatabaseReadiness::default()
+            },
+            ..ReadinessSnapshot::default()
         });
         let app = create_app(AppState {
             readiness: readiness.clone(),
             run_service: options.run_service,
-            session_service: options.session_service,
             terminal_service: options.terminal_service,
             web_root: options.web_root,
         });
@@ -277,8 +279,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::DEFAULT_READINESS_STALE_AFTER_MS, run_store::InMemoryRunStore, runs::RunService,
-        session::SessionService, terminal::TerminalService,
+        config::DEFAULT_READINESS_STALE_AFTER_MS,
+        runs::{InMemoryRunStore, RunService},
+        session::SessionService,
+        terminal::TerminalService,
     };
 
     #[derive(Debug, Default)]

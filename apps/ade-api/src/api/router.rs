@@ -17,15 +17,10 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
-    api_docs::ApiDoc,
+    api::{docs::ApiDoc, internal, public},
     error::AppError,
     readiness::ReadinessController,
-    routes::{
-        internal_artifacts, internal_run_bridges, internal_terminal_bridges, runs, system,
-        terminal, uploads,
-    },
     runs::RunService,
-    session::SessionService,
     terminal::TerminalService,
 };
 
@@ -33,7 +28,6 @@ use crate::{
 pub struct AppState {
     pub readiness: ReadinessController,
     pub run_service: Arc<RunService>,
-    pub session_service: Arc<SessionService>,
     pub terminal_service: Arc<TerminalService>,
     pub web_root: Option<PathBuf>,
 }
@@ -41,12 +35,6 @@ pub struct AppState {
 impl FromRef<AppState> for ReadinessController {
     fn from_ref(state: &AppState) -> Self {
         state.readiness.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<SessionService> {
-    fn from_ref(state: &AppState) -> Self {
-        Arc::clone(&state.session_service)
     }
 }
 
@@ -64,27 +52,16 @@ impl FromRef<AppState> for Arc<TerminalService> {
 
 pub fn create_app(state: AppState) -> Router {
     let openapi = ApiDoc::openapi();
-    let api_router = Router::new()
-        .route("/", get(system::api_root))
-        .route("/healthz", get(system::healthz))
-        .route("/readyz", get(system::readyz))
-        .route("/version", get(system::version))
-        .nest(
-            "/internal",
-            internal_terminal_bridges::router()
-                .merge(internal_run_bridges::router())
-                .merge(internal_artifacts::router()),
-        )
+    let api_router = public::system::router()
+        .nest("/internal", internal::router())
         .nest(
             "/workspaces/{workspaceId}/configs/{configVersionId}",
-            uploads::workspace_router()
-                .merge(runs::workspace_router())
-                .merge(terminal::workspace_router()),
+            public::scoped_router(),
         )
         .fallback(api_not_found);
 
     Router::new()
-        .route("/api/", get(system::api_root))
+        .route("/api/", get(public::system::api_root))
         .nest("/api", api_router)
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi))
         .fallback(spa_or_not_found)
@@ -117,7 +94,11 @@ async fn spa_or_not_found(
 
     let request_version = request.version();
     let request_headers = request.headers().clone();
-    let static_response = serve_path(&web_root, request).await?;
+    let static_response = ServeDir::new(&web_root)
+        .oneshot(request)
+        .await
+        .unwrap()
+        .map(Body::new);
 
     if static_response.status() != StatusCode::NOT_FOUND {
         return Ok(static_response);
@@ -128,11 +109,6 @@ async fn spa_or_not_found(
     }
 
     Err(not_found_for_method_path(&request_method, &request_path))
-}
-
-async fn serve_path(web_root: &Path, request: AxumRequest) -> Result<Response, AppError> {
-    let response = ServeDir::new(web_root).oneshot(request).await.unwrap();
-    Ok(response.map(Body::new))
 }
 
 async fn serve_index_html(

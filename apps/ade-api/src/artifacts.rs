@@ -13,7 +13,7 @@ use time::{OffsetDateTime, format_description::FormatItem, macros::format_descri
 use crate::{
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
-    session::Scope,
+    scope::Scope,
 };
 
 mod blob;
@@ -29,7 +29,7 @@ pub(super) const BLOB_CONTAINER_ENV_NAME: &str = "ADE_BLOB_CONTAINER";
 pub(super) const BLOB_CORS_ALLOWED_ORIGINS_ENV_NAME: &str = "ADE_BLOB_CORS_ALLOWED_ORIGINS";
 pub(super) const BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME: &str = "ADE_BLOB_PUBLIC_ACCOUNT_URL";
 pub(super) const BLOB_RUNTIME_ACCOUNT_URL_ENV_NAME: &str = "ADE_BLOB_RUNTIME_ACCOUNT_URL";
-pub(super) const LOCAL_ARTIFACT_TOKEN_HEADER: &str = "x-ade-artifact-token";
+pub(crate) const LOCAL_ARTIFACT_TOKEN_HEADER: &str = "x-ade-artifact-token";
 const LOCAL_ARTIFACT_URL_BASE: &str = "http://local.invalid";
 
 static ISO_8601_SECONDS_FORMAT: &[FormatItem<'static>] =
@@ -203,25 +203,6 @@ pub(super) fn normalize_artifact_path(path: &str) -> Result<String, AppError> {
     Ok(segments.join("/"))
 }
 
-pub(crate) fn local_artifact_token_header() -> &'static str {
-    LOCAL_ARTIFACT_TOKEN_HEADER
-}
-
-pub(crate) fn resolve_access_url(
-    base_url: &Url,
-    access: &ArtifactAccessGrant,
-) -> Result<String, AppError> {
-    match Url::parse(&access.url) {
-        Ok(url) => Ok(url.to_string()),
-        Err(_) => base_url
-            .join(&access.url)
-            .map(|url| url.to_string())
-            .map_err(|error| {
-                AppError::internal_with_source("Failed to resolve an artifact access URL.", error)
-            }),
-    }
-}
-
 pub(crate) fn verify_local_artifact_access(
     path: &str,
     method: &Method,
@@ -346,7 +327,7 @@ mod tests {
         normalize_artifact_path, output_path_for_run, scope_root, upload_path_for_file,
         validate_input_path, verify_local_artifact_access,
     };
-    use crate::session::Scope;
+    use crate::scope::Scope;
 
     #[test]
     fn normalizes_relative_artifact_paths() {

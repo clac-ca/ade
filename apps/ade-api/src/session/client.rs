@@ -5,13 +5,12 @@ use reqwest::{
     multipart::{Form, Part},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::borrow::Cow;
 use utoipa::ToSchema;
 
 use crate::{
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
-    run_store::RunTimings,
+    runs::RunTimings,
 };
 
 const DEFAULT_AZURE_SESSION_API_VERSION: &str = "2025-10-02-preview";
@@ -85,18 +84,6 @@ impl SessionPoolClient {
         identifier: &str,
         code: String,
         timeout_in_seconds: Option<u64>,
-    ) -> Result<PythonExecution, AppError> {
-        Ok(self
-            .execute_detailed(identifier, code, timeout_in_seconds)
-            .await?
-            .value)
-    }
-
-    pub(crate) async fn execute_detailed(
-        &self,
-        identifier: &str,
-        code: String,
-        timeout_in_seconds: Option<u64>,
     ) -> Result<SessionOperationResult<PythonExecution>, AppError> {
         let envelope: SessionOperationResult<ExecutionEnvelope> = self
             .json_request(
@@ -128,7 +115,7 @@ impl SessionPoolClient {
         })
     }
 
-    pub(crate) async fn upload_file_detailed(
+    pub(crate) async fn upload_file(
         &self,
         identifier: &str,
         filename: String,
@@ -142,13 +129,15 @@ impl SessionPoolClient {
                 AppError::request(format!("Invalid uploaded file content type: {error}"))
             })?;
         }
-        let query_pairs = directory
-            .as_deref()
-            .map(|path| vec![("path", path)])
-            .unwrap_or_default();
+        let query_pairs = directory.map(|path| [("path", path)]);
 
         let request = self
-            .data_plane_request(Method::POST, &["files"], identifier, &query_pairs)
+            .data_plane_request(
+                Method::POST,
+                &["files"],
+                identifier,
+                query_pairs.as_ref().map_or(&[], |pairs| pairs.as_slice()),
+            )
             .await?
             .multipart(Form::new().part("file", part));
         let record: SessionOperationResult<AzureFileRecord> =
@@ -324,12 +313,10 @@ fn session_pool_url(
     Ok(url)
 }
 
-fn split_session_file_path(path: &str) -> (Option<Cow<'_, str>>, Cow<'_, str>) {
+fn split_session_file_path(path: &str) -> (Option<&str>, &str) {
     match path.rsplit_once('/') {
-        Some((directory, name)) if !directory.is_empty() => {
-            (Some(Cow::Borrowed(directory)), Cow::Borrowed(name))
-        }
-        _ => (None, Cow::Borrowed(path)),
+        Some((directory, name)) if !directory.is_empty() => (Some(directory), name),
+        _ => (None, path),
     }
 }
 
@@ -490,12 +477,12 @@ mod tests {
     #[test]
     fn split_session_file_paths_into_directory_and_name() {
         let (directory, name) = split_session_file_path("runs/run-1/output/file.xlsx");
-        assert_eq!(directory.as_deref(), Some("runs/run-1/output"));
-        assert_eq!(name.as_ref(), "file.xlsx");
+        assert_eq!(directory, Some("runs/run-1/output"));
+        assert_eq!(name, "file.xlsx");
 
         let (directory, name) = split_session_file_path("notes.txt");
-        assert_eq!(directory.as_deref(), None);
-        assert_eq!(name.as_ref(), "notes.txt");
+        assert_eq!(directory, None);
+        assert_eq!(name, "notes.txt");
     }
 
     #[test]
