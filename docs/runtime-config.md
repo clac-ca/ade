@@ -52,7 +52,7 @@ Local development uses Azurite instead of Azure Blob Storage. Azurite does not s
 
 ## Hosted Session Config
 
-ADE uses one shared Azure Container Apps PythonLTS session-pool resource per environment. Local development uses a Dockerized session-pool emulator that exposes the same internal execution and file routes.
+ADE uses one shared Azure Container Apps Shell session-pool resource per environment. Local development uses a Dockerized session-pool emulator that exposes the same internal execution and file routes.
 
 The ADE API requires that session-pool config to be present at startup. Azure auth behavior is inferred from `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT`:
 
@@ -65,10 +65,10 @@ The steady-state hosted runtime settings are:
 | -------------------------------------- | -------- | ------- | ----------------------------------------------------------------------------------------------- |
 | `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` | Yes      | API     | Base URL for the session-pool data-plane routes.                                                |
 | `ADE_SESSION_SECRET`                   | Yes      | API     | Secret used to derive deterministic ADE session identifiers from `workspaceId:configVersionId`. |
-| `ADE_ENGINE_WHEEL_PATH`                | Yes      | API     | Explicit wheel path for `ade-engine`.                                                           |
+| `ADE_SESSION_BUNDLE_ROOT`              | Yes      | API     | Root directory that contains the session bundle copied into each host session.                  |
 | `ADE_CONFIG_TARGETS`                   | Yes      | API     | JSON array mapping `{ workspaceId, configVersionId }` pairs to explicit config wheel paths.     |
 
-ADE does not discover or build Python wheels at runtime. The dev and start scripts package wheels up front and pass their paths into the API explicitly.
+ADE does not discover or build Python wheels at runtime. The dev and start scripts build a `session-bundle` up front and pass its root into the API explicitly.
 
 `ADE_CONFIG_TARGETS` uses this shape:
 
@@ -87,7 +87,7 @@ ADE does not discover or build Python wheels at runtime. The dev and start scrip
 ]
 ```
 
-The API loads that mapping once at startup and resolves the config wheel per request from the scoped route.
+The API loads that mapping once at startup and resolves the config wheel per request from the scoped route. The session bundle root contains the shared connector binary, prepare script, pinned Python toolchain bundle, and the base wheelhouse used to satisfy `ade-config` dependencies such as `ade-engine`.
 
 ADE does not support a migration-on-startup toggle. `ade-api` never runs migrations on startup, and `ade-migrate` is the only supported migration entrypoint.
 
@@ -108,8 +108,8 @@ The server listen address is not environment-driven.
 
 ADE queues run execution inside the API and starts at most a small bounded number of runs at once.
 
-| Name                     | Required | Used by | Notes                                                             |
-| ------------------------ | -------- | ------- | ----------------------------------------------------------------- |
+| Name                     | Required | Used by | Notes                                                              |
+| ------------------------ | -------- | ------- | ------------------------------------------------------------------ |
 | `ADE_RUN_MAX_CONCURRENT` | No       | API     | Maximum concurrent run executions per API instance. Defaults to 4. |
 
 ## Local Defaults
@@ -119,7 +119,7 @@ ADE queues run execution inside the API and starts at most a small bounded numbe
 - local Azurite Blob Storage on `http://127.0.0.1:10000/devstoreaccount1`
 - local SQL on `127.0.0.1:8013`
 - local session-pool emulator on `http://127.0.0.1:8014`
-- freshly packaged local `ade-engine` wheel plus an injected `ADE_CONFIG_TARGETS` mapping for:
+- a freshly packaged local `session-bundle` plus an injected `ADE_CONFIG_TARGETS` mapping for:
   - `workspace-a/config-v1`
   - `workspace-b/config-v2`
 
@@ -139,9 +139,9 @@ Managed local blob settings are injected as:
 - If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is absent, they start the local session-pool emulator and inject:
   - `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT=http://host.docker.internal:8014`
   - `ADE_SESSION_SECRET=ade-local-session-secret`
-  - `ADE_ENGINE_WHEEL_PATH=/app/python/ade_engine.whl`
+  - `ADE_SESSION_BUNDLE_ROOT=/app/session-bundle`
   - `ADE_CONFIG_TARGETS` mapping both sample scopes to `/app/python/ade_config.whl`
-- If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they require `ADE_SESSION_SECRET`, `ADE_ENGINE_WHEEL_PATH`, and `ADE_CONFIG_TARGETS` to already be configured in `.env` and pass them through unchanged.
+- If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they require `ADE_SESSION_SECRET` and `ADE_CONFIG_TARGETS` to already be configured in `.env`. `ADE_SESSION_BUNDLE_ROOT` defaults to `/app/session-bundle` when omitted.
 
 Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, a lifecycle policy that tiers scoped block blobs to Cool after 30 days and Archive after 180 days, one shared session-pool endpoint, and an explicit `ADE_CONFIG_TARGETS` JSON string in the app container. The running app gets Blob Storage RBAC so it can mint user delegation SAS, but the session runtime does not receive broad storage access.
 

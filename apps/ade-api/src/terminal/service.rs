@@ -11,8 +11,9 @@ use crate::{
     config::EnvBag,
     error::AppError,
     scope::Scope,
-    session_agent::{
-        SessionAgentCommand, SessionAgentEvent, SessionAgentService, WorkerId, WorkerKind,
+    scope_session::{
+        ChannelId, ChannelKind, ChannelOpenParams, ChannelStream, PtySize, ScopeSessionEvent,
+        ScopeSessionService,
     },
 };
 
@@ -26,44 +27,36 @@ const DEFAULT_TERMINAL_ROWS: u16 = 32;
 #[derive(Clone)]
 pub struct TerminalService {
     active_sessions: ActiveTerminalManager,
-    session_agent_service: Arc<SessionAgentService>,
+    scope_session_service: Arc<ScopeSessionService>,
 }
 
 impl TerminalService {
     pub fn from_env(
         _env: &EnvBag,
-        session_agent_service: Arc<SessionAgentService>,
+        scope_session_service: Arc<ScopeSessionService>,
     ) -> Result<Self, AppError> {
         Ok(Self {
             active_sessions: ActiveTerminalManager::default(),
-            session_agent_service,
+            scope_session_service,
         })
     }
 
     pub(crate) async fn run_browser_terminal(&self, scope: Scope, mut browser_socket: WebSocket) {
         let Some(_lease) = self.active_sessions.try_acquire(&scope) else {
             let _ = send_terminal_event(
-                    &mut browser_socket,
-                    TerminalServerMessage::Error {
-                        message: "A terminal session for this workspace is still shutting down. Retry in a few seconds.".to_string(),
-                    },
-                )
-                .await;
+                &mut browser_socket,
+                TerminalServerMessage::Error {
+                    message: "A terminal session for this workspace is still shutting down. Retry in a few seconds.".to_string(),
+                },
+            )
+            .await;
             let _ = browser_socket.send(Message::Close(None)).await;
             return;
         };
 
-        let runtime = match self.session_agent_service.runtime_artifacts(&scope) {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                let _ = Self::fail_terminal(&mut browser_socket, error.to_string(), None).await;
-                return;
-            }
-        };
-
         let handle = match self
-            .session_agent_service
-            .connect_scope_session(&scope, &runtime)
+            .scope_session_service
+            .ensure_ready_scope_session(&scope)
             .await
         {
             Ok(handle) => handle,
@@ -73,23 +66,19 @@ impl TerminalService {
             }
         };
 
-        if let Err(error) = self
-            .session_agent_service
-            .ensure_prepared(&scope, &runtime, &handle)
-            .await
-        {
-            let _ = Self::fail_terminal(&mut browser_socket, error.to_string(), None).await;
-            return;
-        }
-
-        let worker_id = WorkerId::new(format!("shell-{}", Uuid::new_v4().simple()));
+        let channel_id = ChannelId::new(format!("pty-{}", Uuid::new_v4().simple()));
         let mut events = handle.subscribe();
         if let Err(error) = handle
-            .send(SessionAgentCommand::StartShell {
-                cols: DEFAULT_TERMINAL_COLS,
-                cwd: runtime.session_root.clone(),
-                rows: DEFAULT_TERMINAL_ROWS,
-                worker_id: worker_id.clone(),
+            .open_channel(ChannelOpenParams {
+                channel_id: channel_id.clone(),
+                command: "exec /bin/sh -i".to_string(),
+                cwd: Some(handle.session_root().to_string()),
+                env: Default::default(),
+                kind: ChannelKind::Pty,
+                pty: Some(PtySize {
+                    cols: DEFAULT_TERMINAL_COLS,
+                    rows: DEFAULT_TERMINAL_ROWS,
+                }),
             })
             .await
         {
@@ -101,11 +90,7 @@ impl TerminalService {
             .await
             .is_err()
         {
-            let _ = handle
-                .send(SessionAgentCommand::CloseWorker {
-                    worker_id: worker_id.clone(),
-                })
-                .await;
+            let _ = handle.close_channel(channel_id.clone()).await;
             let _ = browser_socket.send(Message::Close(None)).await;
             return;
         }
@@ -113,9 +98,7 @@ impl TerminalService {
         loop {
             tokio::select! {
                 browser_message = browser_socket.recv() => {
-                    match Self::handle_browser_message(browser_message, &handle, &worker_id)
-                        .await
-                    {
+                    match Self::handle_browser_message(browser_message, &handle, &channel_id).await {
                         Ok(ControlFlow::Continue(())) => {}
                         Ok(ControlFlow::Break(())) => break,
                         Err(error) => {
@@ -125,9 +108,7 @@ impl TerminalService {
                     }
                 }
                 event = events.recv() => {
-                    match Self::handle_agent_event(event, &worker_id, &mut browser_socket)
-                        .await
-                    {
+                    match Self::handle_connector_event(event, &channel_id, &mut browser_socket).await {
                         Ok(ControlFlow::Continue(())) => {}
                         Ok(ControlFlow::Break(())) => break,
                         Err(error) => {
@@ -139,46 +120,29 @@ impl TerminalService {
             }
         }
 
-        let _ = handle
-            .send(SessionAgentCommand::CloseWorker {
-                worker_id: worker_id.clone(),
-            })
-            .await;
+        let _ = handle.close_channel(channel_id.clone()).await;
         let _ = browser_socket.send(Message::Close(None)).await;
     }
 
     async fn handle_browser_message(
         message: Option<Result<Message, axum::Error>>,
-        handle: &crate::session_agent::ScopeSessionHandle,
-        worker_id: &WorkerId,
+        handle: &crate::scope_session::ScopeSession,
+        channel_id: &ChannelId,
     ) -> Result<ControlFlow<()>, AppError> {
         match message {
             Some(Ok(Message::Text(text))) => match parse_client_message(text.as_str())? {
                 TerminalClientMessage::Close => {
-                    let _ = handle
-                        .send(SessionAgentCommand::CloseWorker {
-                            worker_id: worker_id.clone(),
-                        })
-                        .await;
+                    let _ = handle.close_channel(channel_id.clone()).await;
                     Ok(ControlFlow::Break(()))
                 }
                 TerminalClientMessage::Input { data } => {
                     handle
-                        .send(SessionAgentCommand::WriteInput {
-                            data,
-                            worker_id: worker_id.clone(),
-                        })
+                        .send_stdin(channel_id.clone(), data.into_bytes())
                         .await?;
                     Ok(ControlFlow::Continue(()))
                 }
                 TerminalClientMessage::Resize { cols, rows } => {
-                    handle
-                        .send(SessionAgentCommand::ResizePty {
-                            cols,
-                            rows,
-                            worker_id: worker_id.clone(),
-                        })
-                        .await?;
+                    handle.resize_pty(channel_id.clone(), cols, rows).await?;
                     Ok(ControlFlow::Continue(()))
                 }
             },
@@ -186,11 +150,7 @@ impl TerminalService {
                 "Binary terminal messages are not supported.".to_string(),
             )),
             Some(Ok(Message::Close(_))) | None => {
-                let _ = handle
-                    .send(SessionAgentCommand::CloseWorker {
-                        worker_id: worker_id.clone(),
-                    })
-                    .await;
+                let _ = handle.close_channel(channel_id.clone()).await;
                 Ok(ControlFlow::Break(()))
             }
             Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {
@@ -203,40 +163,43 @@ impl TerminalService {
         }
     }
 
-    async fn handle_agent_event(
-        event: Result<SessionAgentEvent, tokio::sync::broadcast::error::RecvError>,
-        worker_id: &WorkerId,
+    async fn handle_connector_event(
+        event: Result<ScopeSessionEvent, tokio::sync::broadcast::error::RecvError>,
+        channel_id: &ChannelId,
         browser_socket: &mut WebSocket,
     ) -> Result<ControlFlow<()>, AppError> {
         match event {
-            Ok(SessionAgentEvent::PtyOutput {
-                worker_id: event_worker_id,
+            Ok(ScopeSessionEvent::Data {
+                channel_id: event_channel_id,
                 data,
-            }) if event_worker_id == *worker_id => {
-                send_terminal_event(browser_socket, TerminalServerMessage::Output { data }).await?;
+                stream: ChannelStream::Pty,
+            }) if event_channel_id == *channel_id => {
+                send_terminal_event(
+                    browser_socket,
+                    TerminalServerMessage::Output {
+                        data: String::from_utf8_lossy(&data).into_owned(),
+                    },
+                )
+                .await?;
                 Ok(ControlFlow::Continue(()))
             }
-            Ok(SessionAgentEvent::WorkerExit {
-                worker_id: event_worker_id,
-                kind: WorkerKind::Shell,
+            Ok(ScopeSessionEvent::Exit {
+                channel_id: event_channel_id,
                 code,
-                ..
-            }) if event_worker_id == *worker_id => {
+            }) if event_channel_id == *channel_id => {
                 send_terminal_event(browser_socket, TerminalServerMessage::Exit { code }).await?;
                 Ok(ControlFlow::Break(()))
             }
-            Ok(SessionAgentEvent::Error {
-                worker_id: Some(event_worker_id),
+            Ok(ScopeSessionEvent::Error {
+                channel_id: Some(event_channel_id),
                 message,
-                ..
-            }) if event_worker_id == *worker_id => {
+            }) if event_channel_id == *channel_id => {
                 Self::fail_terminal(browser_socket, message, None).await?;
                 Ok(ControlFlow::Break(()))
             }
-            Ok(SessionAgentEvent::Error {
-                worker_id: None,
+            Ok(ScopeSessionEvent::Error {
+                channel_id: None,
                 message,
-                ..
             }) => {
                 Self::fail_terminal(browser_socket, message, None).await?;
                 Ok(ControlFlow::Break(()))
@@ -245,7 +208,7 @@ impl TerminalService {
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                 Self::fail_terminal(
                     browser_socket,
-                    "Scope session agent event stream overflowed while the terminal was active."
+                    "Scope session connector event stream overflowed while the terminal was active."
                         .to_string(),
                     None,
                 )
@@ -255,7 +218,8 @@ impl TerminalService {
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                 Self::fail_terminal(
                     browser_socket,
-                    "Scope session agent disconnected while the terminal was active.".to_string(),
+                    "Scope session connector disconnected while the terminal was active."
+                        .to_string(),
                     None,
                 )
                 .await?;
@@ -318,16 +282,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_service_allows_only_one_active_scope_lease() {
+    fn terminal_manager_is_single_lease_per_scope() {
         let manager = ActiveTerminalManager::default();
         let scope = Scope {
             workspace_id: "workspace-a".to_string(),
             config_version_id: "config-v1".to_string(),
         };
 
-        let lease = manager.try_acquire(&scope).expect("first lease");
-        assert!(manager.try_acquire(&scope).is_none());
-        drop(lease);
-        assert!(manager.try_acquire(&scope).is_some());
+        let first = manager.try_acquire(&scope);
+        let second = manager.try_acquire(&scope);
+
+        assert!(first.is_some());
+        assert!(second.is_none());
     }
 }

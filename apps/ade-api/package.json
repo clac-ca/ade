@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "clean": "rimraf target .package dist",
+    "clean": "rimraf ../../target .package dist",
     "dev": "cargo run --locked --bin ade-api --",
     "typecheck": "cargo check --locked --all-targets",
     "lint": "cargo clippy --locked --all-targets -- -D warnings",

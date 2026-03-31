@@ -129,14 +129,14 @@ pub struct RunValidationIssue {
     pub message: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PublicRunCreatedEvent {
     pub run_id: String,
     pub status: RunStatus,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PublicRunStatusEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,7 +150,7 @@ pub(crate) struct PublicRunStatusEvent {
     pub timings: Option<RunTimings>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PublicRunLogEvent {
     pub level: String,
@@ -159,7 +159,7 @@ pub(crate) struct PublicRunLogEvent {
     pub run_id: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PublicRunErrorEvent {
     pub message: String,
@@ -169,7 +169,7 @@ pub(crate) struct PublicRunErrorEvent {
     pub run_id: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PublicRunResultEvent {
     pub output_path: String,
@@ -177,7 +177,7 @@ pub(crate) struct PublicRunResultEvent {
     pub validation_issues: Vec<RunValidationIssue>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PublicRunCompletedEvent {
     pub final_status: RunStatus,

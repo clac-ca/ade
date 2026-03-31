@@ -57,10 +57,13 @@ async function main(logger = createConsoleLogger()): Promise<void> {
     });
 
     try {
-      await waitForReady([`${runtime.appUrl}/`, `${runtime.appUrl}/api/readyz`], {
-        isAlive: () => runtime.isAlive() && !shuttingDown,
-        timeoutMs: 60_000,
-      });
+      await waitForReady(
+        [`${runtime.appUrl}/`, `${runtime.appUrl}/api/readyz`],
+        {
+          isAlive: () => runtime.isAlive() && !shuttingDown,
+          timeoutMs: 60_000,
+        },
+      );
       await runAcceptanceChecks(runtime.appUrl);
     } catch (error) {
       logger.error(formatError(error));

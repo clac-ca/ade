@@ -122,7 +122,7 @@ test("configured session pool env keeps the app url fallback boring and local", 
         ADE_APP_URL: "http://host.docker.internal:8000",
         ADE_CONFIG_TARGETS:
           '[{"workspaceId":"workspace-a","configVersionId":"config-v1","wheelPath":"/tmp/config.whl"}]',
-        ADE_ENGINE_WHEEL_PATH: "/app/python/ade_engine.whl",
+        ADE_SESSION_BUNDLE_ROOT: "/app/session-bundle",
         ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
           "https://example.dynamicsessions.io",
         ADE_SESSION_SECRET: "secret",

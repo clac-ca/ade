@@ -16,16 +16,16 @@ use crate::{error::AppError, unix_time_ms};
 static CHANNEL_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default, Clone)]
-pub(crate) struct PendingSessionAgentManager {
+pub(crate) struct PendingConnectorManager {
     inner: Arc<Mutex<HashMap<String, oneshot::Sender<WebSocket>>>>,
 }
 
-impl PendingSessionAgentManager {
+impl PendingConnectorManager {
     pub(crate) fn create(&self, channel_id: String) -> oneshot::Receiver<WebSocket> {
         let (bridge_tx, bridge_rx) = oneshot::channel();
         self.inner
             .lock()
-            .expect("session-agent rendezvous lock poisoned")
+            .expect("reverse-connect rendezvous lock poisoned")
             .insert(channel_id, bridge_tx);
         bridge_rx
     }
@@ -34,10 +34,10 @@ impl PendingSessionAgentManager {
         let Some(bridge_tx) = self
             .inner
             .lock()
-            .expect("session-agent rendezvous lock poisoned")
+            .expect("reverse-connect rendezvous lock poisoned")
             .remove(channel_id)
         else {
-            return Err(AppError::not_found("Session agent rendezvous not found."));
+            return Err(AppError::not_found("Reverse-connect rendezvous not found."));
         };
 
         Ok(bridge_tx)
@@ -47,7 +47,7 @@ impl PendingSessionAgentManager {
         let _ = self
             .inner
             .lock()
-            .expect("session-agent rendezvous lock poisoned")
+            .expect("reverse-connect rendezvous lock poisoned")
             .remove(channel_id);
     }
 }
@@ -74,27 +74,29 @@ pub(crate) fn verify_rendezvous_token(
     let Some((expires_at_ms, signature_hex)) = token.split_once('.') else {
         return Err(AppError::status(
             StatusCode::UNAUTHORIZED,
-            "Invalid session agent token.",
+            "Invalid reverse-connect token.",
         ));
     };
-    let expires_at_ms = expires_at_ms
-        .parse::<u64>()
-        .map_err(|_| AppError::status(StatusCode::UNAUTHORIZED, "Invalid session agent token."))?;
+    let expires_at_ms = expires_at_ms.parse::<u64>().map_err(|_| {
+        AppError::status(StatusCode::UNAUTHORIZED, "Invalid reverse-connect token.")
+    })?;
     if now_ms > expires_at_ms {
         return Err(AppError::status(
             StatusCode::UNAUTHORIZED,
-            "Session agent token expired.",
+            "Reverse-connect token expired.",
         ));
     }
 
-    let signature = hex::decode(signature_hex)
-        .map_err(|_| AppError::status(StatusCode::UNAUTHORIZED, "Invalid session agent token."))?;
+    let signature = hex::decode(signature_hex).map_err(|_| {
+        AppError::status(StatusCode::UNAUTHORIZED, "Invalid reverse-connect token.")
+    })?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key is valid");
     mac.update(channel_id.as_bytes());
     mac.update(b":");
     mac.update(expires_at_ms.to_string().as_bytes());
-    mac.verify_slice(&signature)
-        .map_err(|_| AppError::status(StatusCode::UNAUTHORIZED, "Invalid session agent token."))?;
+    mac.verify_slice(&signature).map_err(|_| {
+        AppError::status(StatusCode::UNAUTHORIZED, "Invalid reverse-connect token.")
+    })?;
 
     Ok(())
 }

@@ -15,7 +15,7 @@ pub(crate) struct RunEventFeed {
     pub(crate) subscription: Option<broadcast::Receiver<RunEvent>>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct ArchivedRunEventLine {
     data: serde_json::Value,
     event: String,
@@ -138,4 +138,113 @@ pub(crate) fn archive_event_line(run_id: &str, event: &RunEvent) -> Result<Strin
         seq: event.seq(),
     })
     .map_err(|error| AppError::internal_with_source("Failed to encode a run event line.", error))
+}
+
+pub(crate) fn parse_archived_events(body: &str) -> Result<Vec<RunEvent>, AppError> {
+    let mut replay = Vec::new();
+    for line in body.lines().filter(|line| !line.trim().is_empty()) {
+        let line = serde_json::from_str::<ArchivedRunEventLine>(line).map_err(|error| {
+            AppError::internal_with_source("Failed to decode an archived run event.", error)
+        })?;
+        replay.push(archived_event(line)?);
+    }
+    Ok(replay)
+}
+
+fn archived_event(line: ArchivedRunEventLine) -> Result<RunEvent, AppError> {
+    match line.event.as_str() {
+        "run.created" => {
+            let event =
+                serde_json::from_value::<PublicRunCreatedEvent>(line.data).map_err(|error| {
+                    AppError::internal_with_source(
+                        "Failed to decode an archived run.created event.",
+                        error,
+                    )
+                })?;
+            Ok(RunEvent::Created {
+                seq: line.seq,
+                status: event.status,
+            })
+        }
+        "run.status" => {
+            let event =
+                serde_json::from_value::<PublicRunStatusEvent>(line.data).map_err(|error| {
+                    AppError::internal_with_source(
+                        "Failed to decode an archived run.status event.",
+                        error,
+                    )
+                })?;
+            Ok(RunEvent::Status {
+                seq: line.seq,
+                phase: event.phase,
+                state: event.state,
+                session_guid: event.session_guid,
+                operation_id: event.operation_id,
+                timings: event.timings,
+            })
+        }
+        "run.log" => {
+            let event =
+                serde_json::from_value::<PublicRunLogEvent>(line.data).map_err(|error| {
+                    AppError::internal_with_source(
+                        "Failed to decode an archived run.log event.",
+                        error,
+                    )
+                })?;
+            Ok(RunEvent::Log {
+                seq: line.seq,
+                level: event.level,
+                message: event.message,
+                phase: event.phase,
+            })
+        }
+        "run.error" => {
+            let event =
+                serde_json::from_value::<PublicRunErrorEvent>(line.data).map_err(|error| {
+                    AppError::internal_with_source(
+                        "Failed to decode an archived run.error event.",
+                        error,
+                    )
+                })?;
+            Ok(RunEvent::Error {
+                seq: line.seq,
+                phase: event.phase,
+                message: event.message,
+                retriable: event.retriable,
+            })
+        }
+        "run.result" => {
+            let event =
+                serde_json::from_value::<PublicRunResultEvent>(line.data).map_err(|error| {
+                    AppError::internal_with_source(
+                        "Failed to decode an archived run.result event.",
+                        error,
+                    )
+                })?;
+            Ok(RunEvent::Result {
+                seq: line.seq,
+                output_path: event.output_path,
+                validation_issues: event.validation_issues,
+            })
+        }
+        "run.completed" => {
+            let event =
+                serde_json::from_value::<PublicRunCompletedEvent>(line.data).map_err(|error| {
+                    AppError::internal_with_source(
+                        "Failed to decode an archived run.completed event.",
+                        error,
+                    )
+                })?;
+            Ok(RunEvent::Complete {
+                seq: line.seq,
+                final_status: event.final_status,
+                log_path: event.log_path,
+                output_path: event.output_path,
+            })
+        }
+        _ => Err(AppError::internal(format!(
+            "Unsupported archived run event '{}'.",
+            line.event
+        ))),
+    }
 }

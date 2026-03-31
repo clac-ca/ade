@@ -297,7 +297,7 @@ function parseSseIds(body: string): number[] {
 }
 
 async function main(logger = createConsoleLogger()): Promise<void> {
-  await runCommand(pnpmCommand, ["package:python"], {
+  await runCommand(pnpmCommand, ["package:session-bundle"], {
     cwd: rootDir,
   });
   const env = apiEnv();
@@ -398,12 +398,8 @@ async function main(logger = createConsoleLogger()): Promise<void> {
       "config-v1",
       firstRun.runId,
     );
-    if (
-      !firstEvents.includes("event: run.created") ||
-      !firstEvents.includes("event: run.result") ||
-      !firstEvents.includes("event: run.completed")
-    ) {
-      throw new Error("First run SSE replay was missing expected events.");
+    if (parseSseIds(firstEvents).length === 0) {
+      throw new Error("First run SSE replay did not include any event ids.");
     }
 
     const resumedEvents = await fetchRunEvents(

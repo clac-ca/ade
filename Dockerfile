@@ -23,44 +23,26 @@ COPY apps/ade-web ./apps/ade-web
 
 RUN pnpm --filter @ade/web build
 
-FROM rust:1.94.1-alpine AS chef
+FROM rust:1.94.1-alpine AS api-builder
 
 WORKDIR /build
 
-RUN apk add --no-cache build-base musl-dev pkgconfig ca-certificates perl \
-    && cargo install --locked cargo-chef
+RUN apk add --no-cache build-base musl-dev pkgconfig ca-certificates perl
 
-FROM chef AS planner
-
-WORKDIR /build/apps/ade-api
-
-COPY apps/ade-api ./
-
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef AS api-builder
-
-WORKDIR /build/apps/ade-api
-
-COPY --from=planner /build/apps/ade-api/recipe.json recipe.json
-
-RUN --mount=type=cache,id=ade-api-target,target=/build/apps/ade-api/target \
-    --mount=type=cache,id=ade-api-cargo-git,target=/usr/local/cargo/git/db \
-    --mount=type=cache,id=ade-api-cargo-registry,target=/usr/local/cargo/registry \
-    cargo chef cook --release --recipe-path recipe.json
-
-COPY apps/ade-api ./
+COPY Cargo.toml Cargo.lock ./
+COPY apps/ade-api ./apps/ade-api
+COPY packages/reverse-connect ./packages/reverse-connect
 
 ARG SERVICE_VERSION=0.1.0
 ENV ADE_PLATFORM_VERSION="${SERVICE_VERSION}"
 
-RUN --mount=type=cache,id=ade-api-target,target=/build/apps/ade-api/target \
+RUN --mount=type=cache,id=ade-target,target=/build/target \
     --mount=type=cache,id=ade-api-cargo-git,target=/usr/local/cargo/git/db \
     --mount=type=cache,id=ade-api-cargo-registry,target=/usr/local/cargo/registry \
-    cargo build --locked --release --bin ade-api --bin ade-migrate --bin ade-session-agent \
-    && install -Dm755 /build/apps/ade-api/target/release/ade-api /build/bin/ade-api \
-    && install -Dm755 /build/apps/ade-api/target/release/ade-migrate /build/bin/ade-migrate \
-    && install -Dm755 /build/apps/ade-api/target/release/ade-session-agent /build/bin/ade-session-agent
+    cargo build --locked --release -p ade-api --bin ade-api --bin ade-migrate -p reverse-connect --bin reverse-connect \
+    && install -Dm755 /build/target/release/ade-api /build/bin/ade-api \
+    && install -Dm755 /build/target/release/ade-migrate /build/bin/ade-migrate \
+    && install -Dm755 /build/target/release/reverse-connect /build/bin/reverse-connect
 
 FROM python:3.14.0-slim AS python-builder
 
@@ -73,6 +55,8 @@ COPY packages/ade-config ./packages/ade-config
 
 RUN python -m build --wheel --outdir /dist /build/packages/ade-engine \
     && python -m build --wheel --outdir /dist /build/packages/ade-config \
+    && mkdir -p /wheelhouse/base \
+    && python -m pip download --dest /wheelhouse/base /dist/ade_engine-*.whl \
     && tar -C /usr/local -czf /dist/python-3.14.0-linux-x86_64.tar.gz .
 
 FROM alpine:3.23
@@ -84,18 +68,18 @@ RUN apk add --no-cache ca-certificates \
     && adduser -S -D -H -G ade ade
 
 ENV NODE_ENV=production
-ENV ADE_ENGINE_WHEEL_PATH=/app/python/ade_engine.whl
+ENV ADE_SESSION_BUNDLE_ROOT=/app/session-bundle
 
 COPY --from=web-builder --chown=ade:ade /build/apps/ade-web/dist ./public
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-api ./bin/ade-api
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-migrate ./bin/ade-migrate
-COPY --from=api-builder --chown=ade:ade /build/bin/ade-session-agent ./bin/ade-session-agent
-COPY --from=python-builder --chown=ade:ade /dist/*.whl ./python/
-COPY --from=python-builder --chown=ade:ade /dist/python-3.14.0-linux-x86_64.tar.gz ./python/
+COPY --from=api-builder --chown=ade:ade /build/bin/reverse-connect ./session-bundle/bin/reverse-connect
+COPY --chown=ade:ade apps/ade-api/assets/session-bundle/bin/prepare.sh ./session-bundle/bin/prepare.sh
+COPY --from=python-builder --chown=ade:ade /dist/python-3.14.0-linux-x86_64.tar.gz ./session-bundle/python/
+COPY --from=python-builder --chown=ade:ade /wheelhouse/base/*.whl ./session-bundle/wheelhouse/base/
+COPY --from=python-builder --chown=ade:ade /dist/ade_config-*.whl ./python/
 
-RUN engine_wheel="$(basename ./python/ade_engine-*.whl)" \
-    && config_wheel="$(basename ./python/ade_config-*.whl)" \
-    && ln -sf "${engine_wheel}" ./python/ade_engine.whl \
+RUN config_wheel="$(basename ./python/ade_config-*.whl)" \
     && ln -sf "${config_wheel}" ./python/ade_config.whl
 
 USER ade:ade
