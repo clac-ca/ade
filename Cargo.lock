@@ -22,11 +22,11 @@ dependencies = [
  "httpdate",
  "mime_guess",
  "native-tls",
- "portable-pty",
  "pretty_assertions",
  "quick-xml",
  "refinery",
  "reqwest 0.12.28",
+ "reverse-connect",
  "serde",
  "serde_json",
  "sha2",
@@ -1976,6 +1976,24 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams 0.5.0",
  "web-sys",
+]
+
+[[package]]
+name = "reverse-connect"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "clap",
+ "futures-util",
+ "http",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
 ]
 
 [[package]]

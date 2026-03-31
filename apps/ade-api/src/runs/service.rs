@@ -25,11 +25,11 @@ use crate::{
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
     scope::Scope,
-    session_agent::SessionAgentService,
+    scope_session::ScopeSessionService,
 };
 
 use super::{
-    events::{RunEventFeed, archive_event_line},
+    events::{RunEventFeed, archive_event_line, parse_archived_events},
     models::{
         AsyncRunResponse, CreateDownloadRequest, CreateDownloadResponse, CreateRunRequest,
         CreateUploadBatchRequest, CreateUploadBatchResponse, CreateUploadRequest,
@@ -50,7 +50,6 @@ const RUN_MAX_CONCURRENT_ENV_NAME: &str = "ADE_RUN_MAX_CONCURRENT";
 const RUN_MAX_ATTEMPTS: i32 = 2;
 const RUN_LOG_CONTENT_TYPE: &str = "application/x-ndjson";
 const RUN_REPLAY_WINDOW_SIZE: usize = 2_048;
-
 #[derive(Clone)]
 pub struct RunService {
     active_runs: ActiveRunManager,
@@ -58,7 +57,7 @@ pub struct RunService {
     artifact_store: Arc<BlobArtifactStore>,
     run_store: RunStoreHandle,
     permits: Arc<Semaphore>,
-    session_agent_service: Arc<SessionAgentService>,
+    scope_session_service: Arc<ScopeSessionService>,
 }
 
 #[derive(Clone)]
@@ -277,6 +276,22 @@ fn replay_run_events(
         .collect())
 }
 
+fn append_terminal_complete_event(replay: &mut Vec<RunEvent>, run: &StoredRun) {
+    if replay
+        .iter()
+        .any(|event| matches!(event, RunEvent::Complete { .. }))
+    {
+        return;
+    }
+
+    replay.push(RunEvent::Complete {
+        seq: replay.last().map(RunEvent::seq).unwrap_or(0) + 1,
+        final_status: run.status,
+        log_path: run.log_path.clone(),
+        output_path: run.output_path.clone(),
+    });
+}
+
 fn run_log_spool_path(run_id: &str) -> PathBuf {
     std::env::temp_dir()
         .join("ade-run-logs")
@@ -294,7 +309,7 @@ fn run_id_for_input(scope: &Scope, input_path: &str) -> String {
 impl RunService {
     pub fn from_env(
         env: &EnvBag,
-        session_agent_service: Arc<SessionAgentService>,
+        scope_session_service: Arc<ScopeSessionService>,
         run_store: Arc<dyn RunStore>,
     ) -> Result<Self, AppError> {
         let app_url = read_optional_trimmed_string(env, APP_URL_ENV_NAME).ok_or_else(|| {
@@ -321,7 +336,7 @@ impl RunService {
             artifact_store: Arc::new(blob_artifact_store_from_env(env)?),
             run_store,
             permits: Arc::new(Semaphore::new(read_run_max_concurrent(env)?)),
-            session_agent_service,
+            scope_session_service,
         })
     }
 
@@ -344,7 +359,11 @@ impl RunService {
         }
 
         let output_path = output_path_for_run(&scope, &run_id);
-        if let Err(error) = self.run_store.create_run(&scope, &run_id, &input_path).await {
+        if let Err(error) = self
+            .run_store
+            .create_run(&scope, &run_id, &input_path)
+            .await
+        {
             if let Some(existing) = self.run_store.get_run(&scope, &run_id).await?
                 && existing.input_path == input_path
             {
@@ -528,29 +547,44 @@ impl RunService {
             .get_run(scope, run_id)
             .await?
             .ok_or_else(|| AppError::not_found("Run not found."))?;
-        let Some(active) = self.active_runs.get(run_id) else {
-            return if run.status.is_terminal() {
-                Ok(RunEventFeed {
-                    replay: Vec::new(),
+
+        if run.status.is_terminal() {
+            if let Some(log_path) = run.log_path.as_deref() {
+                let log_bytes = self.artifact_store.download_bytes(log_path).await?;
+                let log_text = String::from_utf8(log_bytes).map_err(|error| {
+                    AppError::internal_with_source("Failed to decode the archived run log.", error)
+                })?;
+                let mut replay = parse_archived_events(&log_text)?;
+                append_terminal_complete_event(&mut replay, &run);
+                return Ok(RunEventFeed {
+                    replay: replay_run_events(&VecDeque::from(replay), after_seq)?,
                     subscription: None,
-                })
-            } else {
-                Err(AppError::status(
-                    StatusCode::CONFLICT,
-                    "Run event stream is unavailable because the run is not active on this API instance.",
-                ))
-            };
-        };
-        let replay = active.replay_events(after_seq).await?;
-        let subscription = if run.status.is_terminal() {
-            None
-        } else {
-            Some(active.subscribe())
+                });
+            }
+
+            if let Some(active) = self.active_runs.get(run_id) {
+                return Ok(RunEventFeed {
+                    replay: active.replay_events(after_seq).await?,
+                    subscription: None,
+                });
+            }
+
+            return Ok(RunEventFeed {
+                replay: Vec::new(),
+                subscription: None,
+            });
+        }
+
+        let Some(active) = self.active_runs.get(run_id) else {
+            return Err(AppError::status(
+                StatusCode::CONFLICT,
+                "Run event stream is unavailable because the run is not active on this API instance.",
+            ));
         };
 
         Ok(RunEventFeed {
-            replay,
-            subscription,
+            replay: active.replay_events(after_seq).await?,
+            subscription: Some(active.subscribe()),
         })
     }
     async fn drive_run(

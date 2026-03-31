@@ -1,14 +1,88 @@
+use std::{collections::BTreeMap, time::Duration};
+
 use super::*;
 
 use crate::{
     artifacts::ArtifactAccessGrant,
-    session_agent::{
-        SessionAgentCommand, SessionAgentEvent, SessionArtifactAccess, WorkerId, WorkerKind,
+    runs::models::ArtifactAccessInstruction,
+    scope_session::{
+        ChannelId, ChannelKind, ChannelOpenParams, ChannelStream, ScopeSessionEvent, SignalName,
     },
 };
 
+const PROCESS_RESULT_PREFIX: &str = "__ADE_PROCESS_RESULT__=";
+const RUN_SCRIPT: &str = r#"exec "$ADE_PYTHON_BIN" - <<'PY'
+import json
+import os
+import shutil
+from pathlib import Path
+from urllib.request import Request, urlopen
+
+from ade_engine import load_config
+from ade_engine.runner import process
+
+PROCESS_RESULT_PREFIX = "__ADE_PROCESS_RESULT__="
+
+def access(name: str) -> dict:
+    return json.loads(os.environ[name])
+
+def download(blob: dict, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    request = Request(blob["url"], headers=blob["headers"], method=blob["method"])
+    with urlopen(request) as response, destination.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+
+def upload(blob: dict, source: Path) -> None:
+    request = Request(
+        blob["url"],
+        data=source.read_bytes(),
+        headers=blob["headers"],
+        method=blob["method"],
+    )
+    with urlopen(request) as response:
+        response.read()
+
+input_path = Path(os.environ["ADE_LOCAL_INPUT_PATH"])
+output_dir = Path(os.environ["ADE_LOCAL_OUTPUT_DIR"])
+print(f"Downloading input to {input_path}", flush=True)
+download(access("ADE_INPUT_ACCESS_JSON"), input_path)
+
+print(f"Processing workbook into {output_dir}", flush=True)
+config = load_config("ade_config", name="ade-config")
+result = process(config=config, input_path=input_path, output_dir=output_dir)
+
+print(f"Uploading output from {result.output_path}", flush=True)
+upload(access("ADE_OUTPUT_ACCESS_JSON"), result.output_path)
+print(
+    PROCESS_RESULT_PREFIX
+    + json.dumps(
+        {
+            "outputPath": os.environ["ADE_OUTPUT_PATH"],
+            "validationIssues": [
+                {
+                    "rowIndex": issue.row_index,
+                    "field": issue.field,
+                    "message": issue.message,
+                }
+                for issue in result.validation_issues
+            ],
+        },
+        separators=(",", ":"),
+    ),
+    flush=True,
+)
+PY
+"#;
+
 #[derive(Clone, Debug)]
 struct AttemptSuccess {
+    output_path: String,
+    validation_issues: Vec<RunValidationIssue>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessResult {
     output_path: String,
     validation_issues: Vec<RunValidationIssue>,
 }
@@ -193,7 +267,7 @@ impl RunService {
     ) -> Result<(), AppError> {
         match &event {
             RunEventPayload::Created { .. } | RunEventPayload::Complete { .. } => {
-                unreachable!("runtime bridge does not emit created or completed events")
+                unreachable!("reverse-connect runtime does not emit created or completed events")
             }
             RunEventPayload::Status {
                 phase,
@@ -238,16 +312,6 @@ impl RunService {
         attempt: RunAttempt<'_>,
         active: &ActiveRunHandle,
     ) -> Result<AttemptSuccess, AttemptFailure> {
-        let runtime = self
-            .session_agent_service
-            .runtime_artifacts(attempt.scope)
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::InstallPackages),
-                retriable: false,
-                status: RunStatus::Failed,
-            })?;
         let mut run = self
             .load_run(attempt.scope, attempt.run_id)
             .await
@@ -260,18 +324,6 @@ impl RunService {
         run.status = RunStatus::Running;
         run.validation_issues.clear();
         self.run_store.save_run(&run).await.map_err(store_failure)?;
-
-        let handle = self
-            .session_agent_service
-            .connect_scope_session(attempt.scope, &runtime)
-            .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::InstallPackages),
-                retriable: true,
-                status: RunStatus::Failed,
-            })?;
 
         self.handle_runtime_event(
             &mut run,
@@ -287,8 +339,9 @@ impl RunService {
         .await
         .map_err(store_failure)?;
 
-        self.session_agent_service
-            .ensure_prepared(attempt.scope, &runtime, &handle)
+        let handle = self
+            .scope_session_service
+            .ensure_ready_scope_session(attempt.scope)
             .await
             .map_err(|error| AttemptFailure {
                 emitted_error: false,
@@ -346,44 +399,58 @@ impl RunService {
                 retriable: false,
                 status: RunStatus::Failed,
             })?;
-        let worker_id = WorkerId::new(format!(
+
+        let channel_id = ChannelId::new(format!(
             "run-{}-attempt-{}",
             attempt.run_id, attempt.attempt
         ));
         let mut events = handle.subscribe();
         handle
-            .send(SessionAgentCommand::StartRun {
-                input_download: resolve_artifact_access(&self.app_url, input_download).map_err(
-                    |error| AttemptFailure {
-                        emitted_error: false,
-                        error,
-                        phase: Some(RunPhase::ExecuteRun),
-                        retriable: false,
-                        status: RunStatus::Failed,
-                    },
-                )?,
-                local_input_path: format!(
-                    "/mnt/data/work/input/{}/attempt-{}/{}",
-                    attempt.run_id,
-                    attempt.attempt,
-                    uploaded_basename(attempt.input_path)
-                ),
-                local_output_dir: format!(
-                    "/mnt/data/runs/{}/attempt-{}/output",
-                    attempt.run_id, attempt.attempt
-                ),
-                output_path: attempt.output_path.to_string(),
-                output_upload: resolve_artifact_access(&self.app_url, output_upload).map_err(
-                    |error| AttemptFailure {
-                        emitted_error: false,
-                        error,
-                        phase: Some(RunPhase::PersistOutputs),
-                        retriable: false,
-                        status: RunStatus::Failed,
-                    },
-                )?,
-                timeout_in_seconds: run_timeout_in_seconds(attempt.timeout_in_seconds),
-                worker_id: worker_id.clone(),
+            .open_channel(ChannelOpenParams {
+                channel_id: channel_id.clone(),
+                command: RUN_SCRIPT.to_string(),
+                cwd: Some(handle.session_root().to_string()),
+                env: run_env(
+                    handle.python_executable_path().to_string(),
+                    resolve_artifact_access(&self.app_url, input_download).map_err(|error| {
+                        AttemptFailure {
+                            emitted_error: false,
+                            error,
+                            phase: Some(RunPhase::ExecuteRun),
+                            retriable: false,
+                            status: RunStatus::Failed,
+                        }
+                    })?,
+                    resolve_artifact_access(&self.app_url, output_upload).map_err(|error| {
+                        AttemptFailure {
+                            emitted_error: false,
+                            error,
+                            phase: Some(RunPhase::PersistOutputs),
+                            retriable: false,
+                            status: RunStatus::Failed,
+                        }
+                    })?,
+                    format!(
+                        "/mnt/data/work/input/{}/attempt-{}/{}",
+                        attempt.run_id,
+                        attempt.attempt,
+                        uploaded_basename(attempt.input_path)
+                    ),
+                    format!(
+                        "/mnt/data/runs/{}/attempt-{}/output",
+                        attempt.run_id, attempt.attempt
+                    ),
+                    attempt.output_path.to_string(),
+                )
+                .map_err(|error| AttemptFailure {
+                    emitted_error: false,
+                    error,
+                    phase: Some(RunPhase::ExecuteRun),
+                    retriable: false,
+                    status: RunStatus::Failed,
+                })?,
+                kind: ChannelKind::Exec,
+                pty: None,
             })
             .await
             .map_err(|error| AttemptFailure {
@@ -409,11 +476,19 @@ impl RunService {
         .map_err(store_failure)?;
 
         let mut cancel_rx = active.cancel_rx.clone();
+        let timeout = tokio::time::sleep(Duration::from_secs(run_timeout_in_seconds(
+            attempt.timeout_in_seconds,
+        )));
+        tokio::pin!(timeout);
+        let mut stdout_lines = LineBuffer::default();
+        let mut stderr_lines = LineBuffer::default();
+        let mut success = None;
 
         loop {
             tokio::select! {
                 _ = cancel_rx.changed() => {
-                    let _ = handle.send(SessionAgentCommand::CancelWorker { worker_id: worker_id.clone() }).await;
+                    let _ = handle.signal_channel(channel_id.clone(), SignalName::Kill).await;
+                    let _ = handle.close_channel(channel_id.clone()).await;
                     return Err(AttemptFailure {
                         emitted_error: true,
                         error: AppError::request("Run cancelled."),
@@ -422,73 +497,75 @@ impl RunService {
                         status: RunStatus::Cancelled,
                     });
                 }
+                _ = &mut timeout => {
+                    let _ = handle.signal_channel(channel_id.clone(), SignalName::Kill).await;
+                    let _ = handle.close_channel(channel_id.clone()).await;
+                    return Err(AttemptFailure {
+                        emitted_error: false,
+                        error: AppError::status(
+                            StatusCode::BAD_GATEWAY,
+                            format!(
+                                "Run timed out after {} seconds.",
+                                run_timeout_in_seconds(attempt.timeout_in_seconds)
+                            ),
+                        ),
+                        phase: Some(RunPhase::ExecuteRun),
+                        retriable: false,
+                        status: RunStatus::Failed,
+                    });
+                }
                 event = events.recv() => {
                     match event {
-                        Ok(SessionAgentEvent::Stdout { worker_id: event_worker_id, data, phase }) if event_worker_id == worker_id => {
-                            for line in streamed_lines(&data) {
-                                self.handle_runtime_event(
-                                    &mut run,
-                                    active,
-                                    RunEventPayload::Log {
-                                        level: "info".to_string(),
-                                        message: line,
-                                        phase: phase.unwrap_or(RunPhase::ExecuteRun),
-                                    },
-                                )
-                                .await
-                                .map_err(store_failure)?;
+                        Ok(ScopeSessionEvent::Data { channel_id: event_channel_id, data, stream }) if event_channel_id == channel_id => {
+                            match stream {
+                                ChannelStream::Stdout => {
+                                    for line in stdout_lines.push(&data) {
+                                        if let Some(process_result) = parse_process_result(&line).map_err(|error| AttemptFailure {
+                                            emitted_error: false,
+                                            error,
+                                            phase: Some(RunPhase::PersistOutputs),
+                                            retriable: false,
+                                            status: RunStatus::Failed,
+                                        })? {
+                                            success = Some(AttemptSuccess {
+                                                output_path: process_result.output_path,
+                                                validation_issues: process_result.validation_issues,
+                                            });
+                                            continue;
+                                        }
+                                        self.handle_runtime_event(
+                                            &mut run,
+                                            active,
+                                            RunEventPayload::Log {
+                                                level: "info".to_string(),
+                                                message: line,
+                                                phase: RunPhase::ExecuteRun,
+                                            },
+                                        )
+                                        .await
+                                        .map_err(store_failure)?;
+                                    }
+                                }
+                                ChannelStream::Stderr => {
+                                    for line in stderr_lines.push(&data) {
+                                        self.handle_runtime_event(
+                                            &mut run,
+                                            active,
+                                            RunEventPayload::Log {
+                                                level: "error".to_string(),
+                                                message: line,
+                                                phase: RunPhase::ExecuteRun,
+                                            },
+                                        )
+                                        .await
+                                        .map_err(store_failure)?;
+                                    }
+                                }
+                                ChannelStream::Pty => {}
                             }
                         }
-                        Ok(SessionAgentEvent::Stderr { worker_id: event_worker_id, data, phase }) if event_worker_id == worker_id => {
-                            for line in streamed_lines(&data) {
-                                self.handle_runtime_event(
-                                    &mut run,
-                                    active,
-                                    RunEventPayload::Log {
-                                        level: "error".to_string(),
-                                        message: line,
-                                        phase: phase.unwrap_or(RunPhase::ExecuteRun),
-                                    },
-                                )
-                                .await
-                                .map_err(store_failure)?;
-                            }
-                        }
-                        Ok(SessionAgentEvent::Log { worker_id: Some(event_worker_id), level, message, phase }) if event_worker_id == worker_id => {
-                            self.handle_runtime_event(
-                                &mut run,
-                                active,
-                                RunEventPayload::Log {
-                                    level,
-                                    message,
-                                    phase: phase.unwrap_or(RunPhase::ExecuteRun),
-                                },
-                            )
-                            .await
-                            .map_err(store_failure)?;
-                        }
-                        Ok(SessionAgentEvent::Error { worker_id: Some(event_worker_id), phase, message, retriable }) if event_worker_id == worker_id => {
-                            self.handle_runtime_event(
-                                &mut run,
-                                active,
-                                RunEventPayload::Error {
-                                    phase,
-                                    message: message.clone(),
-                                    retriable,
-                                },
-                            )
-                            .await
-                            .map_err(store_failure)?;
-                            return Err(AttemptFailure {
-                                emitted_error: true,
-                                error: AppError::status(StatusCode::BAD_GATEWAY, message),
-                                phase,
-                                retriable,
-                                status: RunStatus::Failed,
-                            });
-                        }
-                        Ok(SessionAgentEvent::WorkerExit { worker_id: event_worker_id, kind: WorkerKind::Run, code, output_path, validation_issues, .. }) if event_worker_id == worker_id => {
-                            if let (Some(0), Some(output_path)) = (code, output_path) {
+                        Ok(ScopeSessionEvent::Exit { channel_id: event_channel_id, code }) if event_channel_id == channel_id => {
+                            if let (Some(0), Some(success)) = (code, success) {
                                 self.handle_runtime_event(
                                     &mut run,
                                     active,
@@ -502,13 +579,12 @@ impl RunService {
                                 )
                                 .await
                                 .map_err(store_failure)?;
-                                let validation_issues = validation_issues.unwrap_or_default();
                                 self.handle_runtime_event(
                                     &mut run,
                                     active,
                                     RunEventPayload::Result {
-                                        output_path: output_path.clone(),
-                                        validation_issues: validation_issues.clone(),
+                                        output_path: success.output_path.clone(),
+                                        validation_issues: success.validation_issues.clone(),
                                     },
                                 )
                                 .await
@@ -526,48 +602,68 @@ impl RunService {
                                 )
                                 .await
                                 .map_err(store_failure)?;
-                                return Ok(AttemptSuccess { output_path, validation_issues });
+                                return Ok(success);
                             }
 
                             return Err(AttemptFailure {
                                 emitted_error: false,
                                 error: AppError::status(
                                     StatusCode::BAD_GATEWAY,
-                                    format!("ADE run worker exited with code {}.", code.unwrap_or_default()),
+                                    run_exit_message(code, &stdout_lines, &stderr_lines),
                                 ),
                                 phase: Some(RunPhase::ExecuteRun),
                                 retriable: false,
                                 status: RunStatus::Failed,
                             });
                         }
-                        Ok(SessionAgentEvent::Error { worker_id: None, message, phase, retriable }) => {
+                        Ok(ScopeSessionEvent::Error { channel_id: Some(event_channel_id), message }) if event_channel_id == channel_id => {
+                            self.handle_runtime_event(
+                                &mut run,
+                                active,
+                                RunEventPayload::Error {
+                                    phase: Some(RunPhase::ExecuteRun),
+                                    message: message.clone(),
+                                    retriable: false,
+                                },
+                            )
+                            .await
+                            .map_err(store_failure)?;
+                            return Err(AttemptFailure {
+                                emitted_error: true,
+                                error: AppError::status(StatusCode::BAD_GATEWAY, message),
+                                phase: Some(RunPhase::ExecuteRun),
+                                retriable: false,
+                                status: RunStatus::Failed,
+                            });
+                        }
+                        Ok(ScopeSessionEvent::Error { channel_id: None, message }) => {
                             return Err(AttemptFailure {
                                 emitted_error: false,
                                 error: AppError::status(StatusCode::BAD_GATEWAY, message),
-                                phase,
-                                retriable,
+                                phase: run.phase.or(Some(RunPhase::ExecuteRun)),
+                                retriable: true,
                                 status: RunStatus::Failed,
                             });
                         }
                         Ok(_) => {}
-                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             return Err(AttemptFailure {
                                 emitted_error: false,
                                 error: AppError::status(
                                     StatusCode::BAD_GATEWAY,
-                                    "Scope session agent event stream overflowed while the run was active.",
+                                    "Scope session connector event stream overflowed while the run was active.",
                                 ),
                                 phase: run.phase.or(Some(RunPhase::ExecuteRun)),
                                 retriable: true,
                                 status: RunStatus::Failed,
                             });
                         }
-                        Err(broadcast::error::RecvError::Closed) => {
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             return Err(AttemptFailure {
                                 emitted_error: false,
                                 error: AppError::status(
                                     StatusCode::BAD_GATEWAY,
-                                    "Scope session agent disconnected while the run was active.",
+                                    "Scope session connector disconnected while the run was active.",
                                 ),
                                 phase: run.phase.or(Some(RunPhase::ExecuteRun)),
                                 retriable: true,
@@ -584,7 +680,7 @@ impl RunService {
 fn resolve_artifact_access(
     app_url: &Url,
     access: ArtifactAccessGrant,
-) -> Result<SessionArtifactAccess, AppError> {
+) -> Result<ArtifactAccessInstruction, AppError> {
     let url = match Url::parse(&access.url) {
         Ok(url) => url.to_string(),
         Err(_) => app_url
@@ -594,19 +690,68 @@ fn resolve_artifact_access(
             })?
             .to_string(),
     };
-    Ok(SessionArtifactAccess {
+    Ok(ArtifactAccessInstruction {
+        expires_at: access.expires_at,
         headers: access.headers,
         method: access.method.to_string(),
         url,
     })
 }
 
-fn streamed_lines(data: &str) -> Vec<String> {
-    data.lines()
-        .map(str::trim_end)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+fn run_env(
+    python_bin: String,
+    input_access: ArtifactAccessInstruction,
+    output_access: ArtifactAccessInstruction,
+    local_input_path: String,
+    local_output_dir: String,
+    output_path: String,
+) -> Result<BTreeMap<String, String>, AppError> {
+    Ok(BTreeMap::from([
+        (
+            "ADE_INPUT_ACCESS_JSON".to_string(),
+            serde_json::to_string(&input_access).map_err(|error| {
+                AppError::internal_with_source("Failed to encode input artifact access.", error)
+            })?,
+        ),
+        (
+            "ADE_OUTPUT_ACCESS_JSON".to_string(),
+            serde_json::to_string(&output_access).map_err(|error| {
+                AppError::internal_with_source("Failed to encode output artifact access.", error)
+            })?,
+        ),
+        ("ADE_LOCAL_INPUT_PATH".to_string(), local_input_path),
+        ("ADE_LOCAL_OUTPUT_DIR".to_string(), local_output_dir),
+        ("ADE_OUTPUT_PATH".to_string(), output_path),
+        ("ADE_PYTHON_BIN".to_string(), python_bin),
+    ]))
+}
+
+fn parse_process_result(line: &str) -> Result<Option<ProcessResult>, AppError> {
+    let Some(payload) = line.strip_prefix(PROCESS_RESULT_PREFIX) else {
+        return Ok(None);
+    };
+    serde_json::from_str(payload).map(Some).map_err(|error| {
+        AppError::internal_with_source("Failed to parse the run result payload.", error)
+    })
+}
+
+fn run_exit_message(
+    code: Option<i32>,
+    stdout_lines: &LineBuffer,
+    stderr_lines: &LineBuffer,
+) -> String {
+    let stderr = stderr_lines.finish();
+    if !stderr.is_empty() {
+        return stderr.join("\n");
+    }
+    let stdout = stdout_lines.finish();
+    if !stdout.is_empty() {
+        return stdout.join("\n");
+    }
+    format!(
+        "ADE run channel exited with code {}.",
+        code.unwrap_or_default()
+    )
 }
 
 fn uploaded_basename(path: &str) -> String {
@@ -616,6 +761,39 @@ fn uploaded_basename(path: &str) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("input.bin")
         .to_string()
+}
+
+#[derive(Default)]
+struct LineBuffer {
+    buffer: Vec<u8>,
+}
+
+impl LineBuffer {
+    fn push(&mut self, data: &[u8]) -> Vec<String> {
+        self.buffer.extend_from_slice(data);
+        let mut lines = Vec::new();
+        while let Some(index) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let drained = self.buffer.drain(..=index).collect::<Vec<_>>();
+            let line = String::from_utf8_lossy(&drained)
+                .trim_end_matches(['\r', '\n'])
+                .to_string();
+            if !line.is_empty() {
+                lines.push(line);
+            }
+        }
+        lines
+    }
+
+    fn finish(&self) -> Vec<String> {
+        let tail = String::from_utf8_lossy(&self.buffer)
+            .trim_end_matches(['\r', '\n'])
+            .to_string();
+        if tail.is_empty() {
+            Vec::new()
+        } else {
+            vec![tail]
+        }
+    }
 }
 
 fn store_failure(error: AppError) -> AttemptFailure {

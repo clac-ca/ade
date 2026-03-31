@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -12,9 +12,24 @@ import { readOptionalTrimmedString } from "./runtime";
 
 const appUrlEnvName = "ADE_APP_URL";
 const configTargetsEnvName = "ADE_CONFIG_TARGETS";
-const engineWheelEnvName = "ADE_ENGINE_WHEEL_PATH";
 const managementEndpointEnvName = "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT";
+const sessionBundleRootEnvName = "ADE_SESSION_BUNDLE_ROOT";
 const sessionSecretEnvName = "ADE_SESSION_SECRET";
+const defaultContainerSessionBundleRoot = "/app/session-bundle";
+
+function hostSessionBundleRoot(): string {
+  const bundleRoot = fileURLToPath(
+    new URL("../../.package/session-bundle", import.meta.url),
+  );
+
+  if (!existsSync(bundleRoot)) {
+    throw new Error(
+      "Missing local session bundle at .package/session-bundle. Run `pnpm package:session-bundle` first.",
+    );
+  }
+
+  return bundleRoot;
+}
 
 function newestWheel(directoryPath: string, prefix: string): string {
   const candidates = readdirSync(directoryPath)
@@ -59,15 +74,15 @@ function createConfigTargetsValue(configWheelPath: string): string {
 function createSessionPoolValues(options: {
   appUrl: string;
   configTargets: string;
-  engineWheelPath: string;
   managementEndpoint: string;
+  sessionBundleRoot: string;
   sessionSecret: string;
 }): Record<string, string> {
   return {
     [appUrlEnvName]: options.appUrl,
     [configTargetsEnvName]: options.configTargets,
-    [engineWheelEnvName]: options.engineWheelPath,
     [managementEndpointEnvName]: options.managementEndpoint,
+    [sessionBundleRootEnvName]: options.sessionBundleRoot,
     [sessionSecretEnvName]: options.sessionSecret,
   };
 }
@@ -81,16 +96,12 @@ function createHostSessionPoolEnv(
     fileURLToPath(new URL("../../packages/ade-config/dist", import.meta.url)),
     "ade_config-",
   );
-  const engineWheelPath = newestWheel(
-    fileURLToPath(new URL("../../packages/ade-engine/dist", import.meta.url)),
-    "ade_engine-",
-  );
 
   return createSessionPoolValues({
     appUrl: options.appUrl ?? localContainerAppUrl,
     configTargets: createConfigTargetsValue(configWheelPath),
-    engineWheelPath,
     managementEndpoint: createLocalSessionPoolManagementEndpoint(),
+    sessionBundleRoot: hostSessionBundleRoot(),
     sessionSecret: localSessionPoolSecret,
   });
 }
@@ -104,9 +115,9 @@ function createContainerSessionPoolEnv(
   usesManagedLocalSessionPool: boolean;
   values: Record<string, string>;
 } {
-  const engineWheelPath =
-    readOptionalTrimmedString(env, engineWheelEnvName) ??
-    "/app/python/ade_engine.whl";
+  const sessionBundleRoot =
+    readOptionalTrimmedString(env, sessionBundleRootEnvName) ??
+    defaultContainerSessionBundleRoot;
   const appUrl =
     readOptionalTrimmedString(env, appUrlEnvName) ??
     options.appUrl ??
@@ -122,8 +133,8 @@ function createContainerSessionPoolEnv(
       values: createSessionPoolValues({
         appUrl,
         configTargets: createConfigTargetsValue("/app/python/ade_config.whl"),
-        engineWheelPath,
         managementEndpoint: createLocalContainerSessionPoolManagementEndpoint(),
+        sessionBundleRoot,
         sessionSecret: localSessionPoolSecret,
       }),
     };
@@ -134,8 +145,8 @@ function createContainerSessionPoolEnv(
     values: createSessionPoolValues({
       appUrl,
       configTargets: readRequiredEnv(env, configTargetsEnvName),
-      engineWheelPath,
       managementEndpoint: configuredManagementEndpoint,
+      sessionBundleRoot,
       sessionSecret: readRequiredEnv(env, sessionSecretEnvName),
     }),
   };

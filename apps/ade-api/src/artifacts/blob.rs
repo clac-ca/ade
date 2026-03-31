@@ -716,6 +716,26 @@ impl BlobArtifactStore {
         Ok(Some(ArtifactMetadata { content_type, size }))
     }
 
+    pub(crate) async fn download_bytes(&self, path: &str) -> Result<Vec<u8>, AppError> {
+        self.ensure_local_blob_ready().await?;
+        let normalized = normalize_artifact_path(path)?;
+        let response = self
+            .request(
+                Method::GET,
+                self.blob_url(&normalized)?,
+                blob_request_headers(None)?,
+                None,
+            )
+            .await?;
+        response
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(|error| {
+                AppError::io_with_source(format!("Failed to read '{normalized}'."), error)
+            })
+    }
+
     pub(crate) async fn upload_file(
         &self,
         path: &str,

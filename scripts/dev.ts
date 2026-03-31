@@ -66,7 +66,7 @@ async function terminateChildren(
 
 async function main(logger = createConsoleLogger()): Promise<void> {
   const { noOpen, port } = parseDevArgs(process.argv.slice(2));
-  await runCommand(pnpmCommand, ["package:python"], {
+  await runCommand(pnpmCommand, ["package:session-bundle"], {
     cwd: rootDir,
   });
   const sessionEnv = createHostSessionPoolEnv();

@@ -6,9 +6,9 @@ pub mod error;
 pub mod readiness;
 pub mod runs;
 pub mod scope;
+pub mod scope_session;
 pub mod server;
-pub mod session;
-pub mod session_agent;
+pub mod session_pool;
 pub mod terminal;
 
 pub use api::{AppState, create_app};

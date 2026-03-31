@@ -10,9 +10,8 @@ use ade_api::{
     error::AppError,
     init_tracing,
     runs::{RunService, SqlRunStore},
+    scope_session::ScopeSessionService,
     server::{ServerInstance, ServerOptions},
-    session::SessionService,
-    session_agent::SessionAgentService,
     terminal::TerminalService,
 };
 use clap::Parser;
@@ -40,20 +39,16 @@ async fn main() {
         let args = ServerArgs::parse();
         let production = is_production(&env);
         let database = Arc::new(Database::connect(&config.sql_connection_string).await?);
-        let session_service = Arc::new(SessionService::from_env(&env)?);
-        let session_agent_service = Arc::new(SessionAgentService::from_env(
-            &env,
-            Arc::clone(&session_service),
-        )?);
+        let scope_session_service = Arc::new(ScopeSessionService::from_env(&env)?);
         let run_store = Arc::new(SqlRunStore::new(Arc::clone(&database)));
         let run_service = Arc::new(RunService::from_env(
             &env,
-            Arc::clone(&session_agent_service),
+            Arc::clone(&scope_session_service),
             run_store,
         )?);
         let terminal_service = Arc::new(TerminalService::from_env(
             &env,
-            Arc::clone(&session_agent_service),
+            Arc::clone(&scope_session_service),
         )?);
         let web_root = {
             let web_root = default_web_root();
@@ -71,7 +66,7 @@ async fn main() {
             port: args.port.unwrap_or(DEFAULT_PORT),
             probe_interval_ms: args.probe_interval_ms.unwrap_or(DEFAULT_PROBE_INTERVAL_MS),
             run_service,
-            session_agent_service,
+            scope_session_service,
             terminal_service,
             stale_after_ms: args
                 .stale_after_ms

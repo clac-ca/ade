@@ -16,7 +16,10 @@ const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
 async function main(logger = createConsoleLogger()): Promise<void> {
   loadOptionalEnvFile();
   const { image, noOpen, port } = parseStartArgs(process.argv.slice(2));
-  const sqlConnectionString = readOptionalTrimmedString(process.env, sqlConnectionStringName);
+  const sqlConnectionString = readOptionalTrimmedString(
+    process.env,
+    sqlConnectionStringName,
+  );
   const runtime = await startLocalRuntime({
     containerName: `ade-local-${String(port)}`,
     hostPort: port,
@@ -50,8 +53,7 @@ async function main(logger = createConsoleLogger()): Promise<void> {
 
   try {
     await waitForReady([`${runtime.appUrl}/`, `${runtime.appUrl}/api/readyz`], {
-      isAlive: () =>
-        runtime.isAlive() && !shuttingDown,
+      isAlive: () => runtime.isAlive() && !shuttingDown,
       timeoutMs: 60_000,
     });
   } catch (error) {

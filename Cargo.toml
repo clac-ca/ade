@@ -1,0 +1,3 @@
+[workspace]
+members = ["apps/ade-api", "packages/reverse-connect"]
+resolver = "2"

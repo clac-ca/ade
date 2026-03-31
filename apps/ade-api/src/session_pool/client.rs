@@ -52,6 +52,7 @@ pub(crate) struct SessionOperationResult<T> {
     pub(crate) value: T,
 }
 
+#[derive(Clone)]
 pub(crate) struct SessionPoolClient {
     client: Client,
     pool_management_endpoint: Url,

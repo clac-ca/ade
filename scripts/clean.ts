@@ -122,12 +122,7 @@ async function main(): Promise<void> {
   await downLocalDependencies({
     stdio: "ignore",
   }).catch(() => undefined);
-  await tryRun(dockerCommand, [
-    "image",
-    "rm",
-    "--force",
-    "ade-platform:local",
-  ]);
+  await tryRun(dockerCommand, ["image", "rm", "--force", "ade-platform:local"]);
 }
 
 void runMain(async () => {

@@ -9,8 +9,7 @@ use ade_api::{
     api::{AppState, create_app},
     readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::{InMemoryRunStore, RunService},
-    session::SessionService,
-    session_agent::SessionAgentService,
+    scope_session::ScopeSessionService,
     terminal::TerminalService,
     unix_time_ms,
 };
@@ -22,11 +21,15 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, post},
 };
+use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Method, Url};
 use serde_json::{Value, json};
 use tempfile::tempdir;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Message, client::IntoClientRequest},
+};
 use tower::util::ServiceExt;
 
 #[derive(Default)]
@@ -140,8 +143,7 @@ async fn stub_execute(
     let code = body
         .get("shellCommand")
         .and_then(Value::as_str)
-        .or_else(|| body.get("code").and_then(Value::as_str))
-        .unwrap()
+        .expect("session pool execution should use shellCommand")
         .to_string();
     let identifier = query.identifier.clone();
     {
@@ -150,20 +152,14 @@ async fn stub_execute(
         state.execution_codes.push(code.clone());
     }
 
-    if code.contains("ade-session-agent") {
-        let bridge_url = {
-            let state = stub.state.lock().unwrap();
-            extract_bridge_url(&code, &state, &identifier)
-        };
-        if let Some(bridge_url) = bridge_url {
+    if code.contains("reverse-connect connect") {
+        let bridge_url = extract_bridge_url(&code);
+        let bearer_token = extract_bearer_token(&code);
+        if let (Some(bridge_url), Some(bearer_token)) = (bridge_url, bearer_token) {
             let run_execution_count = {
                 let mut state = stub.state.lock().unwrap();
                 state.run_execution_count += 1;
                 state.run_execution_count
-            };
-            let config = {
-                let state = stub.state.lock().unwrap();
-                extract_execution_config(&code, &state, &identifier).expect("run config")
             };
             let connect_delay_ms = stub
                 .options
@@ -175,7 +171,9 @@ async fn stub_execute(
                 .max(stub.options.terminal_execution_delay_ms);
 
             if run_execution_count <= stub.options.run_bridge_disconnect_before_ready_attempts {
-                if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
+                if let Ok((mut socket, _response)) =
+                    connect_async(bridge_request(&bridge_url, &bearer_token)).await
+                {
                     let _ = socket.close(None).await;
                 }
                 return Json(json!({
@@ -193,7 +191,7 @@ async fn stub_execute(
             }
 
             if stub.options.auto_connect_run_bridge && stub.options.auto_connect_terminal_bridge {
-                drive_session_agent_stub(&bridge_url, &config, execution_delay_ms).await;
+                drive_reverse_connect_stub(&bridge_url, &bearer_token, execution_delay_ms).await;
             } else if execution_delay_ms > 0 {
                 tokio::time::sleep(Duration::from_millis(execution_delay_ms)).await;
             }
@@ -251,6 +249,22 @@ fn blob_storage_key(account: &str, container: &str, blob_path: &str) -> String {
 
 fn session_file_storage_key(identifier: &str, path: &str) -> String {
     format!("{identifier}:{}", path.trim_start_matches('/'))
+}
+
+fn bridge_request(
+    bridge_url: &str,
+    bearer_token: &str,
+) -> tokio_tungstenite::tungstenite::http::Request<()> {
+    let mut request = bridge_url.into_client_request().unwrap();
+    request.headers_mut().insert(
+        "authorization",
+        HeaderValue::from_str(&format!("Bearer {bearer_token}")).unwrap(),
+    );
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        HeaderValue::from_static(::reverse_connect::protocol::WEBSOCKET_SUBPROTOCOL),
+    );
+    request
 }
 
 fn stored_blob(state: &PoolStubState, path: &str) -> StubBlobObject {
@@ -363,13 +377,13 @@ async fn start_stub_server_with_options(
 fn app_with_session(
     endpoint: &str,
     config_targets: &[(&str, &str, &FsPath)],
-    engine_wheel_path: &FsPath,
+    base_wheel_path: &FsPath,
 ) -> axum::Router {
     app_with_session_and_url_and_run_limit(
         endpoint,
         "http://127.0.0.1:8000",
         config_targets,
-        engine_wheel_path,
+        base_wheel_path,
         None,
     )
 }
@@ -378,29 +392,36 @@ fn app_with_session_and_url(
     endpoint: &str,
     app_url: &str,
     config_targets: &[(&str, &str, &FsPath)],
-    engine_wheel_path: &FsPath,
+    base_wheel_path: &FsPath,
 ) -> axum::Router {
-    app_with_session_and_url_and_run_limit(
-        endpoint,
-        app_url,
-        config_targets,
-        engine_wheel_path,
-        None,
-    )
+    app_with_session_and_url_and_run_limit(endpoint, app_url, config_targets, base_wheel_path, None)
 }
 
 fn app_with_session_and_url_and_run_limit(
     endpoint: &str,
     app_url: &str,
     config_targets: &[(&str, &str, &FsPath)],
-    engine_wheel_path: &FsPath,
+    base_wheel_path: &FsPath,
     run_max_concurrent: Option<usize>,
 ) -> axum::Router {
     let runtime_dir = tempdir().unwrap();
-    let agent_binary_path = runtime_dir.path().join("ade-session-agent");
-    let python_toolchain_path = runtime_dir.path().join("python-3.14.0-linux-x86_64.tar.gz");
-    std::fs::write(&agent_binary_path, b"agent-binary").unwrap();
+    let bundle_root = runtime_dir.path().join("session-bundle");
+    let connector_binary_path = bundle_root.join("bin/reverse-connect");
+    let prepare_script_path = bundle_root.join("bin/prepare.sh");
+    let wheelhouse_path = bundle_root.join("wheelhouse/base");
+    let python_dir = bundle_root.join("python");
+    let python_toolchain_path = python_dir.join("python-3.14.0-linux-x86_64.tar.gz");
+    std::fs::create_dir_all(connector_binary_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&wheelhouse_path).unwrap();
+    std::fs::create_dir_all(&python_dir).unwrap();
+    std::fs::write(&connector_binary_path, b"connector-binary").unwrap();
+    std::fs::write(&prepare_script_path, b"#!/bin/sh\nexit 0\n").unwrap();
     std::fs::write(&python_toolchain_path, b"python-toolchain").unwrap();
+    std::fs::copy(
+        base_wheel_path,
+        wheelhouse_path.join(base_wheel_path.file_name().unwrap()),
+    )
+    .unwrap();
 
     let config_targets = config_targets
         .iter()
@@ -422,16 +443,8 @@ fn app_with_session_and_url_and_run_limit(
             serde_json::to_string(&config_targets).unwrap(),
         ),
         (
-            "ADE_ENGINE_WHEEL_PATH".to_string(),
-            engine_wheel_path.display().to_string(),
-        ),
-        (
-            "ADE_SESSION_AGENT_BINARY_PATH".to_string(),
-            agent_binary_path.display().to_string(),
-        ),
-        (
-            "ADE_PYTHON_TOOLCHAIN_BUNDLE_PATH".to_string(),
-            python_toolchain_path.display().to_string(),
+            "ADE_SESSION_BUNDLE_ROOT".to_string(),
+            bundle_root.display().to_string(),
         ),
         (
             "ADE_SESSION_SECRET".to_string(),
@@ -455,9 +468,9 @@ fn app_with_session_and_url_and_run_limit(
     .into_iter()
     .collect();
 
-    let session_service = Arc::new(SessionService::from_env(&env).unwrap());
-    let session_agent_service =
-        Arc::new(SessionAgentService::from_env(&env, Arc::clone(&session_service)).unwrap());
+    std::mem::forget(runtime_dir);
+
+    let scope_session_service = Arc::new(ScopeSessionService::from_env(&env).unwrap());
     let mut run_env = env.clone();
     if let Some(run_max_concurrent) = run_max_concurrent {
         run_env.insert(
@@ -468,18 +481,18 @@ fn app_with_session_and_url_and_run_limit(
     let run_service = Arc::new(
         RunService::from_env(
             &run_env,
-            Arc::clone(&session_agent_service),
+            Arc::clone(&scope_session_service),
             Arc::new(InMemoryRunStore::default()),
         )
         .unwrap(),
     );
     let terminal_service =
-        Arc::new(TerminalService::from_env(&env, Arc::clone(&session_agent_service)).unwrap());
+        Arc::new(TerminalService::from_env(&env, Arc::clone(&scope_session_service)).unwrap());
 
     create_app(AppState {
         readiness: ready_state(),
+        scope_session_service,
         run_service,
-        session_agent_service,
         terminal_service,
         web_root: None,
     })
@@ -501,103 +514,170 @@ fn create_wheels() -> (
     (tempdir, config_v1, config_v2, engine)
 }
 
-fn extract_execution_config(code: &str, state: &PoolStubState, identifier: &str) -> Option<Value> {
-    let config_path = code
-        .split_whitespace()
+fn extract_launch_arg(code: &str, flag: &str) -> Option<String> {
+    code.split_whitespace()
         .collect::<Vec<_>>()
         .windows(2)
-        .find_map(|window| (window[0] == "--config-file").then(|| window[1]))?;
-    let session_path = config_path.trim_start_matches("/mnt/data/");
-    let config_bytes = state
-        .session_files
-        .get(&session_file_storage_key(identifier, session_path))?;
-    serde_json::from_slice::<Value>(config_bytes).ok()
+        .find_map(|window| (window[0] == flag).then(|| window[1].to_string()))
 }
 
-fn extract_bridge_url(code: &str, state: &PoolStubState, identifier: &str) -> Option<String> {
-    let config = extract_execution_config(code, state, identifier)?;
-    config["bridgeUrl"].as_str().map(str::to_string)
+fn extract_bearer_token(code: &str) -> Option<String> {
+    extract_launch_arg(code, "--bearer-token")
 }
 
-async fn drive_session_agent_stub(bridge_url: &str, _config: &Value, execution_delay_ms: u64) {
+fn extract_bridge_url(code: &str) -> Option<String> {
+    extract_launch_arg(code, "--url")
+}
+
+async fn drive_reverse_connect_stub(bridge_url: &str, bearer_token: &str, execution_delay_ms: u64) {
     let client = Client::new();
-    if let Ok((mut socket, _response)) = connect_async(bridge_url).await {
-        let _ = socket
-            .send(Message::Text(r#"{"type":"ready"}"#.into()))
-            .await;
+    if let Ok((mut socket, _response)) =
+        connect_async(bridge_request(bridge_url, bearer_token)).await
+    {
+        let hello = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "connector.hello",
+            "params": {
+                "capabilities": ["exec", "pty"],
+                "host": {
+                    "arch": "x86_64",
+                    "os": "linux"
+                },
+                "version": "test"
+            }
+        });
+        let _ = socket.send(Message::Text(hello.to_string().into())).await;
+
+        let _ = socket.next().await;
 
         while let Some(Ok(message)) = socket.next().await {
             let Message::Text(text) = message else {
                 continue;
             };
             let payload = serde_json::from_str::<Value>(&text).unwrap();
-            match payload["type"].as_str() {
-                Some("prepare") => {
-                    let prepared = json!({
-                        "type": "prepared",
-                        "configVersion": payload["configVersion"],
-                        "engineVersion": payload["engineVersion"],
-                        "pythonToolchainVersion": payload["pythonToolchainVersion"],
-                    });
+            match payload["method"].as_str() {
+                Some("channel.open") => {
+                    let id = payload["id"].as_i64().unwrap();
+                    let params = payload["params"].as_object().unwrap();
+                    let channel_id = params["channelId"].as_str().unwrap();
+                    let kind = params["kind"].as_str().unwrap();
                     let _ = socket
-                        .send(Message::Text(prepared.to_string().into()))
+                        .send(Message::Text(
+                            json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {},
+                            })
+                            .to_string()
+                            .into(),
+                        ))
                         .await;
-                }
-                Some("startShell") => {
-                    let worker_id = payload["workerId"].as_str().unwrap();
-                    let output = json!({
-                        "type": "ptyOutput",
-                        "workerId": worker_id,
-                        "data": "terminal-ok\r\n",
-                    });
-                    let exit = json!({
-                        "type": "workerExit",
-                        "workerId": worker_id,
-                        "kind": "shell",
-                        "code": 0,
-                    });
-                    let _ = socket.send(Message::Text(output.to_string().into())).await;
-                    let _ = socket.send(Message::Text(exit.to_string().into())).await;
-                    break;
-                }
-                Some("startRun") => {
-                    let worker_id = payload["workerId"].as_str().unwrap();
+
+                    if kind == "pty" {
+                        let output = json!({
+                            "jsonrpc": "2.0",
+                            "method": "channel.data",
+                            "params": {
+                                "channelId": channel_id,
+                                "stream": "pty",
+                                "data": "dGVybWluYWwtb2sNCg==",
+                            }
+                        });
+                        let exit = json!({
+                            "jsonrpc": "2.0",
+                            "method": "channel.exit",
+                            "params": {
+                                "channelId": channel_id,
+                                "code": 0,
+                            }
+                        });
+                        let _ = socket.send(Message::Text(output.to_string().into())).await;
+                        let _ = socket.send(Message::Text(exit.to_string().into())).await;
+                        break;
+                    }
+
+                    let env = params["env"].as_object().unwrap();
+                    if !env.contains_key("ADE_INPUT_ACCESS_JSON") {
+                        let exit = json!({
+                            "jsonrpc": "2.0",
+                            "method": "channel.exit",
+                            "params": {
+                                "channelId": channel_id,
+                                "code": 0,
+                            }
+                        });
+                        let _ = socket.send(Message::Text(exit.to_string().into())).await;
+                        continue;
+                    }
+                    let input_download = serde_json::from_str::<Value>(
+                        env["ADE_INPUT_ACCESS_JSON"].as_str().unwrap(),
+                    )
+                    .unwrap();
+                    let output_upload = serde_json::from_str::<Value>(
+                        env["ADE_OUTPUT_ACCESS_JSON"].as_str().unwrap(),
+                    )
+                    .unwrap();
                     request_artifact(
                         &client,
-                        payload["inputDownload"]
-                            .as_object()
-                            .expect("input download"),
+                        input_download.as_object().expect("input download"),
                         None,
                     )
                     .await;
                     request_artifact(
                         &client,
-                        payload["outputUpload"].as_object().expect("output upload"),
+                        output_upload.as_object().expect("output upload"),
                         Some(b"normalized-output".to_vec()),
                     )
                     .await;
                     let stdout = json!({
-                        "type": "stdout",
-                        "workerId": worker_id,
-                        "phase": "executeRun",
-                        "data": "Loaded 12 rows",
+                        "jsonrpc": "2.0",
+                        "method": "channel.data",
+                        "params": {
+                            "channelId": channel_id,
+                            "stream": "stdout",
+                            "data": "TG9hZGVkIDEyIHJvd3MK",
+                        }
                     });
                     let exit = json!({
-                        "type": "workerExit",
-                        "workerId": worker_id,
-                        "kind": "run",
-                        "code": 0,
-                        "outputPath": payload["outputPath"],
-                        "validationIssues": [],
+                        "jsonrpc": "2.0",
+                        "method": "channel.exit",
+                        "params": {
+                            "channelId": channel_id,
+                            "code": 0,
+                        }
                     });
                     let _ = socket.send(Message::Text(stdout.to_string().into())).await;
                     if execution_delay_ms > 0 {
                         tokio::time::sleep(Duration::from_millis(execution_delay_ms)).await;
                     }
+                    let process_result = format!(
+                        "{}{}\n",
+                        "__ADE_PROCESS_RESULT__=",
+                        json!({
+                            "outputPath": env["ADE_OUTPUT_PATH"].as_str().unwrap(),
+                            "validationIssues": [],
+                        })
+                    );
+                    let _ = socket
+                        .send(Message::Text(
+                            json!({
+                                "jsonrpc": "2.0",
+                                "method": "channel.data",
+                                "params": {
+                                    "channelId": channel_id,
+                                    "stream": "stdout",
+                                    "data": base64::engine::general_purpose::STANDARD.encode(process_result),
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await;
                     let _ = socket.send(Message::Text(exit.to_string().into())).await;
                     break;
                 }
-                Some("closeWorker") | Some("shutdown") => break,
+                Some("channel.close") | Some("session.shutdown") => break,
                 _ => {}
             }
         }
@@ -1096,6 +1176,18 @@ async fn run_downloads_return_conflict_until_artifacts_are_ready() {
     let detail = wait_for_terminal_status(&client, &detail_url, "succeeded").await;
     assert!(detail["outputPath"].is_string());
     assert!(detail["logPath"].is_string());
+    let events = client
+        .get(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
+        ))
+        .header("accept", "text/event-stream")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(events.status(), reqwest::StatusCode::OK);
+    let events_body = events.text().await.unwrap();
+    assert!(events_body.contains("event: run.completed"));
+    assert!(events_body.contains("id: 1"));
 
     app_handle.abort();
     stub_handle.abort();
@@ -1572,8 +1664,41 @@ async fn removed_public_file_routes_return_not_found() {
 }
 
 #[tokio::test]
-async fn terminal_route_starts_bootstrap_code_and_streams_bridge_events() {
+async fn scope_session_launches_reverse_connect_with_url_and_bearer_token() {
     let (endpoint, state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let terminal_url =
+        format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/terminal");
+    let (mut socket, _response) = connect_async(&terminal_url).await.unwrap();
+    let _ = socket.next().await;
+
+    let execution_codes = state.lock().unwrap().execution_codes.clone();
+    assert_eq!(execution_codes.len(), 1);
+    assert!(execution_codes[0].contains("reverse-connect connect"));
+    assert!(extract_bridge_url(&execution_codes[0]).is_some());
+    assert!(extract_bearer_token(&execution_codes[0]).is_some());
+
+    let _ = socket.close(None).await;
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn terminal_route_streams_terminal_output_over_reverse_connect() {
+    let (endpoint, _state, stub_handle) = start_stub_server().await;
     let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1608,19 +1733,13 @@ async fn terminal_route_starts_bootstrap_code_and_streams_bridge_events() {
         assert_eq!(exit, r#"{"type":"exit","code":0}"#);
     }
 
-    let execution_codes = state.lock().unwrap().execution_codes.clone();
-    assert_eq!(execution_codes.len(), 1);
-    assert!(execution_codes[0].contains("ade-session-agent"));
-    assert!(execution_codes[0].contains("--config-file"));
-    assert!(!execution_codes[0].contains("pty.openpty()"));
-
     let _ = socket.close(None).await;
     app_handle.abort();
     stub_handle.abort();
 }
 
 #[tokio::test]
-async fn internal_bridge_route_can_only_attach_once() {
+async fn reverse_connect_rendezvous_allows_only_one_connector() {
     let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
         auto_connect_terminal_bridge: false,
         terminal_execution_delay_ms: 300,
@@ -1646,68 +1765,61 @@ async fn internal_bridge_route_can_only_attach_once() {
     let (mut browser_socket, _response) = connect_async(&terminal_url).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let bridge_url = {
+    let (bridge_url, bearer_token) = {
         let state = state.lock().unwrap();
-        let identifier = state.identifiers.last().unwrap();
-        extract_bridge_url(&state.execution_codes[0], &state, identifier).unwrap()
+        (
+            extract_bridge_url(&state.execution_codes[0]).unwrap(),
+            extract_bearer_token(&state.execution_codes[0]).unwrap(),
+        )
     };
 
-    let (mut bridge_socket, _response) = connect_async(&bridge_url).await.unwrap();
-    bridge_socket
-        .send(Message::Text(r#"{"type":"ready"}"#.into()))
+    let (mut bridge_socket, _response) = connect_async(bridge_request(&bridge_url, &bearer_token))
         .await
         .unwrap();
-    let prepare = bridge_socket
-        .next()
-        .await
-        .unwrap()
-        .unwrap()
-        .into_text()
-        .unwrap();
-    let prepare = serde_json::from_str::<Value>(&prepare).unwrap();
-    assert_eq!(prepare["type"], "prepare");
     bridge_socket
         .send(Message::Text(
             json!({
-                "type": "prepared",
-                "configVersion": prepare["configVersion"],
-                "engineVersion": prepare["engineVersion"],
-                "pythonToolchainVersion": prepare["pythonToolchainVersion"],
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "connector.hello",
+                "params": {
+                    "capabilities": ["exec", "pty"],
+                    "host": {
+                        "arch": "x86_64",
+                        "os": "linux"
+                    },
+                    "version": "test"
+                }
             })
             .to_string()
             .into(),
         ))
         .await
         .unwrap();
-    let start_shell = bridge_socket
+    let hello_response = bridge_socket
         .next()
         .await
         .unwrap()
         .unwrap()
         .into_text()
         .unwrap();
-    let start_shell = serde_json::from_str::<Value>(&start_shell).unwrap();
-    assert_eq!(start_shell["type"], "startShell");
-    bridge_socket
-        .send(Message::Text(
-            json!({
-                "type": "workerExit",
-                "workerId": start_shell["workerId"],
-                "kind": "shell",
-                "code": 0,
-            })
-            .to_string()
-            .into(),
-        ))
+    let hello_response = serde_json::from_str::<Value>(&hello_response).unwrap();
+    assert_eq!(hello_response["id"], 1);
+    let channel_open = bridge_socket
+        .next()
         .await
+        .unwrap()
+        .unwrap()
+        .into_text()
         .unwrap();
+    let channel_open = serde_json::from_str::<Value>(&channel_open).unwrap();
+    assert_eq!(channel_open["method"], "channel.open");
 
-    let ready = browser_socket.next().await.unwrap().unwrap();
-    let exit = browser_socket.next().await.unwrap().unwrap();
-    assert_eq!(ready.into_text().unwrap(), r#"{"type":"ready"}"#);
-    assert_eq!(exit.into_text().unwrap(), r#"{"type":"exit","code":0}"#);
-
-    assert!(connect_async(&bridge_url).await.is_err());
+    assert!(
+        connect_async(bridge_request(&bridge_url, &bearer_token))
+            .await
+            .is_err()
+    );
 
     let _ = bridge_socket.close(None).await;
     let _ = browser_socket.close(None).await;
@@ -1743,8 +1855,7 @@ async fn browser_disconnect_before_bridge_ready_eventually_clears_pending_state(
     tokio::time::sleep(Duration::from_millis(50)).await;
     let bridge_url = {
         let state = state.lock().unwrap();
-        let identifier = state.identifiers.last().unwrap();
-        extract_bridge_url(&state.execution_codes[0], &state, identifier).unwrap()
+        extract_bridge_url(&state.execution_codes[0]).unwrap()
     };
 
     browser_socket.close(None).await.unwrap();
