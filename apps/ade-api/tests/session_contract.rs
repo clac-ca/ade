@@ -986,17 +986,20 @@ async fn create_run_returns_accepted_metadata_and_persists_output_via_artifact_s
     );
     assert_eq!(detail["validationIssues"], json!([]));
 
-    let stub_state = state.lock().unwrap();
-    let output_blob = stored_blob(&stub_state, output_path);
+    let (output_blob, log_blob) = {
+        let stub_state = state.lock().unwrap();
+        (
+            stored_blob(&stub_state, output_path),
+            stored_blob(&stub_state, log_path),
+        )
+    };
     assert_eq!(output_blob.bytes, b"normalized-output");
-    let log_blob = stored_blob(&stub_state, log_path);
     let log_text = String::from_utf8(log_blob.bytes.clone()).unwrap();
     assert!(log_text.lines().count() >= 2);
     assert!(log_text.lines().any(|line| {
         let payload = serde_json::from_str::<Value>(line).unwrap();
         payload["event"] == "run.log" && payload["data"]["message"] == "Loaded 12 rows"
     }));
-    drop(stub_state);
     let (output_download, downloaded_output_bytes) =
         download_run_artifact(&client, &base_url, run_id, "output").await;
     assert_eq!(output_download["filePath"], output_path);
@@ -1008,6 +1011,53 @@ async fn create_run_returns_accepted_metadata_and_persists_output_via_artifact_s
     assert_eq!(log_download["filePath"], log_path);
     assert_eq!(log_download["download"]["method"], "GET");
     assert_eq!(downloaded_log_bytes, log_blob.bytes);
+
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn create_run_is_idempotent_for_the_same_uploaded_input_path() {
+    let (endpoint, state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{address}");
+    let upload = upload_input(
+        &client,
+        &base_url,
+        "input.csv",
+        "text/csv",
+        b"name,email\nalice,alice@example.com\n".to_vec(),
+    )
+    .await;
+    let input_path = upload["filePath"].as_str().unwrap();
+
+    let first = start_run(&client, &base_url, input_path)
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    let second = start_run(&client, &base_url, input_path)
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+
+    assert_eq!(first["runId"], second["runId"]);
+    wait_for_run_execution_count(&state, 1).await;
 
     app_handle.abort();
     stub_handle.abort();

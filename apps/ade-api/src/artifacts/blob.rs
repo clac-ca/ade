@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path, sync::Mutex};
+use std::{collections::BTreeMap, path::Path, sync::Mutex, time::Duration as StdDuration};
 
 use azure_core::credentials::TokenCredential;
 use azure_identity::{DeveloperToolsCredential, ManagedIdentityCredential};
@@ -29,6 +29,8 @@ const STORAGE_SERVICE_VERSION: &str = "2024-11-04";
 const USER_DELEGATION_KEY_REFRESH_BUFFER_MINUTES: i64 = 5;
 const USER_DELEGATION_KEY_TTL_MINUTES: i64 = 60;
 const USER_DELEGATION_KEY_URL_SUFFIX: &str = "/?restype=service&comp=userdelegationkey";
+const BLOB_CONNECT_TIMEOUT: StdDuration = StdDuration::from_secs(10);
+const BLOB_REQUEST_TIMEOUT: StdDuration = StdDuration::from_secs(60);
 
 #[derive(Clone)]
 struct CachedUserDelegationKey {
@@ -87,7 +89,16 @@ impl BlobArtifactStore {
             account_name,
             account_url,
             auth_mode,
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(BLOB_CONNECT_TIMEOUT)
+                .timeout(BLOB_REQUEST_TIMEOUT)
+                .build()
+                .map_err(|error| {
+                    AppError::config_with_source(
+                        "Failed to initialize the Azure Blob client.".to_string(),
+                        error,
+                    )
+                })?,
             container,
             shared_key,
             local_cors_allowed_origins,
@@ -148,33 +159,26 @@ impl BlobArtifactStore {
         Ok(())
     }
 
-    pub(crate) async fn initialize(&self) -> Result<(), AppError> {
-        self.ensure_local_blob_ready().await
-    }
-
     async fn configure_local_cors(&self) -> Result<(), AppError> {
         let allowed_origins = self.local_cors_allowed_origins.join(",");
         let body = format!(
             "<?xml version=\"1.0\" encoding=\"utf-8\"?><StorageServiceProperties><Cors><CorsRule><AllowedOrigins>{allowed_origins}</AllowedOrigins><AllowedMethods>GET,HEAD,OPTIONS,PUT</AllowedMethods><MaxAgeInSeconds>{BLOB_CORS_MAX_AGE_SECONDS}</MaxAgeInSeconds><ExposedHeaders>etag,x-ms-*</ExposedHeaders><AllowedHeaders>*</AllowedHeaders></CorsRule></Cors><DefaultServiceVersion>{STORAGE_SERVICE_VERSION}</DefaultServiceVersion></StorageServiceProperties>"
         );
-        let mut headers = blob_request_headers(Some("application/xml"))?;
-        headers.insert(
-            CONTENT_LENGTH,
-            HeaderValue::from_str(&body.len().to_string()).map_err(|error| {
-                AppError::internal_with_source(
-                    "Failed to encode the local Blob service properties request length."
-                        .to_string(),
-                    error,
-                )
-            })?,
-        );
+        let headers = blob_request_headers(Some("application/xml"))?;
         let mut request_url = self.account_url.clone();
         request_url
             .query_pairs_mut()
             .append_pair("restype", "service")
             .append_pair("comp", "properties");
-        self.request(Method::PUT, request_url, headers, Some(body.into_bytes()))
-            .await?;
+        let body_len = body.len();
+        self.request(
+            Method::PUT,
+            request_url,
+            headers,
+            Some(body.into()),
+            Some(body_len),
+        )
+        .await?;
         Ok(())
     }
 
@@ -189,7 +193,7 @@ impl BlobArtifactStore {
         }
         url.query_pairs_mut().append_pair("restype", "container");
         let headers = blob_request_headers(None)?;
-        match self.request(Method::PUT, url, headers, None).await {
+        match self.request(Method::PUT, url, headers, None, None).await {
             Ok(_) => Ok(()),
             Err(AppError::Response {
                 status: StatusCode::CONFLICT,
@@ -277,13 +281,26 @@ impl BlobArtifactStore {
         ))
     }
 
-    async fn send_authenticated_request(
+    async fn send_request(
         &self,
         method: Method,
         url: Url,
         mut headers: HeaderMap,
-        body: Option<Vec<u8>>,
+        body: Option<reqwest::Body>,
+        body_len: Option<usize>,
     ) -> Result<reqwest::Response, AppError> {
+        if let Some(body_len) = body_len {
+            headers.insert(
+                CONTENT_LENGTH,
+                HeaderValue::from_str(&body_len.to_string()).map_err(|error| {
+                    AppError::internal_with_source(
+                        "Failed to encode the Azure Blob Storage content length.".to_string(),
+                        error,
+                    )
+                })?,
+            );
+        }
+
         let mut builder = self.client.request(method.clone(), url.clone());
 
         match self.auth_mode {
@@ -291,7 +308,6 @@ impl BlobArtifactStore {
                 builder = builder.bearer_auth(blob_access_token().await?);
             }
             BlobAuthMode::SharedKey => {
-                let body_len = body.as_ref().map(Vec::len);
                 let authorization =
                     self.shared_key_authorization(&method, &url, &headers, body_len)?;
                 headers.insert(
@@ -316,105 +332,27 @@ impl BlobArtifactStore {
         })
     }
 
-    async fn send_authenticated_stream_request(
-        &self,
-        method: Method,
-        url: Url,
-        mut headers: HeaderMap,
-        body: reqwest::Body,
-        body_len: usize,
-    ) -> Result<reqwest::Response, AppError> {
-        headers.insert(
-            CONTENT_LENGTH,
-            HeaderValue::from_str(&body_len.to_string()).map_err(|error| {
-                AppError::internal_with_source(
-                    "Failed to encode the Azure Blob Storage content length.".to_string(),
-                    error,
-                )
-            })?,
-        );
-
-        let mut builder = self.client.request(method.clone(), url.clone());
-
-        match self.auth_mode {
-            BlobAuthMode::UserDelegation => {
-                builder = builder.bearer_auth(blob_access_token().await?);
-            }
-            BlobAuthMode::SharedKey => {
-                let authorization =
-                    self.shared_key_authorization(&method, &url, &headers, Some(body_len))?;
-                headers.insert(
-                    AUTHORIZATION,
-                    HeaderValue::from_str(&authorization).map_err(|error| {
-                        AppError::internal_with_source(
-                            "Failed to encode the local Blob authorization header.".to_string(),
-                            error,
-                        )
-                    })?,
-                );
-            }
-        }
-
-        builder
-            .headers(headers)
-            .body(body)
-            .send()
-            .await
-            .map_err(|error| {
-                AppError::internal_with_source(
-                    "Failed to call Azure Blob Storage.".to_string(),
-                    error,
-                )
-            })
-    }
-
     async fn request(
         &self,
         method: Method,
         url: Url,
         headers: HeaderMap,
-        body: Option<Vec<u8>>,
+        body: Option<reqwest::Body>,
+        body_len: Option<usize>,
     ) -> Result<reqwest::Response, AppError> {
         let response = self
-            .send_authenticated_request(method, url, headers, body)
+            .send_request(method, url, headers, body, body_len)
             .await?;
 
         if response.status().is_success() {
             return Ok(response);
         }
 
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        Err(match status {
-            StatusCode::NOT_FOUND => AppError::not_found("Artifact not found."),
-            StatusCode::BAD_REQUEST | StatusCode::CONFLICT => AppError::request(body),
-            _ => AppError::status(status, body),
-        })
-    }
-
-    async fn request_stream(
-        &self,
-        method: Method,
-        url: Url,
-        headers: HeaderMap,
-        body: reqwest::Body,
-        body_len: usize,
-    ) -> Result<reqwest::Response, AppError> {
-        let response = self
-            .send_authenticated_stream_request(method, url, headers, body, body_len)
-            .await?;
-
-        if response.status().is_success() {
-            return Ok(response);
-        }
-
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        Err(match status {
-            StatusCode::NOT_FOUND => AppError::not_found("Artifact not found."),
-            StatusCode::BAD_REQUEST | StatusCode::CONFLICT => AppError::request(body),
-            _ => AppError::status(status, body),
-        })
+        Err(blob_response_error(
+            response,
+            Some("Artifact not found."),
+        )
+        .await)
     }
 
     async fn request_optional(
@@ -423,9 +361,7 @@ impl BlobArtifactStore {
         url: Url,
         headers: HeaderMap,
     ) -> Result<Option<reqwest::Response>, AppError> {
-        let response = self
-            .send_authenticated_request(method, url, headers, None)
-            .await?;
+        let response = self.send_request(method, url, headers, None, None).await?;
 
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -435,12 +371,7 @@ impl BlobArtifactStore {
             return Ok(Some(response));
         }
 
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        Err(match status {
-            StatusCode::BAD_REQUEST | StatusCode::CONFLICT => AppError::request(body),
-            _ => AppError::status(status, body),
-        })
+        Err(blob_response_error(response, None).await)
     }
 
     async fn cached_user_delegation_key(
@@ -734,12 +665,12 @@ impl BlobArtifactStore {
         let stream = ReaderStream::new(file);
         let mut headers = blob_request_headers(Some(&resolved_content_type))?;
         headers.insert("x-ms-blob-type", HeaderValue::from_static("BlockBlob"));
-        self.request_stream(
+        self.request(
             Method::PUT,
             self.blob_url(&normalized)?,
             headers,
-            reqwest::Body::wrap_stream(stream),
-            size,
+            Some(reqwest::Body::wrap_stream(stream)),
+            Some(size),
         )
         .await?;
 
@@ -747,6 +678,22 @@ impl BlobArtifactStore {
             content_type: resolved_content_type,
             size,
         })
+    }
+}
+
+async fn blob_response_error(
+    response: reqwest::Response,
+    not_found_message: Option<&str>,
+) -> AppError {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+
+    match status {
+        StatusCode::NOT_FOUND => not_found_message
+            .map(AppError::not_found)
+            .unwrap_or_else(|| AppError::status(status, body)),
+        StatusCode::BAD_REQUEST | StatusCode::CONFLICT => AppError::request(body),
+        _ => AppError::status(status, body),
     }
 }
 

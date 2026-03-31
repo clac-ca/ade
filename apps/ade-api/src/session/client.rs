@@ -5,6 +5,7 @@ use reqwest::{
     multipart::{Form, Part},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::time::Duration;
 use utoipa::ToSchema;
 
 use crate::{
@@ -15,6 +16,9 @@ use crate::{
 
 const DEFAULT_AZURE_SESSION_API_VERSION: &str = "2025-10-02-preview";
 const DEFAULT_AZURE_SESSION_AUDIENCE: &str = "https://dynamicsessions.io";
+const SESSION_POOL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const SESSION_POOL_EXECUTION_TIMEOUT_BUFFER: Duration = Duration::from_secs(60);
+const SESSION_POOL_FILE_UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -82,7 +86,15 @@ impl SessionPoolClient {
         });
 
         Ok(Self {
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(SESSION_POOL_CONNECT_TIMEOUT)
+                .build()
+                .map_err(|error| {
+                    AppError::config_with_source(
+                        "Failed to initialize the session pool client.".to_string(),
+                        error,
+                    )
+                })?,
             pool_management_endpoint: endpoint,
             uses_azure_auth,
         })
@@ -97,6 +109,10 @@ impl SessionPoolClient {
         let request = self
             .data_plane_request(Method::POST, &["executions"], identifier, &[])
             .await?
+            .timeout(
+                Duration::from_secs(timeout_in_seconds.unwrap_or(0))
+                    .saturating_add(SESSION_POOL_EXECUTION_TIMEOUT_BUFFER),
+            )
             .json(&InlinePythonExecutionRequest {
                 code,
                 code_input_type: "Inline",
@@ -148,6 +164,7 @@ impl SessionPoolClient {
                 query_pairs.as_ref().map_or(&[], |pairs| pairs.as_slice()),
             )
             .await?
+            .timeout(SESSION_POOL_FILE_UPLOAD_TIMEOUT)
             .multipart(Form::new().part("file", part));
         let record: SessionOperationResult<AzureFileRecord> =
             parse_json_response(request, "upload a session pool file").await?;
