@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::{Path as FsPath, PathBuf},
+    path::Path as FsPath,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -15,11 +15,11 @@ use ade_api::{
 };
 use axum::{
     Json, Router,
-    body::{Body, to_bytes},
-    extract::{Multipart, Query, State},
-    http::{HeaderName, HeaderValue, Request, StatusCode},
-    response::IntoResponse,
-    routing::post,
+    body::{Body, Bytes, to_bytes},
+    extract::{Multipart, Path, Query, State},
+    http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::{any, post},
 };
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Method, Url};
@@ -30,13 +30,16 @@ use tower::util::ServiceExt;
 
 #[derive(Default)]
 struct PoolStubState {
-    artifact_download_urls: Vec<String>,
-    artifact_upload_urls: Vec<String>,
+    blobs: HashMap<String, StubBlobObject>,
     execution_codes: Vec<String>,
     identifiers: Vec<String>,
     run_execution_count: usize,
-    uploaded_files: HashMap<String, Vec<u8>>,
-    uploaded_names: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StubBlobObject {
+    content_type: String,
+    bytes: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -79,13 +82,6 @@ struct IdentifierQuery {
     path: Option<String>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct SseEvent {
-    data: String,
-    event: String,
-    id: i64,
-}
-
 fn ready_state() -> ReadinessController {
     ReadinessController::new(ReadinessSnapshot {
         database: DatabaseReadiness {
@@ -115,11 +111,6 @@ async fn stub_upload_file(
     };
     let mut state = stub.state.lock().unwrap();
     state.identifiers.push(query.identifier.clone());
-    state.uploaded_names.push(stored_name.clone());
-    state.uploaded_files.insert(
-        format!("{}::{stored_name}", query.identifier),
-        bytes.to_vec(),
-    );
 
     Json(json!({
         "directory": stored_name
@@ -225,12 +216,6 @@ async fn stub_execute(
             let output_path = config["outputPath"].as_str().expect("output path");
 
             let _input = request_artifact(&client, input_download, None).await;
-            {
-                let mut state = stub.state.lock().unwrap();
-                state
-                    .artifact_download_urls
-                    .push(input_download["url"].as_str().unwrap().to_string());
-            }
 
             if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
                 let _ = socket
@@ -263,12 +248,6 @@ async fn stub_execute(
                     .await;
 
                 request_artifact(&client, output_upload, Some(b"normalized-output".to_vec())).await;
-                {
-                    let mut state = stub.state.lock().unwrap();
-                    state
-                        .artifact_upload_urls
-                        .push(output_upload["url"].as_str().unwrap().to_string());
-                }
 
                 let _ = socket
                     .send(Message::Text(
@@ -315,7 +294,7 @@ async fn request_artifact(
     client: &Client,
     access: &serde_json::Map<String, Value>,
     body: Option<Vec<u8>>,
-) {
+) -> reqwest::Response {
     let method = Method::from_bytes(access["method"].as_str().unwrap().as_bytes()).unwrap();
     let mut request = client.request(method, access["url"].as_str().unwrap());
     for (name, value) in access["headers"].as_object().expect("access headers") {
@@ -331,6 +310,85 @@ async fn request_artifact(
         "artifact request failed with status {}",
         response.status()
     );
+    response
+}
+
+fn blob_storage_key(account: &str, container: &str, blob_path: &str) -> String {
+    format!(
+        "{account}/{container}/{}",
+        blob_path.trim_start_matches('/')
+    )
+}
+
+fn stored_blob(state: &PoolStubState, path: &str) -> StubBlobObject {
+    state
+        .blobs
+        .get(&blob_storage_key("devstoreaccount1", "documents", path))
+        .cloned()
+        .unwrap_or_else(|| panic!("missing blob for path: {path}"))
+}
+
+async fn stub_blob_account(Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
+    if query.get("restype").map(String::as_str) == Some("service")
+        && query.get("comp").map(String::as_str) == Some("properties")
+    {
+        return StatusCode::ACCEPTED;
+    }
+
+    StatusCode::NOT_FOUND
+}
+
+async fn stub_blob_container(Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
+    if query.get("restype").map(String::as_str) == Some("container") {
+        return StatusCode::CREATED;
+    }
+
+    StatusCode::NOT_FOUND
+}
+
+async fn stub_blob_object(
+    State(stub): State<PoolStub>,
+    Path((account, container, blob_path)): Path<(String, String, String)>,
+    method: axum::http::Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let key = blob_storage_key(&account, &container, &blob_path);
+    match method {
+        axum::http::Method::PUT => {
+            let content_type = headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            stub.state.lock().unwrap().blobs.insert(
+                key,
+                StubBlobObject {
+                    bytes: body.to_vec(),
+                    content_type,
+                },
+            );
+            StatusCode::CREATED.into_response()
+        }
+        axum::http::Method::GET => {
+            let Some(blob) = stub.state.lock().unwrap().blobs.get(&key).cloned() else {
+                return StatusCode::NOT_FOUND.into_response();
+            };
+            ([(header::CONTENT_TYPE, blob.content_type)], blob.bytes).into_response()
+        }
+        axum::http::Method::HEAD => {
+            let Some(blob) = stub.state.lock().unwrap().blobs.get(&key).cloned() else {
+                return StatusCode::NOT_FOUND.into_response();
+            };
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, blob.content_type)
+                .header(header::CONTENT_LENGTH, blob.bytes.len().to_string())
+                .body(Body::empty())
+                .unwrap()
+        }
+        _ => StatusCode::METHOD_NOT_ALLOWED.into_response(),
+    }
 }
 
 async fn start_stub_server() -> (
@@ -356,6 +414,9 @@ async fn start_stub_server_with_options(
     let app = Router::new()
         .route("/files", post(stub_upload_file))
         .route("/executions", post(stub_execute))
+        .route("/{account}", any(stub_blob_account))
+        .route("/{account}/{container}", any(stub_blob_container))
+        .route("/{account}/{container}/{*blob_path}", any(stub_blob_object))
         .with_state(stub);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -371,11 +432,12 @@ fn app_with_session(
     config_targets: &[(&str, &str, &FsPath)],
     engine_wheel_path: &FsPath,
 ) -> axum::Router {
-    app_with_session_and_url(
+    app_with_session_and_url_and_run_limit(
         endpoint,
         "http://127.0.0.1:8000",
         config_targets,
         engine_wheel_path,
+        None,
     )
 }
 
@@ -384,6 +446,22 @@ fn app_with_session_and_url(
     app_url: &str,
     config_targets: &[(&str, &str, &FsPath)],
     engine_wheel_path: &FsPath,
+) -> axum::Router {
+    app_with_session_and_url_and_run_limit(
+        endpoint,
+        app_url,
+        config_targets,
+        engine_wheel_path,
+        None,
+    )
+}
+
+fn app_with_session_and_url_and_run_limit(
+    endpoint: &str,
+    app_url: &str,
+    config_targets: &[(&str, &str, &FsPath)],
+    engine_wheel_path: &FsPath,
+    run_max_concurrent: Option<usize>,
 ) -> axum::Router {
     let config_targets = config_targets
         .iter()
@@ -413,27 +491,34 @@ fn app_with_session_and_url(
             "test-session-secret".to_string(),
         ),
         ("ADE_APP_URL".to_string(), app_url.to_string()),
+        (
+            "ADE_BLOB_ACCOUNT_URL".to_string(),
+            format!("{endpoint}/devstoreaccount1"),
+        ),
+        (
+            "ADE_BLOB_CONTAINER".to_string(),
+            "documents".to_string(),
+        ),
+        (
+            "ADE_BLOB_ACCOUNT_KEY".to_string(),
+            "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
+                .to_string(),
+        ),
     ]
     .into_iter()
     .collect();
 
     let session_service = Arc::new(SessionService::from_env(&env).unwrap());
+    let mut run_env = env.clone();
+    if let Some(run_max_concurrent) = run_max_concurrent {
+        run_env.insert(
+            "ADE_RUN_MAX_CONCURRENT".to_string(),
+            run_max_concurrent.to_string(),
+        );
+    }
     let run_service = Arc::new(
         RunService::from_env(
-            &[
-                ("ADE_APP_URL".to_string(), app_url.to_string()),
-                (
-                    "ADE_ARTIFACTS_ROOT".to_string(),
-                    engine_wheel_path
-                        .parent()
-                        .unwrap_or_else(|| std::path::Path::new("."))
-                        .join("artifacts")
-                        .display()
-                        .to_string(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
+            &run_env,
             Arc::clone(&session_service),
             Arc::new(InMemoryRunStore::default()),
         )
@@ -448,13 +533,6 @@ fn app_with_session_and_url(
         terminal_service,
         web_root: None,
     })
-}
-
-fn artifact_root(engine_wheel_path: &FsPath) -> PathBuf {
-    engine_wheel_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("artifacts")
 }
 
 fn create_wheels() -> (
@@ -490,55 +568,6 @@ fn extract_bridge_url(code: &str) -> Option<String> {
     config["bridgeUrl"].as_str().map(str::to_string)
 }
 
-fn parse_sse_events(body: &str) -> Vec<SseEvent> {
-    let mut events = Vec::new();
-    let mut event_name: Option<String> = None;
-    let mut event_id: Option<i64> = None;
-    let mut data_lines = Vec::new();
-
-    for line in body.lines() {
-        if line.is_empty() {
-            if let (Some(event), Some(id)) = (event_name.take(), event_id.take()) {
-                events.push(SseEvent {
-                    data: data_lines.join("\n"),
-                    event,
-                    id,
-                });
-            }
-            data_lines.clear();
-            continue;
-        }
-
-        if line.starts_with(':') {
-            continue;
-        }
-
-        if let Some(value) = line.strip_prefix("event: ") {
-            event_name = Some(value.to_string());
-            continue;
-        }
-
-        if let Some(value) = line.strip_prefix("id: ") {
-            event_id = Some(value.parse().unwrap());
-            continue;
-        }
-
-        if let Some(value) = line.strip_prefix("data: ") {
-            data_lines.push(value.to_string());
-        }
-    }
-
-    if let (Some(event), Some(id)) = (event_name.take(), event_id.take()) {
-        events.push(SseEvent {
-            data: data_lines.join("\n"),
-            event,
-            id,
-        });
-    }
-
-    events
-}
-
 fn resolve_url(base_url: &str, url: &str) -> String {
     if Url::parse(url).is_ok() {
         return url.to_string();
@@ -561,7 +590,6 @@ async fn upload_input(
         .json(&json!({
             "filename": filename,
             "contentType": content_type,
-            "size": body.len(),
         }))
         .send()
         .await
@@ -597,6 +625,50 @@ async fn start_run(client: &Client, base_url: &str, input_path: &str) -> reqwest
         .send()
         .await
         .unwrap()
+}
+
+async fn create_run_download(
+    client: &Client,
+    base_url: &str,
+    run_id: &str,
+    artifact: &str,
+) -> Value {
+    let response = client
+        .post(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/downloads"
+        ))
+        .json(&json!({
+            "artifact": artifact,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    response.json::<Value>().await.unwrap()
+}
+
+async fn download_run_artifact(
+    client: &Client,
+    base_url: &str,
+    run_id: &str,
+    artifact: &str,
+) -> (Value, Vec<u8>) {
+    let payload = create_run_download(client, base_url, run_id, artifact).await;
+    let download = payload["download"].as_object().unwrap();
+    let method = Method::from_bytes(download["method"].as_str().unwrap().as_bytes()).unwrap();
+    let mut request = client.request(
+        method,
+        resolve_url(base_url, download["url"].as_str().unwrap()),
+    );
+    for (name, value) in download["headers"].as_object().unwrap() {
+        let name = HeaderName::from_bytes(name.as_bytes()).unwrap();
+        let value = HeaderValue::from_str(value.as_str().unwrap()).unwrap();
+        request = request.header(name, value);
+    }
+    let response = request.send().await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let bytes = response.bytes().await.unwrap().to_vec();
+    (payload, bytes)
 }
 
 async fn wait_for_terminal_status(client: &Client, url: &str, expected: &str) -> Value {
@@ -639,6 +711,20 @@ async fn wait_for_output_path(client: &Client, url: &str) -> Value {
     panic!("run never exposed outputPath: {detail}");
 }
 
+async fn wait_for_run_execution_count(state: &Arc<Mutex<PoolStubState>>, expected: usize) {
+    for _ in 0..40 {
+        if state.lock().unwrap().run_execution_count == expected {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    panic!(
+        "run execution count never reached {expected}: {}",
+        state.lock().unwrap().run_execution_count
+    );
+}
+
 #[tokio::test]
 async fn uploads_route_returns_server_chosen_paths_and_direct_upload_instructions() {
     let (endpoint, _state, stub_handle) = start_stub_server().await;
@@ -659,7 +745,6 @@ async fn uploads_route_returns_server_chosen_paths_and_direct_upload_instruction
                     json!({
                         "filename": "../Quarterly Input.xlsx",
                         "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        "size": 1048576,
                     })
                     .to_string(),
                 ))
@@ -677,22 +762,17 @@ async fn uploads_route_returns_server_chosen_paths_and_direct_upload_instruction
     assert!(file_path.ends_with("/Quarterly Input.xlsx"));
     assert_eq!(payload["upload"]["method"], "PUT");
     assert_eq!(
-        payload["upload"]["headers"]["x-ade-artifact-token"].as_str(),
-        Some(
-            payload["upload"]["headers"]["x-ade-artifact-token"]
-                .as_str()
-                .unwrap()
-        )
-    );
-    assert_eq!(
         payload["upload"]["headers"]["content-type"],
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     );
-    assert!(
-        payload["upload"]["url"]
-            .as_str()
-            .unwrap()
-            .contains("/api/internal/artifacts/workspaces/workspace-a/configs/config-v1/uploads/")
+    assert!(payload["upload"]["headers"]["x-ms-blob-type"].is_string());
+    assert!(payload["upload"]["headers"]["x-ms-version"].is_string());
+    let upload_url = Url::parse(payload["upload"]["url"].as_str().unwrap()).unwrap();
+    assert_eq!(upload_url.host_str(), Some("127.0.0.1"));
+    assert!(upload_url.path().contains("/devstoreaccount1/documents/"));
+    assert_eq!(
+        upload_url.query_pairs().find(|(name, _)| name == "sp"),
+        Some(("sp".into(), "cw".into()))
     );
     assert!(
         payload["upload"]["expiresAt"]
@@ -700,6 +780,153 @@ async fn uploads_route_returns_server_chosen_paths_and_direct_upload_instruction
             .unwrap()
             .contains('T')
     );
+
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn bulk_upload_batches_return_direct_upload_instructions_per_file() {
+    let (endpoint, _state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+    let app = app_with_session(
+        &endpoint,
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/workspaces/workspace-a/configs/config-v1/uploads/batches")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "files": [
+                            {
+                                "filename": "../alpha.csv",
+                                "contentType": "text/csv",
+                                "size": 10,
+                            },
+                            {
+                                "filename": "reports/beta.xlsx",
+                                "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                "size": 20,
+                            }
+                        ],
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload =
+        serde_json::from_slice::<Value>(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+            .unwrap();
+    let batch_id = payload["batchId"].as_str().unwrap();
+    assert!(batch_id.starts_with("bat_"));
+    let items = payload["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(items[0]["fileId"].as_str().unwrap().starts_with("fil_"));
+    assert!(items[1]["fileId"].as_str().unwrap().starts_with("fil_"));
+    assert_ne!(items[0]["fileId"], items[1]["fileId"]);
+    assert_eq!(
+        items[0]["filePath"],
+        Value::String(format!(
+            "workspaces/workspace-a/configs/config-v1/uploads/batches/{batch_id}/{}/alpha.csv",
+            items[0]["fileId"].as_str().unwrap()
+        ))
+    );
+    assert_eq!(
+        items[1]["filePath"],
+        Value::String(format!(
+            "workspaces/workspace-a/configs/config-v1/uploads/batches/{batch_id}/{}/beta.xlsx",
+            items[1]["fileId"].as_str().unwrap()
+        ))
+    );
+    assert_eq!(items[0]["upload"]["method"], "PUT");
+    assert_eq!(items[0]["upload"]["headers"]["content-type"], "text/csv");
+    assert!(items[0]["upload"]["headers"]["x-ms-blob-type"].is_string());
+    let upload_url = Url::parse(items[0]["upload"]["url"].as_str().unwrap()).unwrap();
+    assert_eq!(upload_url.host_str(), Some("127.0.0.1"));
+    assert!(upload_url.path().contains("/devstoreaccount1/documents/"));
+    assert_eq!(
+        upload_url.query_pairs().find(|(name, _)| name == "sp"),
+        Some(("sp".into(), "cw".into()))
+    );
+
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn bulk_upload_batches_validate_request_shape_and_limits() {
+    let (endpoint, _state, stub_handle) = start_stub_server().await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+    let app = app_with_session(
+        &endpoint,
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+    );
+
+    let cases = [
+        json!({ "files": [] }),
+        json!({
+            "files": [{
+                "filename": "input.csv",
+                "contentType": "text/csv",
+                "size": 0,
+            }],
+        }),
+        json!({
+            "files": [{
+                "filename": "..",
+                "contentType": "text/csv",
+                "size": 1,
+            }],
+        }),
+        json!({
+            "files": (0..101)
+                .map(|index| json!({
+                    "filename": format!("input-{index}.csv"),
+                    "contentType": "text/csv",
+                    "size": 1,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        json!({
+            "files": [
+                {
+                    "filename": "part-a.csv",
+                    "contentType": "text/csv",
+                    "size": 3 * 1024 * 1024 * 1024_u64,
+                },
+                {
+                    "filename": "part-b.csv",
+                    "contentType": "text/csv",
+                    "size": 3 * 1024 * 1024 * 1024_u64,
+                }
+            ],
+        }),
+    ];
+
+    for body in cases {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workspaces/workspace-a/configs/config-v1/uploads/batches")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 
     stub_handle.abort();
 }
@@ -743,58 +970,56 @@ async fn create_run_returns_accepted_metadata_and_persists_output_via_artifact_s
     let payload = response.json::<Value>().await.unwrap();
     let run_id = payload["runId"].as_str().unwrap();
     assert_eq!(payload["status"], "pending");
-    assert_eq!(payload["inputPath"], upload["filePath"]);
-    assert_eq!(payload["outputPath"], Value::Null);
-    assert_eq!(
-        payload["eventsUrl"],
-        Value::String(format!(
-            "/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
-        ))
-    );
     assert!(location.ends_with(&format!("/runs/{run_id}")));
 
-    let detail =
-        wait_for_terminal_status(&client, &format!("{base_url}{location}"), "succeeded").await;
+    let detail_url = format!("{base_url}{location}");
+    let detail = wait_for_terminal_status(&client, &detail_url, "succeeded").await;
     let output_path = detail["outputPath"].as_str().unwrap();
+    let log_path = detail["logPath"].as_str().unwrap();
     assert_eq!(
         output_path,
         format!("workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx")
     );
+    assert_eq!(
+        log_path,
+        format!("workspaces/workspace-a/configs/config-v1/runs/{run_id}/logs/events.ndjson")
+    );
     assert_eq!(detail["validationIssues"], json!([]));
 
-    let output_bytes = std::fs::read(artifact_root(&engine).join(output_path)).unwrap();
-    assert_eq!(output_bytes, b"normalized-output");
+    let stub_state = state.lock().unwrap();
+    let output_blob = stored_blob(&stub_state, output_path);
+    assert_eq!(output_blob.bytes, b"normalized-output");
+    let log_blob = stored_blob(&stub_state, log_path);
+    let log_text = String::from_utf8(log_blob.bytes.clone()).unwrap();
+    assert!(log_text.lines().count() >= 2);
+    assert!(log_text.lines().any(|line| {
+        let payload = serde_json::from_str::<Value>(line).unwrap();
+        payload["event"] == "run.log" && payload["data"]["message"] == "Loaded 12 rows"
+    }));
+    drop(stub_state);
+    let (output_download, downloaded_output_bytes) =
+        download_run_artifact(&client, &base_url, run_id, "output").await;
+    assert_eq!(output_download["filePath"], output_path);
+    assert_eq!(output_download["download"]["method"], "GET");
+    assert_eq!(downloaded_output_bytes, b"normalized-output");
 
-    let state = state.lock().unwrap();
-    assert_eq!(state.artifact_download_urls.len(), 1);
-    assert_eq!(state.artifact_upload_urls.len(), 1);
-    assert!(
-        state
-            .uploaded_names
-            .iter()
-            .all(|name| !name.starts_with("workspaces/")),
-        "session uploads should contain only runtime wheels",
-    );
-    assert!(
-        state
-            .uploaded_names
-            .iter()
-            .any(|name| name == "ade_engine-0.1.0-py3-none-any.whl")
-    );
-    assert!(
-        state
-            .uploaded_names
-            .iter()
-            .any(|name| name == "ade_config-0.1.0-py3-none-any.whl")
-    );
+    let (log_download, downloaded_log_bytes) =
+        download_run_artifact(&client, &base_url, run_id, "log").await;
+    assert_eq!(log_download["filePath"], log_path);
+    assert_eq!(log_download["download"]["method"], "GET");
+    assert_eq!(downloaded_log_bytes, log_blob.bytes);
 
     app_handle.abort();
     stub_handle.abort();
 }
 
 #[tokio::test]
-async fn run_events_stream_over_sse_and_resume_from_last_event_id() {
-    let (endpoint, _state, stub_handle) = start_stub_server().await;
+async fn run_downloads_return_conflict_until_artifacts_are_ready() {
+    let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        run_execution_delay_ms: 200,
+        ..PoolStubOptions::default()
+    })
+    .await;
     let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -825,52 +1050,31 @@ async fn run_events_stream_over_sse_and_resume_from_last_event_id() {
         .await
         .unwrap();
     let run_id = created["runId"].as_str().unwrap();
+    let output_pending = client
+        .post(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/downloads"
+        ))
+        .json(&json!({ "artifact": "output" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(output_pending.status(), reqwest::StatusCode::CONFLICT);
+
+    let log_pending = client
+        .post(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/downloads"
+        ))
+        .json(&json!({ "artifact": "log" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(log_pending.status(), reqwest::StatusCode::CONFLICT);
+
     let detail_url =
         format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}");
-    wait_for_terminal_status(&client, &detail_url, "succeeded").await;
-
-    let events_text = client
-        .get(format!(
-            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
-        ))
-        .header("Accept", "text/event-stream")
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    let events = parse_sse_events(&events_text);
-    assert!(!events.is_empty());
-    assert_eq!(events.first().unwrap().event, "run.created");
-    assert_eq!(events.last().unwrap().event, "run.completed");
-    assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
-    assert!(events.iter().any(|event| event.event == "run.log"
-        && serde_json::from_str::<Value>(&event.data).unwrap()["message"] == "Loaded 12 rows"));
-    assert!(events.iter().any(|event| event.event == "run.result"
-        && serde_json::from_str::<Value>(&event.data).unwrap()["outputPath"]
-            == format!(
-                "workspaces/workspace-a/configs/config-v1/runs/{run_id}/output/normalized.xlsx"
-            )));
-
-    let resume_from = events[2].id;
-    let resumed_text = client
-        .get(format!(
-            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
-        ))
-        .header("Accept", "text/event-stream")
-        .header("Last-Event-ID", resume_from.to_string())
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    let resumed = parse_sse_events(&resumed_text);
-    assert!(!resumed.is_empty());
-    assert!(resumed.iter().all(|event| event.id > resume_from));
-    assert_eq!(resumed.first().unwrap().id, resume_from + 1);
-    assert_eq!(resumed.last().unwrap().event, "run.completed");
+    let detail = wait_for_terminal_status(&client, &detail_url, "succeeded").await;
+    assert!(detail["outputPath"].is_string());
+    assert!(detail["logPath"].is_string());
 
     app_handle.abort();
     stub_handle.abort();
@@ -923,39 +1127,22 @@ async fn cancelling_a_run_marks_it_cancelled_and_emits_final_sse_event() {
         .unwrap();
     assert_eq!(cancel.status(), reqwest::StatusCode::NO_CONTENT);
 
-    let detail = wait_for_terminal_status(
-        &client,
-        &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}"),
-        "cancelled",
-    )
-    .await;
+    let detail_url =
+        format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}");
+    let detail = wait_for_terminal_status(&client, &detail_url, "cancelled").await;
     assert_eq!(detail["errorMessage"], "Run cancelled.");
+    let log_path = detail["logPath"].as_str().unwrap();
+    assert!(log_path.ends_with("/logs/events.ndjson"));
 
-    let events_text = client
-        .get(format!(
-            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}/events"
-        ))
-        .header("Accept", "text/event-stream")
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    let events = parse_sse_events(&events_text);
-    assert_eq!(events.last().unwrap().event, "run.completed");
-    assert_eq!(
-        serde_json::from_str::<Value>(&events.last().unwrap().data).unwrap()["finalStatus"],
-        "cancelled"
-    );
-
+    let (download, _log_bytes) = download_run_artifact(&client, &base_url, run_id, "log").await;
+    assert_eq!(download["filePath"], log_path);
     app_handle.abort();
     stub_handle.abort();
 }
 
 #[tokio::test]
 async fn cancelling_before_bridge_ready_stops_the_session_attempt() {
-    let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+    let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
         run_bridge_delay_ms: 150,
         ..PoolStubOptions::default()
     })
@@ -1008,11 +1195,6 @@ async fn cancelling_before_bridge_ready_stops_the_session_attempt() {
     )
     .await;
     assert_eq!(detail["outputPath"], Value::Null);
-
-    tokio::time::sleep(Duration::from_millis(250)).await;
-    let state = state.lock().unwrap();
-    assert!(state.artifact_download_urls.is_empty());
-    assert!(state.artifact_upload_urls.is_empty());
 
     app_handle.abort();
     stub_handle.abort();
@@ -1127,8 +1309,196 @@ async fn transient_run_bridge_startup_failures_retry_once_and_then_succeed() {
 
     let state = state.lock().unwrap();
     assert_eq!(state.run_execution_count, 2);
-    assert_eq!(state.artifact_download_urls.len(), 1);
-    assert_eq!(state.artifact_upload_urls.len(), 1);
+
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn queued_runs_stay_pending_until_a_scheduler_slot_is_available() {
+    let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        run_execution_delay_ms: 200,
+        ..PoolStubOptions::default()
+    })
+    .await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url_and_run_limit(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+        Some(1),
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{address}");
+    let first_upload = upload_input(
+        &client,
+        &base_url,
+        "first.csv",
+        "text/csv",
+        b"name\nfirst\n".to_vec(),
+    )
+    .await;
+    let second_upload = upload_input(
+        &client,
+        &base_url,
+        "second.csv",
+        "text/csv",
+        b"name\nsecond\n".to_vec(),
+    )
+    .await;
+
+    let first_run = start_run(
+        &client,
+        &base_url,
+        first_upload["filePath"].as_str().unwrap(),
+    )
+    .await
+    .json::<Value>()
+    .await
+    .unwrap();
+    let second_run = start_run(
+        &client,
+        &base_url,
+        second_upload["filePath"].as_str().unwrap(),
+    )
+    .await
+    .json::<Value>()
+    .await
+    .unwrap();
+    let first_run_id = first_run["runId"].as_str().unwrap();
+    let second_run_id = second_run["runId"].as_str().unwrap();
+
+    wait_for_run_execution_count(&state, 1).await;
+
+    let second_detail = client
+        .get(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{second_run_id}"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(second_detail["status"], "pending");
+
+    let _ = wait_for_terminal_status(
+        &client,
+        &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{first_run_id}"),
+        "succeeded",
+    )
+    .await;
+    let _ = wait_for_terminal_status(
+        &client,
+        &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{second_run_id}"),
+        "succeeded",
+    )
+    .await;
+
+    assert_eq!(state.lock().unwrap().run_execution_count, 2);
+
+    app_handle.abort();
+    stub_handle.abort();
+}
+
+#[tokio::test]
+async fn cancelling_a_queued_run_marks_it_cancelled_without_starting_execution() {
+    let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
+        run_execution_delay_ms: 200,
+        ..PoolStubOptions::default()
+    })
+    .await;
+    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = app_with_session_and_url_and_run_limit(
+        &endpoint,
+        &format!("http://{address}"),
+        &[("workspace-a", "config-v1", config_v1.as_path())],
+        &engine,
+        Some(1),
+    );
+    let app_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{address}");
+    let first_upload = upload_input(
+        &client,
+        &base_url,
+        "first.csv",
+        "text/csv",
+        b"name\nfirst\n".to_vec(),
+    )
+    .await;
+    let second_upload = upload_input(
+        &client,
+        &base_url,
+        "second.csv",
+        "text/csv",
+        b"name\nsecond\n".to_vec(),
+    )
+    .await;
+
+    let first_run = start_run(
+        &client,
+        &base_url,
+        first_upload["filePath"].as_str().unwrap(),
+    )
+    .await
+    .json::<Value>()
+    .await
+    .unwrap();
+    let second_run = start_run(
+        &client,
+        &base_url,
+        second_upload["filePath"].as_str().unwrap(),
+    )
+    .await
+    .json::<Value>()
+    .await
+    .unwrap();
+    let first_run_id = first_run["runId"].as_str().unwrap();
+    let second_run_id = second_run["runId"].as_str().unwrap();
+
+    wait_for_run_execution_count(&state, 1).await;
+
+    let cancel = client
+        .post(format!(
+            "{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{second_run_id}/cancel"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancel.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let cancelled = wait_for_terminal_status(
+        &client,
+        &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{second_run_id}"),
+        "cancelled",
+    )
+    .await;
+    assert_eq!(cancelled["outputPath"], Value::Null);
+    assert_eq!(cancelled["errorMessage"], "Run cancelled.");
+
+    let _ = wait_for_terminal_status(
+        &client,
+        &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{first_run_id}"),
+        "succeeded",
+    )
+    .await;
+
+    assert_eq!(state.lock().unwrap().run_execution_count, 1);
 
     app_handle.abort();
     stub_handle.abort();

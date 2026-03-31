@@ -309,6 +309,69 @@ body {
   align-items: end;
 }
 
+.run-poc__actions {
+  flex-wrap: wrap;
+}
+
+.run-poc__batch {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.run-poc__batch-header {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.run-poc__batch-list {
+  display: grid;
+  gap: 10px;
+}
+
+.run-poc__batch-item {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(18, 73, 95, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.run-poc__batch-main {
+  display: grid;
+  gap: 4px;
+}
+
+.run-poc__batch-file {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.run-poc__batch-meta {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.run-poc__batch-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.run-poc__batch-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .run-log {
   min-height: 440px;
   padding: 12px;
@@ -357,5 +420,14 @@ body {
 
   .terminal-poc__actions {
     flex-wrap: wrap;
+  }
+
+  .run-poc__batch-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .run-poc__batch-stats {
+    grid-template-columns: 1fr;
   }
 }

@@ -10,9 +10,11 @@ fn embedded_migrations_use_small_ordered_versions() {
         .collect::<Vec<_>>();
     migrations.sort_by_key(|(version, _)| *version);
 
-    assert_eq!(migrations.len(), 2);
+    assert_eq!(migrations.len(), 3);
     assert_eq!(migrations[0].0, 1);
     assert_eq!(migrations[0].1, "initial_schema");
     assert_eq!(migrations[1].0, 2);
     assert_eq!(migrations[1].1, "runs");
+    assert_eq!(migrations[2].0, 3);
+    assert_eq!(migrations[2].1, "run_log_path");
 }

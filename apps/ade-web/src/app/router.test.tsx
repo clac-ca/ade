@@ -92,14 +92,14 @@ describe("AppRouter", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Direct upload, async runs, and one-way SSE logs.",
+        name: "Direct upload, async runs, and bounded bulk ingestion.",
       }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Start Run" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/browser negotiates a single-file upload/i),
+      screen.getByText(/polls many runs after a bulk upload batch/i),
     ).toBeInTheDocument();
   });
 

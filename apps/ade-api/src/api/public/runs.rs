@@ -13,8 +13,8 @@ use serde::Deserialize;
 use crate::{
     error::AppError,
     runs::{
-        AsyncRunResponse, CreateRunRequest, RunDetailResponse, RunEvent, RunService,
-        events::map_public_event,
+        AsyncRunResponse, CreateDownloadRequest, CreateDownloadResponse, CreateRunRequest,
+        RunDetailResponse, RunEvent, RunService, events::map_public_event,
     },
     scope::Scope,
 };
@@ -23,6 +23,7 @@ pub fn router() -> Router<crate::api::AppState> {
     Router::new()
         .route("/runs", post(create_run))
         .route("/runs/{runId}", get(get_run))
+        .route("/runs/{runId}/downloads", post(create_download))
         .route("/runs/{runId}/events", get(stream_run_events))
         .route("/runs/{runId}/cancel", post(cancel_run))
 }
@@ -89,6 +90,45 @@ async fn get_run(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/downloads",
+    tag = "runs",
+    params(
+        Scope,
+        ("runId" = String, Path, description = "Run identifier")
+    ),
+    request_body = CreateDownloadRequest,
+    responses(
+        (status = 200, description = "Artifact download instructions", body = CreateDownloadResponse),
+        (status = 400, description = "Invalid download request", body = crate::error::ErrorResponse),
+        (status = 404, description = "Run not found", body = crate::error::ErrorResponse),
+        (status = 409, description = "Artifact not ready", body = crate::error::ErrorResponse),
+        (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
+    )
+)]
+async fn create_download(
+    State(run_service): State<Arc<RunService>>,
+    Path((workspace_id, config_version_id, run_id)): Path<(String, String, String)>,
+    request: Result<Json<CreateDownloadRequest>, JsonRejection>,
+) -> Result<Response, AppError> {
+    let request = request
+        .map(|Json(value)| value)
+        .map_err(|error| AppError::request(error.body_text()))?;
+    let scope = Scope {
+        workspace_id,
+        config_version_id,
+    };
+    let response = run_service
+        .create_download(&scope, &run_id, request)
+        .await?;
+    let mut http_response = Json(response).into_response();
+    http_response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(http_response)
+}
+
+#[utoipa::path(
     get,
     path = "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/events",
     tag = "runs",
@@ -100,6 +140,7 @@ async fn get_run(
     responses(
         (status = 200, description = "Server-sent run events", content_type = "text/event-stream"),
         (status = 404, description = "Run not found", body = crate::error::ErrorResponse),
+        (status = 409, description = "Replay window expired", body = crate::error::ErrorResponse),
         (status = 500, description = "Internal error", body = crate::error::ErrorResponse)
     )
 )]

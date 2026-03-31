@@ -16,17 +16,17 @@ struct RunAttempt<'a> {
 }
 
 #[derive(Debug)]
-struct AttemptFailure {
+pub(super) struct AttemptFailure {
     emitted_error: bool,
     error: AppError,
     phase: Option<RunPhase>,
     retriable: bool,
+    status: RunStatus,
 }
 
 impl RunService {
     async fn consume_run_bridge(
         &self,
-        run_id: &str,
         run: &mut StoredRun,
         active: &ActiveRunHandle,
         attempt_session_guid: &mut Option<String>,
@@ -45,6 +45,7 @@ impl RunService {
                                 error,
                                 phase: Some(RunPhase::InstallPackages),
                                 retriable: false,
+                                status: RunStatus::Failed,
                             });
                         }
                     };
@@ -65,6 +66,7 @@ impl RunService {
                                 ),
                                 phase: Some(RunPhase::InstallPackages),
                                 retriable: true,
+                                status: RunStatus::Failed,
                             });
                         }
                     }
@@ -79,6 +81,7 @@ impl RunService {
                         ),
                         phase: Some(RunPhase::InstallPackages),
                         retriable: true,
+                        status: RunStatus::Failed,
                     });
                 }
                 Some(Ok(Message::Binary(_))) => {
@@ -88,6 +91,7 @@ impl RunService {
                         error: AppError::request("Binary run bridge messages are not supported."),
                         phase: Some(RunPhase::InstallPackages),
                         retriable: false,
+                        status: RunStatus::Failed,
                     });
                 }
                 Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
@@ -101,6 +105,7 @@ impl RunService {
                         ),
                         phase: Some(RunPhase::InstallPackages),
                         retriable: true,
+                        status: RunStatus::Failed,
                     });
                 }
             }
@@ -132,6 +137,7 @@ impl RunService {
                             error: AppError::status(StatusCode::BAD_GATEWAY, message),
                             phase,
                             retriable,
+                            status: RunStatus::Failed,
                         });
                     }
                 } else if let Some(result) = result.clone() {
@@ -144,6 +150,7 @@ impl RunService {
                         ),
                         phase: Some(RunPhase::PersistOutputs),
                         retriable: false,
+                        status: RunStatus::Failed,
                     });
                 }
             }
@@ -159,6 +166,7 @@ impl RunService {
                         error: AppError::request("Run cancelled."),
                         phase: None,
                         retriable: false,
+                        status: RunStatus::Cancelled,
                     });
                 }
                 bridge_message = bridge_socket.recv(), if !bridge_closed => {
@@ -173,6 +181,7 @@ impl RunService {
                                         error,
                                         phase: run.phase.or(Some(RunPhase::InstallPackages)),
                                         retriable: false,
+                                        status: RunStatus::Failed,
                                     });
                                 }
                             };
@@ -180,9 +189,8 @@ impl RunService {
                                 RunBridgeClientMessage::Ready => {}
                                 RunBridgeClientMessage::Status { phase, state } => {
                                     self.handle_runtime_event(
-                                        run_id,
                                         run,
-                                        Some(active),
+                                        active,
                                         RunEventPayload::Status {
                                             phase,
                                             state,
@@ -196,9 +204,8 @@ impl RunService {
                                 }
                                 RunBridgeClientMessage::Log { level, message, phase } => {
                                     self.handle_runtime_event(
-                                        run_id,
                                         run,
-                                        Some(active),
+                                        active,
                                         RunEventPayload::Log { level, message, phase },
                                     )
                                     .await
@@ -207,9 +214,8 @@ impl RunService {
                                 RunBridgeClientMessage::Error { phase, message, retriable } => {
                                     structured_error = Some((message.clone(), phase, retriable));
                                     self.handle_runtime_event(
-                                        run_id,
                                         run,
-                                        Some(active),
+                                        active,
                                         RunEventPayload::Error {
                                             phase,
                                             message,
@@ -225,9 +231,8 @@ impl RunService {
                                         validation_issues: validation_issues.clone(),
                                     });
                                     self.handle_runtime_event(
-                                        run_id,
                                         run,
-                                        Some(active),
+                                        active,
                                         RunEventPayload::Result {
                                             output_path,
                                             validation_issues,
@@ -239,6 +244,7 @@ impl RunService {
                                         error,
                                         phase: None,
                                         retriable: false,
+                                        status: RunStatus::Failed,
                                     })?;
                                 }
                             }
@@ -253,6 +259,7 @@ impl RunService {
                                 error: AppError::request("Binary run bridge messages are not supported."),
                                 phase: run.phase.or(Some(RunPhase::InstallPackages)),
                                 retriable: false,
+                                status: RunStatus::Failed,
                             });
                         }
                         Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
@@ -263,6 +270,7 @@ impl RunService {
                                 error: AppError::internal_with_source("Run bridge failed.", error),
                                 phase: run.phase.or(Some(RunPhase::InstallPackages)),
                                 retriable: true,
+                                status: RunStatus::Failed,
                             });
                         }
                     }
@@ -273,12 +281,14 @@ impl RunService {
                         error,
                         phase: run.phase.or(Some(RunPhase::ExecuteRun)),
                         retriable: matches!(run.phase, Some(RunPhase::InstallPackages)),
+                        status: RunStatus::Failed,
                     })?;
                     note_session_guid(attempt_session_guid, &execution_result.metadata).map_err(|error| AttemptFailure {
                         emitted_error: structured_error.is_some(),
                         error,
                         phase: run.phase.or(Some(RunPhase::ExecuteRun)),
                         retriable: matches!(run.phase, Some(RunPhase::InstallPackages)),
+                        status: RunStatus::Failed,
                     })?;
                     run.last_session_guid = attempt_session_guid.clone();
                     execution = Some(execution_result);
@@ -298,7 +308,7 @@ impl RunService {
     ) -> Result<(), AppError> {
         for attempt in 1..=RUN_MAX_ATTEMPTS {
             if *active.cancel_rx.borrow() {
-                return self.finish_cancelled(&scope, &run_id, Some(&active)).await;
+                return self.finish_cancelled(&scope, &run_id, &active).await;
             }
 
             let failure = match self
@@ -317,29 +327,22 @@ impl RunService {
             {
                 Ok(success) => {
                     if *active.cancel_rx.borrow() {
-                        return self.finish_cancelled(&scope, &run_id, Some(&active)).await;
+                        return self.finish_cancelled(&scope, &run_id, &active).await;
                     }
                     return self
-                        .finish_success(&scope, &run_id, attempt, success, Some(&active))
+                        .finish_success(&scope, &run_id, attempt, success, &active)
                         .await;
                 }
                 Err(failure) => failure,
             };
 
             if *active.cancel_rx.borrow() {
-                return self.finish_cancelled(&scope, &run_id, Some(&active)).await;
+                return self.finish_cancelled(&scope, &run_id, &active).await;
             }
 
             if !(failure.retriable && attempt < RUN_MAX_ATTEMPTS) {
                 return self
-                    .finish_failure(
-                        &scope,
-                        &run_id,
-                        attempt,
-                        &input_path,
-                        failure,
-                        Some(&active),
-                    )
+                    .finish_failure(&scope, &run_id, attempt, &input_path, failure, &active)
                     .await;
             }
         }
@@ -347,55 +350,53 @@ impl RunService {
         Err(AppError::status(StatusCode::BAD_GATEWAY, "ADE run failed."))
     }
 
-    async fn finish_cancelled(
+    pub(super) async fn finish_cancelled(
         &self,
         scope: &Scope,
         run_id: &str,
-        active: Option<&ActiveRunHandle>,
+        active: &ActiveRunHandle,
     ) -> Result<(), AppError> {
         let mut run = self.load_run(scope, run_id).await?;
         run.status = RunStatus::Cancelled;
         run.error_message = Some("Run cancelled.".to_string());
+        run.log_path = None;
         run.output_path = None;
         run.validation_issues.clear();
+        self.finalize_run_log(scope, &mut run, active).await;
         self.run_store.save_run(&run).await?;
         self.emit_event(
-            run_id,
             active,
             RunEventPayload::Complete {
                 final_status: RunStatus::Cancelled,
+                log_path: run.log_path.clone(),
+                output_path: None,
             },
         )
-        .await?;
+        .await;
         Err(AppError::request("Run cancelled."))
     }
 
-    async fn finish_failure(
+    pub(super) async fn finish_failure(
         &self,
         scope: &Scope,
         run_id: &str,
         attempt: i32,
         input_path: &str,
         failure: AttemptFailure,
-        active: Option<&ActiveRunHandle>,
+        active: &ActiveRunHandle,
     ) -> Result<(), AppError> {
         let mut run = self.load_run(scope, run_id).await?;
         run.attempt_count = attempt;
         run.input_path = input_path.to_string();
         run.phase = failure.phase;
-        run.status = if failure.error.to_string() == "Run cancelled." {
-            RunStatus::Cancelled
-        } else {
-            RunStatus::Failed
-        };
+        run.status = failure.status;
         run.error_message = Some(failure.error.to_string());
+        run.log_path = None;
         run.output_path = None;
         run.validation_issues.clear();
-        self.run_store.save_run(&run).await?;
 
         if !failure.emitted_error {
             self.emit_event(
-                run_id,
                 active,
                 RunEventPayload::Error {
                     phase: failure.phase,
@@ -403,17 +404,20 @@ impl RunService {
                     retriable: failure.retriable,
                 },
             )
-            .await?;
+            .await;
         }
 
+        self.finalize_run_log(scope, &mut run, active).await;
+        self.run_store.save_run(&run).await?;
         self.emit_event(
-            run_id,
             active,
             RunEventPayload::Complete {
                 final_status: run.status,
+                log_path: run.log_path.clone(),
+                output_path: None,
             },
         )
-        .await?;
+        .await;
         Err(failure.error)
     }
 
@@ -423,36 +427,38 @@ impl RunService {
         run_id: &str,
         attempt: i32,
         success: AttemptSuccess,
-        active: Option<&ActiveRunHandle>,
+        active: &ActiveRunHandle,
     ) -> Result<(), AppError> {
         let mut run = self.load_run(scope, run_id).await?;
         run.attempt_count = attempt;
         run.error_message = None;
+        run.log_path = None;
         run.output_path = Some(success.output_path.clone());
         run.status = RunStatus::Succeeded;
         run.validation_issues = success.validation_issues.clone();
+        self.finalize_run_log(scope, &mut run, active).await;
         self.run_store.save_run(&run).await?;
         self.emit_event(
-            run_id,
             active,
             RunEventPayload::Complete {
                 final_status: RunStatus::Succeeded,
+                log_path: run.log_path.clone(),
+                output_path: run.output_path.clone(),
             },
         )
-        .await?;
+        .await;
         Ok(())
     }
 
     async fn handle_runtime_event(
         &self,
-        run_id: &str,
         run: &mut StoredRun,
-        active: Option<&ActiveRunHandle>,
+        active: &ActiveRunHandle,
         event: RunEventPayload,
     ) -> Result<(), AppError> {
         match &event {
-            RunEventPayload::Created { status } => {
-                run.status = *status;
+            RunEventPayload::Created { .. } | RunEventPayload::Complete { .. } => {
+                unreachable!("runtime bridge does not emit created or completed events")
             }
             RunEventPayload::Status {
                 phase,
@@ -483,13 +489,10 @@ impl RunService {
                 run.phase = Some(RunPhase::PersistOutputs);
                 run.validation_issues = validation_issues.clone();
             }
-            RunEventPayload::Complete { final_status } => {
-                run.status = *final_status;
-            }
         }
 
         self.run_store.save_run(run).await?;
-        self.emit_event(run_id, active, event).await?;
+        self.emit_event(active, event).await;
         Ok(())
     }
 
@@ -513,6 +516,7 @@ impl RunService {
                 error,
                 phase: Some(RunPhase::InstallPackages),
                 retriable: false,
+                status: RunStatus::Failed,
             })?;
         let mut run = self
             .load_run(attempt.scope, attempt.run_id)
@@ -520,6 +524,7 @@ impl RunService {
             .map_err(store_failure)?;
         run.attempt_count = attempt.attempt;
         run.error_message = None;
+        run.log_path = None;
         run.output_path = None;
         run.phase = None;
         run.status = RunStatus::Running;
@@ -534,6 +539,7 @@ impl RunService {
                 error,
                 phase: Some(RunPhase::InstallPackages),
                 retriable: true,
+                status: RunStatus::Failed,
             })?;
 
         run.last_session_guid = attempt_session_guid.clone();
@@ -545,6 +551,7 @@ impl RunService {
                 error: AppError::request("Run cancelled."),
                 phase: None,
                 retriable: false,
+                status: RunStatus::Cancelled,
             });
         }
 
@@ -576,6 +583,7 @@ impl RunService {
                 error,
                 phase: Some(RunPhase::InstallPackages),
                 retriable: false,
+                status: RunStatus::Failed,
             })?;
         let output_upload = self
             .artifact_store
@@ -586,6 +594,7 @@ impl RunService {
                 error,
                 phase: Some(RunPhase::PersistOutputs),
                 retriable: false,
+                status: RunStatus::Failed,
             })?;
         let bootstrap = render_bootstrap_code(&RunBootstrapConfig {
             config_package_name: runtime.config_package_name,
@@ -601,6 +610,7 @@ impl RunService {
                     error,
                     phase: Some(RunPhase::InstallPackages),
                     retriable: false,
+                    status: RunStatus::Failed,
                 },
             )?,
             install_lock_path: runtime.install_lock_path.clone(),
@@ -613,6 +623,7 @@ impl RunService {
                     error,
                     phase: Some(RunPhase::PersistOutputs),
                     retriable: false,
+                    status: RunStatus::Failed,
                 },
             )?,
         })
@@ -621,6 +632,7 @@ impl RunService {
             error,
             phase: Some(RunPhase::InstallPackages),
             retriable: false,
+            status: RunStatus::Failed,
         })?;
 
         let session_service = Arc::clone(&self.session_service);
@@ -650,11 +662,11 @@ impl RunService {
                     error,
                     phase: Some(RunPhase::InstallPackages),
                     retriable: true,
+                    status: RunStatus::Failed,
                 });
             }
         };
         self.consume_run_bridge(
-            attempt.run_id,
             &mut run,
             active,
             &mut attempt_session_guid,
@@ -778,5 +790,16 @@ fn store_failure(error: AppError) -> AttemptFailure {
         error,
         phase: None,
         retriable: false,
+        status: RunStatus::Failed,
+    }
+}
+
+pub(super) fn attempt_failure(error: AppError, phase: Option<RunPhase>) -> AttemptFailure {
+    AttemptFailure {
+        emitted_error: false,
+        error,
+        phase,
+        retriable: false,
+        status: RunStatus::Failed,
     }
 }

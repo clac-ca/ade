@@ -6,7 +6,8 @@ pub mod service;
 pub mod store;
 
 pub(crate) use models::{
-    AsyncRunResponse, CreateRunRequest, CreateUploadRequest, CreateUploadResponse,
+    AsyncRunResponse, CreateDownloadRequest, CreateDownloadResponse, CreateRunRequest,
+    CreateUploadBatchRequest, CreateUploadBatchResponse, CreateUploadRequest, CreateUploadResponse,
     RunDetailResponse, RunValidationIssue,
 };
 pub use service::RunService;

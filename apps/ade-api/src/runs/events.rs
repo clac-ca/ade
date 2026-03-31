@@ -15,14 +15,21 @@ pub(crate) struct RunEventFeed {
     pub(crate) subscription: Option<broadcast::Receiver<RunEvent>>,
 }
 
-pub(crate) fn map_public_event(
+#[derive(serde::Serialize)]
+struct ArchivedRunEventLine {
+    data: serde_json::Value,
+    event: String,
+    seq: i64,
+}
+
+fn public_event_data(
     run_id: &str,
     event: &RunEvent,
-) -> Result<(&'static str, String, String), AppError> {
+) -> Result<(&'static str, serde_json::Value), AppError> {
     let (event_name, data) = match event {
         RunEvent::Created { status, .. } => (
             "run.created",
-            serde_json::to_string(&PublicRunCreatedEvent {
+            serde_json::to_value(PublicRunCreatedEvent {
                 run_id: run_id.to_string(),
                 status: *status,
             }),
@@ -36,7 +43,7 @@ pub(crate) fn map_public_event(
             ..
         } => (
             "run.status",
-            serde_json::to_string(&PublicRunStatusEvent {
+            serde_json::to_value(PublicRunStatusEvent {
                 operation_id: operation_id.clone(),
                 phase: *phase,
                 run_id: run_id.to_string(),
@@ -52,7 +59,7 @@ pub(crate) fn map_public_event(
             ..
         } => (
             "run.log",
-            serde_json::to_string(&PublicRunLogEvent {
+            serde_json::to_value(PublicRunLogEvent {
                 level: level.clone(),
                 message: message.clone(),
                 phase: *phase,
@@ -66,7 +73,7 @@ pub(crate) fn map_public_event(
             ..
         } => (
             "run.error",
-            serde_json::to_string(&PublicRunErrorEvent {
+            serde_json::to_value(PublicRunErrorEvent {
                 message: message.clone(),
                 phase: *phase,
                 retriable: *retriable,
@@ -79,16 +86,23 @@ pub(crate) fn map_public_event(
             ..
         } => (
             "run.result",
-            serde_json::to_string(&PublicRunResultEvent {
+            serde_json::to_value(PublicRunResultEvent {
                 output_path: output_path.clone(),
                 run_id: run_id.to_string(),
                 validation_issues: validation_issues.clone(),
             }),
         ),
-        RunEvent::Complete { final_status, .. } => (
+        RunEvent::Complete {
+            final_status,
+            log_path,
+            output_path,
+            ..
+        } => (
             "run.completed",
-            serde_json::to_string(&PublicRunCompletedEvent {
+            serde_json::to_value(PublicRunCompletedEvent {
                 final_status: *final_status,
+                log_path: log_path.clone(),
+                output_path: output_path.clone(),
                 run_id: run_id.to_string(),
             }),
         ),
@@ -96,26 +110,32 @@ pub(crate) fn map_public_event(
 
     Ok((
         event_name,
-        event.seq().to_string(),
         data.map_err(|error| {
             AppError::internal_with_source("Failed to encode a run event.", error)
         })?,
     ))
 }
 
-pub(crate) fn run_events_path(workspace_id: &str, config_version_id: &str, run_id: &str) -> String {
-    format!("/api/workspaces/{workspace_id}/configs/{config_version_id}/runs/{run_id}/events")
+pub(crate) fn map_public_event(
+    run_id: &str,
+    event: &RunEvent,
+) -> Result<(&'static str, String, String), AppError> {
+    let (event_name, data) = public_event_data(run_id, event)?;
+    Ok((
+        event_name,
+        event.seq().to_string(),
+        serde_json::to_string(&data).map_err(|error| {
+            AppError::internal_with_source("Failed to encode a run event.", error)
+        })?,
+    ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::run_events_path;
-
-    #[test]
-    fn run_events_urls_are_stable() {
-        assert_eq!(
-            run_events_path("workspace-a", "config-v1", "run-1"),
-            "/api/workspaces/workspace-a/configs/config-v1/runs/run-1/events"
-        );
-    }
+pub(crate) fn archive_event_line(run_id: &str, event: &RunEvent) -> Result<String, AppError> {
+    let (event_name, data) = public_event_data(run_id, event)?;
+    serde_json::to_string(&ArchivedRunEventLine {
+        data,
+        event: event_name.to_string(),
+        seq: event.seq(),
+    })
+    .map_err(|error| AppError::internal_with_source("Failed to encode a run event line.", error))
 }
