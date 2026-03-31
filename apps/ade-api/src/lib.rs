@@ -8,6 +8,7 @@ pub mod runs;
 pub mod scope;
 pub mod server;
 pub mod session;
+pub mod session_agent;
 pub mod terminal;
 
 pub use api::{AppState, create_app};

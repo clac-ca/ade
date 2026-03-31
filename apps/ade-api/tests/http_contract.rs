@@ -6,6 +6,7 @@ use ade_api::{
     readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::{InMemoryRunStore, RunService},
     session::SessionService,
+    session_agent::SessionAgentService,
     terminal::TerminalService,
     unix_time_ms,
 };
@@ -40,10 +41,14 @@ fn request_with_method(uri: &str, method: Method) -> Request<Body> {
 
 fn fixture_session_service() -> Arc<SessionService> {
     let tempdir = tempdir().unwrap();
+    let agent = tempdir.path().join("ade-session-agent");
     let engine = tempdir.path().join("ade_engine-0.1.0-py3-none-any.whl");
     let config = tempdir.path().join("ade_config-0.1.0-py3-none-any.whl");
+    let toolchain = tempdir.path().join("python-3.14.0-linux-x86_64.tar.gz");
+    std::fs::write(&agent, b"agent").unwrap();
     std::fs::write(&engine, b"engine").unwrap();
     std::fs::write(&config, b"config").unwrap();
+    std::fs::write(&toolchain, b"toolchain").unwrap();
 
     let env = [
         (
@@ -57,6 +62,14 @@ fn fixture_session_service() -> Arc<SessionService> {
         (
             "ADE_ENGINE_WHEEL_PATH".to_string(),
             engine.display().to_string(),
+        ),
+        (
+            "ADE_SESSION_AGENT_BINARY_PATH".to_string(),
+            agent.display().to_string(),
+        ),
+        (
+            "ADE_PYTHON_TOOLCHAIN_BUNDLE_PATH".to_string(),
+            toolchain.display().to_string(),
         ),
         (
             "ADE_CONFIG_TARGETS".to_string(),
@@ -76,7 +89,7 @@ fn fixture_session_service() -> Arc<SessionService> {
     Arc::new(SessionService::from_env(&env).unwrap())
 }
 
-fn fixture_terminal_service(session_service: Arc<SessionService>) -> Arc<TerminalService> {
+fn fixture_session_agent_service(session_service: Arc<SessionService>) -> Arc<SessionAgentService> {
     let env = [(
         "ADE_APP_URL".to_string(),
         "http://127.0.0.1:8000".to_string(),
@@ -84,11 +97,25 @@ fn fixture_terminal_service(session_service: Arc<SessionService>) -> Arc<Termina
     .into_iter()
     .collect();
 
-    Arc::new(TerminalService::from_env(&env, session_service).unwrap())
+    Arc::new(SessionAgentService::from_env(&env, session_service).unwrap())
+}
+
+fn fixture_terminal_service(
+    session_agent_service: Arc<SessionAgentService>,
+) -> Arc<TerminalService> {
+    let env = [(
+        "ADE_APP_URL".to_string(),
+        "http://127.0.0.1:8000".to_string(),
+    )]
+    .into_iter()
+    .collect();
+
+    Arc::new(TerminalService::from_env(&env, session_agent_service).unwrap())
 }
 
 fn app_state(readiness: ReadinessController) -> AppState {
     let session_service = fixture_session_service();
+    let session_agent_service = fixture_session_agent_service(Arc::clone(&session_service));
     let env = [
         (
             "ADE_APP_URL".to_string(),
@@ -115,12 +142,13 @@ fn app_state(readiness: ReadinessController) -> AppState {
         run_service: Arc::new(
             RunService::from_env(
                 &env,
-                Arc::clone(&session_service),
+                Arc::clone(&session_agent_service),
                 Arc::new(InMemoryRunStore::default()),
             )
             .unwrap(),
         ),
-        terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
+        session_agent_service: Arc::clone(&session_agent_service),
+        terminal_service: fixture_terminal_service(Arc::clone(&session_agent_service)),
         web_root: Some(fixture_web_root()),
     }
 }

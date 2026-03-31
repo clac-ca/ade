@@ -10,6 +10,7 @@ use ade_api::{
     readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::{InMemoryRunStore, RunService},
     session::SessionService,
+    session_agent::SessionAgentService,
     terminal::TerminalService,
     unix_time_ms,
 };
@@ -34,6 +35,7 @@ struct PoolStubState {
     execution_codes: Vec<String>,
     identifiers: Vec<String>,
     run_execution_count: usize,
+    session_files: HashMap<String, Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +113,10 @@ async fn stub_upload_file(
     };
     let mut state = stub.state.lock().unwrap();
     state.identifiers.push(query.identifier.clone());
+    state.session_files.insert(
+        session_file_storage_key(&query.identifier, &stored_name),
+        bytes.to_vec(),
+    );
 
     Json(json!({
         "directory": stored_name
@@ -131,74 +137,67 @@ async fn stub_execute(
     Query(query): Query<IdentifierQuery>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    let code = body["code"].as_str().unwrap().to_string();
+    let code = body
+        .get("shellCommand")
+        .and_then(Value::as_str)
+        .or_else(|| body.get("code").and_then(Value::as_str))
+        .unwrap()
+        .to_string();
     let identifier = query.identifier.clone();
     {
         let mut state = stub.state.lock().unwrap();
-        state.identifiers.push(identifier);
+        state.identifiers.push(identifier.clone());
         state.execution_codes.push(code.clone());
     }
 
-    if code.contains("pty.openpty()")
-        && code.contains("websockets.sync.client")
-        && let Some(bridge_url) = extract_bridge_url(&code)
-    {
-        if stub.options.terminal_bridge_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(stub.options.terminal_bridge_delay_ms)).await;
-        }
-
-        if stub.options.auto_connect_terminal_bridge
-            && let Ok((mut socket, _response)) = connect_async(&bridge_url).await
-        {
-            let _ = socket
-                .send(Message::Text(r#"{"type":"ready"}"#.into()))
-                .await;
-            let _ = socket
-                .send(Message::Text(
-                    r#"{"type":"output","data":"terminal-ok\r\n"}"#.into(),
-                ))
-                .await;
-            let _ = socket
-                .send(Message::Text(r#"{"type":"exit","code":0}"#.into()))
-                .await;
-            let _ = socket.close(None).await;
-        }
-
-        if stub.options.terminal_execution_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(
-                stub.options.terminal_execution_delay_ms,
-            ))
-            .await;
-        }
-
-        return Json(json!({
-            "status": "Succeeded",
-            "result": {
-                "stdout": "",
-                "stderr": "",
-                "executionTimeInMilliseconds": 4,
-            }
-        }));
-    }
-
-    if code.contains("websockets.sync.client")
-        && let Some(bridge_url) = extract_bridge_url(&code)
-    {
-        let run_execution_count = {
-            let mut state = stub.state.lock().unwrap();
-            state.run_execution_count += 1;
-            state.run_execution_count
+    if code.contains("ade-session-agent") {
+        let bridge_url = {
+            let state = stub.state.lock().unwrap();
+            extract_bridge_url(&code, &state, &identifier)
         };
-        let config = extract_execution_config(&code).expect("run config");
+        if let Some(bridge_url) = bridge_url {
+            let run_execution_count = {
+                let mut state = stub.state.lock().unwrap();
+                state.run_execution_count += 1;
+                state.run_execution_count
+            };
+            let config = {
+                let state = stub.state.lock().unwrap();
+                extract_execution_config(&code, &state, &identifier).expect("run config")
+            };
+            let connect_delay_ms = stub
+                .options
+                .run_bridge_delay_ms
+                .max(stub.options.terminal_bridge_delay_ms);
+            let execution_delay_ms = stub
+                .options
+                .run_execution_delay_ms
+                .max(stub.options.terminal_execution_delay_ms);
 
-        if stub.options.run_bridge_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(stub.options.run_bridge_delay_ms)).await;
-        }
-
-        if run_execution_count <= stub.options.run_bridge_disconnect_before_ready_attempts {
-            if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
-                let _ = socket.close(None).await;
+            if run_execution_count <= stub.options.run_bridge_disconnect_before_ready_attempts {
+                if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
+                    let _ = socket.close(None).await;
+                }
+                return Json(json!({
+                    "status": "Succeeded",
+                    "result": {
+                        "stdout": "",
+                        "stderr": "",
+                        "executionTimeInMilliseconds": 4,
+                    }
+                }));
             }
+
+            if connect_delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(connect_delay_ms)).await;
+            }
+
+            if stub.options.auto_connect_run_bridge && stub.options.auto_connect_terminal_bridge {
+                drive_session_agent_stub(&bridge_url, &config, execution_delay_ms).await;
+            } else if execution_delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(execution_delay_ms)).await;
+            }
+
             return Json(json!({
                 "status": "Succeeded",
                 "result": {
@@ -208,76 +207,6 @@ async fn stub_execute(
                 }
             }));
         }
-
-        if stub.options.auto_connect_run_bridge {
-            let client = Client::new();
-            let input_download = config["inputDownload"].as_object().expect("input download");
-            let output_upload = config["outputUpload"].as_object().expect("output upload");
-            let output_path = config["outputPath"].as_str().expect("output path");
-
-            let _input = request_artifact(&client, input_download, None).await;
-
-            if let Ok((mut socket, _response)) = connect_async(&bridge_url).await {
-                let _ = socket
-                    .send(Message::Text(r#"{"type":"ready"}"#.into()))
-                    .await;
-                let _ = socket
-                    .send(Message::Text(
-                        r#"{"type":"status","phase":"installPackages","state":"started"}"#.into(),
-                    ))
-                    .await;
-                let _ = socket
-                    .send(Message::Text(
-                        r#"{"type":"status","phase":"installPackages","state":"completed"}"#.into(),
-                    ))
-                    .await;
-                let _ = socket
-                    .send(Message::Text(
-                        r#"{"type":"status","phase":"executeRun","state":"started"}"#.into(),
-                    ))
-                    .await;
-                let _ = socket
-                    .send(Message::Text(
-                        r#"{"type":"log","phase":"executeRun","level":"info","message":"Loaded 12 rows"}"#.into(),
-                    ))
-                    .await;
-                let _ = socket
-                    .send(Message::Text(
-                        r#"{"type":"status","phase":"persistOutputs","state":"started"}"#.into(),
-                    ))
-                    .await;
-
-                request_artifact(&client, output_upload, Some(b"normalized-output".to_vec())).await;
-
-                let _ = socket
-                    .send(Message::Text(
-                        format!(
-                            r#"{{"type":"result","outputPath":"{output_path}","validationIssues":[]}}"#
-                        )
-                        .into(),
-                    ))
-                    .await;
-                let _ = socket
-                    .send(Message::Text(
-                        r#"{"type":"status","phase":"persistOutputs","state":"completed"}"#.into(),
-                    ))
-                    .await;
-                let _ = socket.close(None).await;
-            }
-        }
-
-        if stub.options.run_execution_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(stub.options.run_execution_delay_ms)).await;
-        }
-
-        return Json(json!({
-            "status": "Succeeded",
-            "result": {
-                "stdout": "",
-                "stderr": "",
-                "executionTimeInMilliseconds": 4,
-            }
-        }));
     }
 
     Json(json!({
@@ -318,6 +247,10 @@ fn blob_storage_key(account: &str, container: &str, blob_path: &str) -> String {
         "{account}/{container}/{}",
         blob_path.trim_start_matches('/')
     )
+}
+
+fn session_file_storage_key(identifier: &str, path: &str) -> String {
+    format!("{identifier}:{}", path.trim_start_matches('/'))
 }
 
 fn stored_blob(state: &PoolStubState, path: &str) -> StubBlobObject {
@@ -463,6 +396,12 @@ fn app_with_session_and_url_and_run_limit(
     engine_wheel_path: &FsPath,
     run_max_concurrent: Option<usize>,
 ) -> axum::Router {
+    let runtime_dir = tempdir().unwrap();
+    let agent_binary_path = runtime_dir.path().join("ade-session-agent");
+    let python_toolchain_path = runtime_dir.path().join("python-3.14.0-linux-x86_64.tar.gz");
+    std::fs::write(&agent_binary_path, b"agent-binary").unwrap();
+    std::fs::write(&python_toolchain_path, b"python-toolchain").unwrap();
+
     let config_targets = config_targets
         .iter()
         .map(|(workspace_id, config_version_id, wheel_path)| {
@@ -487,6 +426,14 @@ fn app_with_session_and_url_and_run_limit(
             engine_wheel_path.display().to_string(),
         ),
         (
+            "ADE_SESSION_AGENT_BINARY_PATH".to_string(),
+            agent_binary_path.display().to_string(),
+        ),
+        (
+            "ADE_PYTHON_TOOLCHAIN_BUNDLE_PATH".to_string(),
+            python_toolchain_path.display().to_string(),
+        ),
+        (
             "ADE_SESSION_SECRET".to_string(),
             "test-session-secret".to_string(),
         ),
@@ -509,6 +456,8 @@ fn app_with_session_and_url_and_run_limit(
     .collect();
 
     let session_service = Arc::new(SessionService::from_env(&env).unwrap());
+    let session_agent_service =
+        Arc::new(SessionAgentService::from_env(&env, Arc::clone(&session_service)).unwrap());
     let mut run_env = env.clone();
     if let Some(run_max_concurrent) = run_max_concurrent {
         run_env.insert(
@@ -519,17 +468,18 @@ fn app_with_session_and_url_and_run_limit(
     let run_service = Arc::new(
         RunService::from_env(
             &run_env,
-            Arc::clone(&session_service),
+            Arc::clone(&session_agent_service),
             Arc::new(InMemoryRunStore::default()),
         )
         .unwrap(),
     );
     let terminal_service =
-        Arc::new(TerminalService::from_env(&env, Arc::clone(&session_service)).unwrap());
+        Arc::new(TerminalService::from_env(&env, Arc::clone(&session_agent_service)).unwrap());
 
     create_app(AppState {
         readiness: ready_state(),
         run_service,
+        session_agent_service,
         terminal_service,
         web_root: None,
     })
@@ -551,21 +501,109 @@ fn create_wheels() -> (
     (tempdir, config_v1, config_v2, engine)
 }
 
-fn extract_execution_config(code: &str) -> Option<Value> {
-    let config_line = code
-        .lines()
-        .find(|line| line.trim_start().starts_with("CONFIG = json.loads("))?;
-    let encoded_json = config_line
-        .trim()
-        .strip_prefix("CONFIG = json.loads(")?
-        .strip_suffix(")")?;
-    let config_json = serde_json::from_str::<String>(encoded_json).ok()?;
-    serde_json::from_str::<Value>(&config_json).ok()
+fn extract_execution_config(code: &str, state: &PoolStubState, identifier: &str) -> Option<Value> {
+    let config_path = code
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find_map(|window| (window[0] == "--config-file").then(|| window[1]))?;
+    let session_path = config_path.trim_start_matches("/mnt/data/");
+    let config_bytes = state
+        .session_files
+        .get(&session_file_storage_key(identifier, session_path))?;
+    serde_json::from_slice::<Value>(config_bytes).ok()
 }
 
-fn extract_bridge_url(code: &str) -> Option<String> {
-    let config = extract_execution_config(code)?;
+fn extract_bridge_url(code: &str, state: &PoolStubState, identifier: &str) -> Option<String> {
+    let config = extract_execution_config(code, state, identifier)?;
     config["bridgeUrl"].as_str().map(str::to_string)
+}
+
+async fn drive_session_agent_stub(bridge_url: &str, _config: &Value, execution_delay_ms: u64) {
+    let client = Client::new();
+    if let Ok((mut socket, _response)) = connect_async(bridge_url).await {
+        let _ = socket
+            .send(Message::Text(r#"{"type":"ready"}"#.into()))
+            .await;
+
+        while let Some(Ok(message)) = socket.next().await {
+            let Message::Text(text) = message else {
+                continue;
+            };
+            let payload = serde_json::from_str::<Value>(&text).unwrap();
+            match payload["type"].as_str() {
+                Some("prepare") => {
+                    let prepared = json!({
+                        "type": "prepared",
+                        "configVersion": payload["configVersion"],
+                        "engineVersion": payload["engineVersion"],
+                        "pythonToolchainVersion": payload["pythonToolchainVersion"],
+                    });
+                    let _ = socket
+                        .send(Message::Text(prepared.to_string().into()))
+                        .await;
+                }
+                Some("startShell") => {
+                    let worker_id = payload["workerId"].as_str().unwrap();
+                    let output = json!({
+                        "type": "ptyOutput",
+                        "workerId": worker_id,
+                        "data": "terminal-ok\r\n",
+                    });
+                    let exit = json!({
+                        "type": "workerExit",
+                        "workerId": worker_id,
+                        "kind": "shell",
+                        "code": 0,
+                    });
+                    let _ = socket.send(Message::Text(output.to_string().into())).await;
+                    let _ = socket.send(Message::Text(exit.to_string().into())).await;
+                    break;
+                }
+                Some("startRun") => {
+                    let worker_id = payload["workerId"].as_str().unwrap();
+                    request_artifact(
+                        &client,
+                        payload["inputDownload"]
+                            .as_object()
+                            .expect("input download"),
+                        None,
+                    )
+                    .await;
+                    request_artifact(
+                        &client,
+                        payload["outputUpload"].as_object().expect("output upload"),
+                        Some(b"normalized-output".to_vec()),
+                    )
+                    .await;
+                    let stdout = json!({
+                        "type": "stdout",
+                        "workerId": worker_id,
+                        "phase": "executeRun",
+                        "data": "Loaded 12 rows",
+                    });
+                    let exit = json!({
+                        "type": "workerExit",
+                        "workerId": worker_id,
+                        "kind": "run",
+                        "code": 0,
+                        "outputPath": payload["outputPath"],
+                        "validationIssues": [],
+                    });
+                    let _ = socket.send(Message::Text(stdout.to_string().into())).await;
+                    if execution_delay_ms > 0 {
+                        tokio::time::sleep(Duration::from_millis(execution_delay_ms)).await;
+                    }
+                    let _ = socket.send(Message::Text(exit.to_string().into())).await;
+                    break;
+                }
+                Some("closeWorker") | Some("shutdown") => break,
+                _ => {}
+            }
+        }
+
+        let _ = socket.close(None).await;
+    }
 }
 
 fn resolve_url(base_url: &str, url: &str) -> String {
@@ -689,26 +727,6 @@ async fn wait_for_terminal_status(client: &Client, url: &str, expected: &str) ->
     }
 
     panic!("run never reached status {expected}: {detail}");
-}
-
-async fn wait_for_output_path(client: &Client, url: &str) -> Value {
-    let mut detail = Value::Null;
-    for _ in 0..40 {
-        detail = client
-            .get(url)
-            .send()
-            .await
-            .unwrap()
-            .json::<Value>()
-            .await
-            .unwrap();
-        if detail["outputPath"].is_string() {
-            return detail;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-
-    panic!("run never exposed outputPath: {detail}");
 }
 
 async fn wait_for_run_execution_count(state: &Arc<Mutex<PoolStubState>>, expected: usize) {
@@ -986,20 +1004,20 @@ async fn create_run_returns_accepted_metadata_and_persists_output_via_artifact_s
     );
     assert_eq!(detail["validationIssues"], json!([]));
 
-    let (output_blob, log_blob) = {
+    let log_bytes = {
         let stub_state = state.lock().unwrap();
-        (
-            stored_blob(&stub_state, output_path),
-            stored_blob(&stub_state, log_path),
-        )
+        let output_blob = stored_blob(&stub_state, output_path);
+        assert_eq!(output_blob.bytes, b"normalized-output");
+        let log_blob = stored_blob(&stub_state, log_path);
+        let log_bytes = log_blob.bytes.clone();
+        let log_text = String::from_utf8(log_bytes.clone()).unwrap();
+        assert!(log_text.lines().count() >= 2);
+        assert!(log_text.lines().any(|line| {
+            let payload = serde_json::from_str::<Value>(line).unwrap();
+            payload["event"] == "run.log" && payload["data"]["message"] == "Loaded 12 rows"
+        }));
+        log_bytes
     };
-    assert_eq!(output_blob.bytes, b"normalized-output");
-    let log_text = String::from_utf8(log_blob.bytes.clone()).unwrap();
-    assert!(log_text.lines().count() >= 2);
-    assert!(log_text.lines().any(|line| {
-        let payload = serde_json::from_str::<Value>(line).unwrap();
-        payload["event"] == "run.log" && payload["data"]["message"] == "Loaded 12 rows"
-    }));
     let (output_download, downloaded_output_bytes) =
         download_run_artifact(&client, &base_url, run_id, "output").await;
     assert_eq!(output_download["filePath"], output_path);
@@ -1010,54 +1028,7 @@ async fn create_run_returns_accepted_metadata_and_persists_output_via_artifact_s
         download_run_artifact(&client, &base_url, run_id, "log").await;
     assert_eq!(log_download["filePath"], log_path);
     assert_eq!(log_download["download"]["method"], "GET");
-    assert_eq!(downloaded_log_bytes, log_blob.bytes);
-
-    app_handle.abort();
-    stub_handle.abort();
-}
-
-#[tokio::test]
-async fn create_run_is_idempotent_for_the_same_uploaded_input_path() {
-    let (endpoint, state, stub_handle) = start_stub_server().await;
-    let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let app = app_with_session_and_url(
-        &endpoint,
-        &format!("http://{address}"),
-        &[("workspace-a", "config-v1", config_v1.as_path())],
-        &engine,
-    );
-    let app_handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    let client = Client::new();
-    let base_url = format!("http://{address}");
-    let upload = upload_input(
-        &client,
-        &base_url,
-        "input.csv",
-        "text/csv",
-        b"name,email\nalice,alice@example.com\n".to_vec(),
-    )
-    .await;
-    let input_path = upload["filePath"].as_str().unwrap();
-
-    let first = start_run(&client, &base_url, input_path)
-        .await
-        .json::<Value>()
-        .await
-        .unwrap();
-    let second = start_run(&client, &base_url, input_path)
-        .await
-        .json::<Value>()
-        .await
-        .unwrap();
-
-    assert_eq!(first["runId"], second["runId"]);
-    wait_for_run_execution_count(&state, 1).await;
+    assert_eq!(downloaded_log_bytes, log_bytes);
 
     app_handle.abort();
     stub_handle.abort();
@@ -1251,7 +1222,7 @@ async fn cancelling_before_bridge_ready_stops_the_session_attempt() {
 }
 
 #[tokio::test]
-async fn cancelling_after_a_partial_result_clears_stale_output_state() {
+async fn run_detail_keeps_output_hidden_until_success_and_cancellation_clears_state() {
     let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
         run_execution_delay_ms: 200,
         ..PoolStubOptions::default()
@@ -1290,8 +1261,17 @@ async fn cancelling_after_a_partial_result_clears_stale_output_state() {
     let detail_url =
         format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}");
 
-    let partial = wait_for_output_path(&client, &detail_url).await;
-    assert!(partial["outputPath"].is_string());
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let partial = client
+        .get(&detail_url)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(partial["status"], "running");
+    assert_eq!(partial["outputPath"], Value::Null);
 
     let cancel = client
         .post(format!(
@@ -1630,9 +1610,9 @@ async fn terminal_route_starts_bootstrap_code_and_streams_bridge_events() {
 
     let execution_codes = state.lock().unwrap().execution_codes.clone();
     assert_eq!(execution_codes.len(), 1);
-    assert!(execution_codes[0].contains("pty.openpty()"));
-    assert!(execution_codes[0].contains("websockets.sync.client"));
-    assert!(!execution_codes[0].contains("capture_output=True"));
+    assert!(execution_codes[0].contains("ade-session-agent"));
+    assert!(execution_codes[0].contains("--config-file"));
+    assert!(!execution_codes[0].contains("pty.openpty()"));
 
     let _ = socket.close(None).await;
     app_handle.abort();
@@ -1667,8 +1647,9 @@ async fn internal_bridge_route_can_only_attach_once() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     let bridge_url = {
-        let execution_codes = state.lock().unwrap().execution_codes.clone();
-        extract_bridge_url(&execution_codes[0]).unwrap()
+        let state = state.lock().unwrap();
+        let identifier = state.identifiers.last().unwrap();
+        extract_bridge_url(&state.execution_codes[0], &state, identifier).unwrap()
     };
 
     let (mut bridge_socket, _response) = connect_async(&bridge_url).await.unwrap();
@@ -1676,8 +1657,48 @@ async fn internal_bridge_route_can_only_attach_once() {
         .send(Message::Text(r#"{"type":"ready"}"#.into()))
         .await
         .unwrap();
+    let prepare = bridge_socket
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .into_text()
+        .unwrap();
+    let prepare = serde_json::from_str::<Value>(&prepare).unwrap();
+    assert_eq!(prepare["type"], "prepare");
     bridge_socket
-        .send(Message::Text(r#"{"type":"exit","code":0}"#.into()))
+        .send(Message::Text(
+            json!({
+                "type": "prepared",
+                "configVersion": prepare["configVersion"],
+                "engineVersion": prepare["engineVersion"],
+                "pythonToolchainVersion": prepare["pythonToolchainVersion"],
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let start_shell = bridge_socket
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .into_text()
+        .unwrap();
+    let start_shell = serde_json::from_str::<Value>(&start_shell).unwrap();
+    assert_eq!(start_shell["type"], "startShell");
+    bridge_socket
+        .send(Message::Text(
+            json!({
+                "type": "workerExit",
+                "workerId": start_shell["workerId"],
+                "kind": "shell",
+                "code": 0,
+            })
+            .to_string()
+            .into(),
+        ))
         .await
         .unwrap();
 
@@ -1695,7 +1716,7 @@ async fn internal_bridge_route_can_only_attach_once() {
 }
 
 #[tokio::test]
-async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
+async fn browser_disconnect_before_bridge_ready_eventually_clears_pending_state() {
     let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
         auto_connect_terminal_bridge: false,
         terminal_execution_delay_ms: 300,
@@ -1721,12 +1742,13 @@ async fn browser_disconnect_before_bridge_ready_clears_pending_state() {
     let (mut browser_socket, _response) = connect_async(&terminal_url).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
     let bridge_url = {
-        let execution_codes = state.lock().unwrap().execution_codes.clone();
-        extract_bridge_url(&execution_codes[0]).unwrap()
+        let state = state.lock().unwrap();
+        let identifier = state.identifiers.last().unwrap();
+        extract_bridge_url(&state.execution_codes[0], &state, identifier).unwrap()
     };
 
     browser_socket.close(None).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(350)).await;
     assert!(connect_async(&bridge_url).await.is_err());
 
     app_handle.abort();

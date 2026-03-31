@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use azure_core::credentials::TokenCredential;
 use azure_identity::{DeveloperToolsCredential, ManagedIdentityCredential};
 use reqwest::{
@@ -5,7 +7,6 @@ use reqwest::{
     multipart::{Form, Part},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::time::Duration;
 use utoipa::ToSchema;
 
 use crate::{
@@ -17,8 +18,9 @@ use crate::{
 const DEFAULT_AZURE_SESSION_API_VERSION: &str = "2025-10-02-preview";
 const DEFAULT_AZURE_SESSION_AUDIENCE: &str = "https://dynamicsessions.io";
 const SESSION_POOL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const SESSION_POOL_EXECUTION_TIMEOUT_BUFFER: Duration = Duration::from_secs(60);
-const SESSION_POOL_FILE_UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+const SESSION_POOL_DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+const SESSION_POOL_EXECUTION_TIMEOUT_BUFFER_SECONDS: u64 = 30;
+const SESSION_POOL_UPLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -30,7 +32,7 @@ pub struct SessionFile {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PythonExecution {
+pub(crate) struct SessionExecution {
     pub(crate) duration_ms: u64,
     pub(crate) status: String,
     pub(crate) stderr: String,
@@ -90,8 +92,8 @@ impl SessionPoolClient {
                 .connect_timeout(SESSION_POOL_CONNECT_TIMEOUT)
                 .build()
                 .map_err(|error| {
-                    AppError::config_with_source(
-                        "Failed to initialize the session pool client.".to_string(),
+                    AppError::startup_with_source(
+                        "Failed to build the session-pool HTTP client.",
                         error,
                     )
                 })?,
@@ -103,20 +105,17 @@ impl SessionPoolClient {
     pub(crate) async fn execute(
         &self,
         identifier: &str,
-        code: String,
+        shell_command: String,
         timeout_in_seconds: Option<u64>,
-    ) -> Result<SessionOperationResult<PythonExecution>, AppError> {
+    ) -> Result<SessionOperationResult<SessionExecution>, AppError> {
         let request = self
             .data_plane_request(Method::POST, &["executions"], identifier, &[])
             .await?
-            .timeout(
-                Duration::from_secs(timeout_in_seconds.unwrap_or(0))
-                    .saturating_add(SESSION_POOL_EXECUTION_TIMEOUT_BUFFER),
-            )
-            .json(&InlinePythonExecutionRequest {
-                code,
+            .timeout(session_pool_execution_timeout(timeout_in_seconds))
+            .json(&ShellExecutionRequest {
                 code_input_type: "Inline",
                 execution_type: "Synchronous",
+                shell_command,
                 timeout_in_seconds,
             });
         let envelope: SessionOperationResult<ExecutionEnvelope> =
@@ -124,7 +123,7 @@ impl SessionPoolClient {
 
         Ok(SessionOperationResult {
             metadata: envelope.metadata,
-            value: PythonExecution {
+            value: SessionExecution {
                 duration_ms: envelope
                     .value
                     .result
@@ -164,7 +163,7 @@ impl SessionPoolClient {
                 query_pairs.as_ref().map_or(&[], |pairs| pairs.as_slice()),
             )
             .await?
-            .timeout(SESSION_POOL_FILE_UPLOAD_TIMEOUT)
+            .timeout(SESSION_POOL_UPLOAD_TIMEOUT)
             .multipart(Form::new().part("file", part));
         let record: SessionOperationResult<AzureFileRecord> =
             parse_json_response(request, "upload a session pool file").await?;
@@ -202,6 +201,15 @@ impl SessionPoolClient {
     }
 }
 
+fn session_pool_execution_timeout(timeout_in_seconds: Option<u64>) -> Duration {
+    match timeout_in_seconds {
+        Some(timeout) => Duration::from_secs(
+            timeout.saturating_add(SESSION_POOL_EXECUTION_TIMEOUT_BUFFER_SECONDS),
+        ),
+        None => SESSION_POOL_DEFAULT_REQUEST_TIMEOUT,
+    }
+}
+
 #[derive(Deserialize)]
 struct ExecutionEnvelope {
     status: String,
@@ -231,10 +239,10 @@ struct AzureFileRecord {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct InlinePythonExecutionRequest {
-    code: String,
+struct ShellExecutionRequest {
     code_input_type: &'static str,
     execution_type: &'static str,
+    shell_command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_in_seconds: Option<u64>,
 }
@@ -300,9 +308,10 @@ async fn parse_json_response<T>(
 where
     T: DeserializeOwned,
 {
-    let response = builder.send().await.map_err(|error| {
-        AppError::internal_with_source(format!("Failed to {operation}."), error)
-    })?;
+    let response = builder
+        .send()
+        .await
+        .map_err(|error| map_session_pool_transport_error(operation, error))?;
     let status = response.status();
 
     if !status.is_success() {
@@ -374,6 +383,22 @@ where
     })?;
 
     Ok(SessionOperationResult { metadata, value })
+}
+
+fn map_session_pool_transport_error(operation: &str, error: reqwest::Error) -> AppError {
+    if error.is_timeout() {
+        return AppError::unavailable(format!(
+            "The session pool request timed out while trying to {operation}."
+        ));
+    }
+
+    if error.is_connect() || error.is_request() {
+        return AppError::unavailable(format!(
+            "The session pool is unavailable while trying to {operation}."
+        ));
+    }
+
+    AppError::internal_with_source(format!("Failed to {operation}."), error)
 }
 
 fn map_session_pool_http_error(status: reqwest::StatusCode, message: String) -> AppError {
