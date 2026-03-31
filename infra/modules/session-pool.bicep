@@ -11,7 +11,7 @@ resource sessionPool 'Microsoft.App/sessionPools@2025-10-02-preview' = {
   location: location
   tags: tags
   properties: {
-    containerType: 'PythonLTS'
+    containerType: 'Shell'
     dynamicPoolConfiguration: {
       lifecycleConfiguration: {
         lifecycleType: 'Timed'

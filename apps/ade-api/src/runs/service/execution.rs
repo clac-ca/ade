@@ -1,5 +1,12 @@
 use super::*;
 
+use crate::{
+    artifacts::ArtifactAccessGrant,
+    session_agent::{
+        SessionAgentCommand, SessionAgentEvent, SessionArtifactAccess, WorkerId, WorkerKind,
+    },
+};
+
 #[derive(Clone, Debug)]
 struct AttemptSuccess {
     output_path: String,
@@ -25,278 +32,6 @@ pub(super) struct AttemptFailure {
 }
 
 impl RunService {
-    async fn consume_run_bridge(
-        &self,
-        run: &mut StoredRun,
-        active: &ActiveRunHandle,
-        attempt_session_guid: &mut Option<String>,
-        mut bridge_socket: WebSocket,
-        mut execution_task: JoinHandle<Result<SessionOperationResult<PythonExecution>, AppError>>,
-    ) -> Result<AttemptSuccess, AttemptFailure> {
-        loop {
-            match bridge_socket.recv().await {
-                Some(Ok(Message::Text(text))) => {
-                    let message = match parse_bridge_message(text.as_str()) {
-                        Ok(message) => message,
-                        Err(error) => {
-                            abandon_execution_task(&mut execution_task).await;
-                            return Err(AttemptFailure {
-                                emitted_error: false,
-                                error,
-                                phase: Some(RunPhase::InstallPackages),
-                                retriable: false,
-                                status: RunStatus::Failed,
-                            });
-                        }
-                    };
-                    match message {
-                        RunBridgeClientMessage::Ready => break,
-                        _ => {
-                            if let Ok(message) =
-                                serde_json::to_string(&RunBridgeServerMessage::Cancel)
-                            {
-                                let _ = bridge_socket.send(Message::Text(message.into())).await;
-                            }
-                            abandon_execution_task(&mut execution_task).await;
-                            return Err(AttemptFailure {
-                                emitted_error: false,
-                                error: AppError::status(
-                                    StatusCode::BAD_GATEWAY,
-                                    "Run bridge must send a ready event before streaming runtime output.",
-                                ),
-                                phase: Some(RunPhase::InstallPackages),
-                                retriable: true,
-                                status: RunStatus::Failed,
-                            });
-                        }
-                    }
-                }
-                Some(Ok(Message::Close(_))) | None => {
-                    abandon_execution_task(&mut execution_task).await;
-                    return Err(AttemptFailure {
-                        emitted_error: false,
-                        error: AppError::status(
-                            StatusCode::BAD_GATEWAY,
-                            "Run bridge disconnected before it became ready.",
-                        ),
-                        phase: Some(RunPhase::InstallPackages),
-                        retriable: true,
-                        status: RunStatus::Failed,
-                    });
-                }
-                Some(Ok(Message::Binary(_))) => {
-                    abandon_execution_task(&mut execution_task).await;
-                    return Err(AttemptFailure {
-                        emitted_error: false,
-                        error: AppError::request("Binary run bridge messages are not supported."),
-                        phase: Some(RunPhase::InstallPackages),
-                        retriable: false,
-                        status: RunStatus::Failed,
-                    });
-                }
-                Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
-                Some(Err(error)) => {
-                    abandon_execution_task(&mut execution_task).await;
-                    return Err(AttemptFailure {
-                        emitted_error: false,
-                        error: AppError::internal_with_source(
-                            "Failed to read the run bridge websocket.",
-                            error,
-                        ),
-                        phase: Some(RunPhase::InstallPackages),
-                        retriable: true,
-                        status: RunStatus::Failed,
-                    });
-                }
-            }
-        }
-
-        let mut cancel_rx = active.cancel_rx.clone();
-        let mut bridge_closed = false;
-        let mut execution: Option<SessionOperationResult<PythonExecution>> = None;
-        let mut result = None;
-        let mut structured_error = None;
-
-        loop {
-            if let Some(execution_result) = execution.as_ref() {
-                if !matches!(
-                    execution_result.value.status.as_str(),
-                    "Success" | "Succeeded" | "0"
-                ) {
-                    if structured_error.is_some() || bridge_closed {
-                        let (message, phase, retriable) =
-                            structured_error.clone().unwrap_or_else(|| {
-                                (
-                                    execution_failure_message(&execution_result.value),
-                                    run.phase.or(Some(RunPhase::ExecuteRun)),
-                                    matches!(run.phase, Some(RunPhase::InstallPackages)),
-                                )
-                            });
-                        return Err(AttemptFailure {
-                            emitted_error: structured_error.is_some(),
-                            error: AppError::status(StatusCode::BAD_GATEWAY, message),
-                            phase,
-                            retriable,
-                            status: RunStatus::Failed,
-                        });
-                    }
-                } else if let Some(result) = result.clone() {
-                    return Ok(result);
-                } else if bridge_closed {
-                    return Err(AttemptFailure {
-                        emitted_error: false,
-                        error: AppError::internal(
-                            "ADE run bridge did not emit a structured result.",
-                        ),
-                        phase: Some(RunPhase::PersistOutputs),
-                        retriable: false,
-                        status: RunStatus::Failed,
-                    });
-                }
-            }
-
-            tokio::select! {
-                _ = cancel_rx.changed() => {
-                    if let Ok(message) = serde_json::to_string(&RunBridgeServerMessage::Cancel) {
-                        let _ = bridge_socket.send(Message::Text(message.into())).await;
-                    }
-                    execution_task.abort();
-                    return Err(AttemptFailure {
-                        emitted_error: true,
-                        error: AppError::request("Run cancelled."),
-                        phase: None,
-                        retriable: false,
-                        status: RunStatus::Cancelled,
-                    });
-                }
-                bridge_message = bridge_socket.recv(), if !bridge_closed => {
-                    match bridge_message {
-                        Some(Ok(Message::Text(text))) => {
-                            let message = match parse_bridge_message(text.as_str()) {
-                                Ok(message) => message,
-                                Err(error) => {
-                                    abandon_execution_task(&mut execution_task).await;
-                                    return Err(AttemptFailure {
-                                        emitted_error: false,
-                                        error,
-                                        phase: run.phase.or(Some(RunPhase::InstallPackages)),
-                                        retriable: false,
-                                        status: RunStatus::Failed,
-                                    });
-                                }
-                            };
-                            match message {
-                                RunBridgeClientMessage::Ready => {}
-                                RunBridgeClientMessage::Status { phase, state } => {
-                                    self.handle_runtime_event(
-                                        run,
-                                        active,
-                                        RunEventPayload::Status {
-                                            phase,
-                                            state,
-                                            session_guid: run.last_session_guid.clone(),
-                                            operation_id: None,
-                                            timings: None,
-                                        },
-                                    )
-                                    .await
-                                    .map_err(store_failure)?;
-                                }
-                                RunBridgeClientMessage::Log { level, message, phase } => {
-                                    self.handle_runtime_event(
-                                        run,
-                                        active,
-                                        RunEventPayload::Log { level, message, phase },
-                                    )
-                                    .await
-                                    .map_err(store_failure)?;
-                                }
-                                RunBridgeClientMessage::Error { phase, message, retriable } => {
-                                    structured_error = Some((message.clone(), phase, retriable));
-                                    self.handle_runtime_event(
-                                        run,
-                                        active,
-                                        RunEventPayload::Error {
-                                            phase,
-                                            message,
-                                            retriable,
-                                        },
-                                    )
-                                    .await
-                                    .map_err(store_failure)?;
-                                }
-                                RunBridgeClientMessage::Result { output_path, validation_issues } => {
-                                    result = Some(AttemptSuccess {
-                                        output_path: output_path.clone(),
-                                        validation_issues: validation_issues.clone(),
-                                    });
-                                    self.handle_runtime_event(
-                                        run,
-                                        active,
-                                        RunEventPayload::Result {
-                                            output_path,
-                                            validation_issues,
-                                        },
-                                    )
-                                    .await
-                                    .map_err(|error| AttemptFailure {
-                                        emitted_error: false,
-                                        error,
-                                        phase: None,
-                                        retriable: false,
-                                        status: RunStatus::Failed,
-                                    })?;
-                                }
-                            }
-                        }
-                        Some(Ok(Message::Close(_))) | None => {
-                            bridge_closed = true;
-                        }
-                        Some(Ok(Message::Binary(_))) => {
-                            abandon_execution_task(&mut execution_task).await;
-                            return Err(AttemptFailure {
-                                emitted_error: false,
-                                error: AppError::request("Binary run bridge messages are not supported."),
-                                phase: run.phase.or(Some(RunPhase::InstallPackages)),
-                                retriable: false,
-                                status: RunStatus::Failed,
-                            });
-                        }
-                        Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
-                        Some(Err(error)) => {
-                            abandon_execution_task(&mut execution_task).await;
-                            return Err(AttemptFailure {
-                                emitted_error: false,
-                                error: AppError::internal_with_source("Run bridge failed.", error),
-                                phase: run.phase.or(Some(RunPhase::InstallPackages)),
-                                retriable: true,
-                                status: RunStatus::Failed,
-                            });
-                        }
-                    }
-                }
-                joined = &mut execution_task, if execution.is_none() => {
-                    let execution_result = join_execution_result(joined).map_err(|error| AttemptFailure {
-                        emitted_error: structured_error.is_some(),
-                        error,
-                        phase: run.phase.or(Some(RunPhase::ExecuteRun)),
-                        retriable: matches!(run.phase, Some(RunPhase::InstallPackages)),
-                        status: RunStatus::Failed,
-                    })?;
-                    note_session_guid(attempt_session_guid, &execution_result.metadata).map_err(|error| AttemptFailure {
-                        emitted_error: structured_error.is_some(),
-                        error,
-                        phase: run.phase.or(Some(RunPhase::ExecuteRun)),
-                        retriable: matches!(run.phase, Some(RunPhase::InstallPackages)),
-                        status: RunStatus::Failed,
-                    })?;
-                    run.last_session_guid = attempt_session_guid.clone();
-                    execution = Some(execution_result);
-                }
-            }
-        }
-    }
-
     pub(super) async fn execute_run(
         &self,
         scope: Scope,
@@ -467,7 +202,7 @@ impl RunService {
                 ..
             } => {
                 run.phase = Some(*phase);
-                if state == "started" || state == "completed" {
+                if matches!(state.as_str(), "started" | "completed") {
                     run.status = RunStatus::Running;
                 }
                 if let Some(session_guid) = session_guid {
@@ -481,13 +216,8 @@ impl RunService {
                 run.error_message = Some(message.clone());
                 run.phase = *phase;
             }
-            RunEventPayload::Result {
-                output_path,
-                validation_issues,
-            } => {
-                run.output_path = Some(output_path.clone());
+            RunEventPayload::Result { .. } => {
                 run.phase = Some(RunPhase::PersistOutputs);
-                run.validation_issues = validation_issues.clone();
             }
         }
 
@@ -509,7 +239,7 @@ impl RunService {
         active: &ActiveRunHandle,
     ) -> Result<AttemptSuccess, AttemptFailure> {
         let runtime = self
-            .session_service
+            .session_agent_service
             .runtime_artifacts(attempt.scope)
             .map_err(|error| AttemptFailure {
                 emitted_error: false,
@@ -531,8 +261,9 @@ impl RunService {
         run.validation_issues.clear();
         self.run_store.save_run(&run).await.map_err(store_failure)?;
 
-        let mut attempt_session_guid = run.last_session_guid.clone();
-        self.upload_runtime_artifacts(attempt.scope, &runtime, &mut attempt_session_guid)
+        let handle = self
+            .session_agent_service
+            .connect_scope_session(attempt.scope, &runtime)
             .await
             .map_err(|error| AttemptFailure {
                 emitted_error: false,
@@ -542,8 +273,44 @@ impl RunService {
                 status: RunStatus::Failed,
             })?;
 
-        run.last_session_guid = attempt_session_guid.clone();
-        self.run_store.save_run(&run).await.map_err(store_failure)?;
+        self.handle_runtime_event(
+            &mut run,
+            active,
+            RunEventPayload::Status {
+                phase: RunPhase::InstallPackages,
+                state: "started".to_string(),
+                session_guid: None,
+                operation_id: None,
+                timings: None,
+            },
+        )
+        .await
+        .map_err(store_failure)?;
+
+        self.session_agent_service
+            .ensure_prepared(attempt.scope, &runtime, &handle)
+            .await
+            .map_err(|error| AttemptFailure {
+                emitted_error: false,
+                error,
+                phase: Some(RunPhase::InstallPackages),
+                retriable: true,
+                status: RunStatus::Failed,
+            })?;
+
+        self.handle_runtime_event(
+            &mut run,
+            active,
+            RunEventPayload::Status {
+                phase: RunPhase::InstallPackages,
+                state: "completed".to_string(),
+                session_guid: None,
+                operation_id: None,
+                timings: None,
+            },
+        )
+        .await
+        .map_err(store_failure)?;
 
         if *active.cancel_rx.borrow() {
             return Err(AttemptFailure {
@@ -555,25 +322,8 @@ impl RunService {
             });
         }
 
-        let (bridge_id, bridge_rx) = self.bridge_manager.create();
-        let expires_at_ms = unix_time_ms() + BRIDGE_TOKEN_TTL_MS;
-        let token = create_bridge_token(&self.session_secret, &bridge_id, expires_at_ms);
-        let mut bridge_url = self.app_url.clone();
-        let scheme = if bridge_url.scheme() == "http" {
-            "ws"
-        } else {
-            "wss"
-        };
-        bridge_url
-            .set_scheme(scheme)
-            .expect("ADE_APP_URL scheme was validated at startup");
-        bridge_url.set_path(&format!("/api/internal/run-bridges/{bridge_id}"));
-        bridge_url.set_query(None);
-        bridge_url.query_pairs_mut().append_pair("token", &token);
         let access_expires_at = time::OffsetDateTime::now_utc()
-            + time::Duration::seconds(
-                attempt.timeout_in_seconds.unwrap_or(RUN_ACCESS_TTL_SECONDS) as i64
-            );
+            + time::Duration::seconds(run_access_ttl_seconds(attempt.timeout_in_seconds) as i64);
         let input_download = self
             .artifact_store
             .create_download_access(attempt.input_path, access_expires_at)
@@ -581,7 +331,7 @@ impl RunService {
             .map_err(|error| AttemptFailure {
                 emitted_error: false,
                 error,
-                phase: Some(RunPhase::InstallPackages),
+                phase: Some(RunPhase::ExecuteRun),
                 retriable: false,
                 status: RunStatus::Failed,
             })?;
@@ -596,192 +346,276 @@ impl RunService {
                 retriable: false,
                 status: RunStatus::Failed,
             })?;
-        let bootstrap = render_bootstrap_code(&RunBootstrapConfig {
-            config_package_name: runtime.config_package_name,
-            config_version: runtime.config_version.clone(),
-            config_wheel_path: session_path(&runtime.config_filename),
-            bridge_url: bridge_url.to_string(),
-            engine_package_name: runtime.engine_package_name,
-            engine_version: runtime.engine_version.clone(),
-            engine_wheel_path: session_path(&runtime.engine_filename),
-            input_download: bootstrap_artifact_access(&self.app_url, input_download).map_err(
-                |error| AttemptFailure {
-                    emitted_error: false,
-                    error,
-                    phase: Some(RunPhase::InstallPackages),
-                    retriable: false,
-                    status: RunStatus::Failed,
-                },
-            )?,
-            install_lock_path: runtime.install_lock_path.clone(),
-            local_input_path: local_input_path(attempt.input_path),
-            local_output_dir: local_output_dir(attempt.run_id),
-            output_path: attempt.output_path.to_string(),
-            output_upload: bootstrap_artifact_access(&self.app_url, output_upload).map_err(
-                |error| AttemptFailure {
-                    emitted_error: false,
-                    error,
-                    phase: Some(RunPhase::PersistOutputs),
-                    retriable: false,
-                    status: RunStatus::Failed,
-                },
-            )?,
-        })
-        .map_err(|error| AttemptFailure {
-            emitted_error: false,
-            error,
-            phase: Some(RunPhase::InstallPackages),
-            retriable: false,
-            status: RunStatus::Failed,
-        })?;
-
-        let session_service = Arc::clone(&self.session_service);
-        let execution_timeout = attempt
-            .timeout_in_seconds
-            .unwrap_or(RUN_EXECUTION_TIMEOUT_SECONDS);
-        let scope_for_execution = attempt.scope.clone();
-        let mut execution_task = tokio::spawn(async move {
-            session_service
-                .execute_inline_python_detailed(
-                    &scope_for_execution,
-                    bootstrap,
-                    Some(execution_timeout),
-                )
-                .await
-        });
-
-        let bridge_socket = match self
-            .wait_for_run_bridge(&bridge_id, bridge_rx, active)
+        let worker_id = WorkerId::new(format!(
+            "run-{}-attempt-{}",
+            attempt.run_id, attempt.attempt
+        ));
+        let mut events = handle.subscribe();
+        handle
+            .send(SessionAgentCommand::StartRun {
+                input_download: resolve_artifact_access(&self.app_url, input_download).map_err(
+                    |error| AttemptFailure {
+                        emitted_error: false,
+                        error,
+                        phase: Some(RunPhase::ExecuteRun),
+                        retriable: false,
+                        status: RunStatus::Failed,
+                    },
+                )?,
+                local_input_path: format!(
+                    "/mnt/data/work/input/{}/attempt-{}/{}",
+                    attempt.run_id,
+                    attempt.attempt,
+                    uploaded_basename(attempt.input_path)
+                ),
+                local_output_dir: format!(
+                    "/mnt/data/runs/{}/attempt-{}/output",
+                    attempt.run_id, attempt.attempt
+                ),
+                output_path: attempt.output_path.to_string(),
+                output_upload: resolve_artifact_access(&self.app_url, output_upload).map_err(
+                    |error| AttemptFailure {
+                        emitted_error: false,
+                        error,
+                        phase: Some(RunPhase::PersistOutputs),
+                        retriable: false,
+                        status: RunStatus::Failed,
+                    },
+                )?,
+                timeout_in_seconds: run_timeout_in_seconds(attempt.timeout_in_seconds),
+                worker_id: worker_id.clone(),
+            })
             .await
-        {
-            Ok(bridge_socket) => bridge_socket,
-            Err(error) => {
-                abandon_execution_task(&mut execution_task).await;
-                return Err(AttemptFailure {
-                    emitted_error: false,
-                    error,
-                    phase: Some(RunPhase::InstallPackages),
-                    retriable: true,
-                    status: RunStatus::Failed,
-                });
-            }
-        };
-        self.consume_run_bridge(
+            .map_err(|error| AttemptFailure {
+                emitted_error: false,
+                error,
+                phase: Some(RunPhase::ExecuteRun),
+                retriable: true,
+                status: RunStatus::Failed,
+            })?;
+
+        self.handle_runtime_event(
             &mut run,
             active,
-            &mut attempt_session_guid,
-            bridge_socket,
-            execution_task,
+            RunEventPayload::Status {
+                phase: RunPhase::ExecuteRun,
+                state: "started".to_string(),
+                session_guid: None,
+                operation_id: None,
+                timings: None,
+            },
         )
         .await
-    }
+        .map_err(store_failure)?;
 
-    async fn upload_runtime_artifacts(
-        &self,
-        scope: &Scope,
-        runtime: &SessionRuntimeArtifacts,
-        attempt_session_guid: &mut Option<String>,
-    ) -> Result<(), AppError> {
-        let engine_upload = self
-            .session_service
-            .upload_session_file(
-                scope,
-                &runtime.engine_filename,
-                Some("application/octet-stream".to_string()),
-                runtime.engine_wheel_bytes.clone(),
-            )
-            .await?;
-        note_session_guid(attempt_session_guid, &engine_upload.metadata)?;
-
-        let config_upload = self
-            .session_service
-            .upload_session_file(
-                scope,
-                &runtime.config_filename,
-                Some("application/octet-stream".to_string()),
-                runtime.config_wheel_bytes.clone(),
-            )
-            .await?;
-        note_session_guid(attempt_session_guid, &config_upload.metadata)?;
-        Ok(())
-    }
-
-    async fn wait_for_run_bridge(
-        &self,
-        bridge_id: &str,
-        bridge_rx: oneshot::Receiver<WebSocket>,
-        active: &ActiveRunHandle,
-    ) -> Result<WebSocket, AppError> {
-        let timeout = tokio::time::sleep(BRIDGE_READY_TIMEOUT);
-        tokio::pin!(timeout);
-        tokio::pin!(bridge_rx);
         let mut cancel_rx = active.cancel_rx.clone();
 
-        tokio::select! {
-            _ = cancel_rx.changed() => {
-                self.bridge_manager.cancel(bridge_id);
-                Err(AppError::request("Run cancelled."))
-            }
-            result = &mut bridge_rx => {
-                result.map_err(|_| AppError::status(StatusCode::BAD_GATEWAY, "Run bridge did not connect."))
-            }
-            _ = &mut timeout => {
-                self.bridge_manager.cancel(bridge_id);
-                Err(AppError::status(StatusCode::BAD_GATEWAY, "Timed out waiting for the run bridge to connect."))
+        loop {
+            tokio::select! {
+                _ = cancel_rx.changed() => {
+                    let _ = handle.send(SessionAgentCommand::CancelWorker { worker_id: worker_id.clone() }).await;
+                    return Err(AttemptFailure {
+                        emitted_error: true,
+                        error: AppError::request("Run cancelled."),
+                        phase: None,
+                        retriable: false,
+                        status: RunStatus::Cancelled,
+                    });
+                }
+                event = events.recv() => {
+                    match event {
+                        Ok(SessionAgentEvent::Stdout { worker_id: event_worker_id, data, phase }) if event_worker_id == worker_id => {
+                            for line in streamed_lines(&data) {
+                                self.handle_runtime_event(
+                                    &mut run,
+                                    active,
+                                    RunEventPayload::Log {
+                                        level: "info".to_string(),
+                                        message: line,
+                                        phase: phase.unwrap_or(RunPhase::ExecuteRun),
+                                    },
+                                )
+                                .await
+                                .map_err(store_failure)?;
+                            }
+                        }
+                        Ok(SessionAgentEvent::Stderr { worker_id: event_worker_id, data, phase }) if event_worker_id == worker_id => {
+                            for line in streamed_lines(&data) {
+                                self.handle_runtime_event(
+                                    &mut run,
+                                    active,
+                                    RunEventPayload::Log {
+                                        level: "error".to_string(),
+                                        message: line,
+                                        phase: phase.unwrap_or(RunPhase::ExecuteRun),
+                                    },
+                                )
+                                .await
+                                .map_err(store_failure)?;
+                            }
+                        }
+                        Ok(SessionAgentEvent::Log { worker_id: Some(event_worker_id), level, message, phase }) if event_worker_id == worker_id => {
+                            self.handle_runtime_event(
+                                &mut run,
+                                active,
+                                RunEventPayload::Log {
+                                    level,
+                                    message,
+                                    phase: phase.unwrap_or(RunPhase::ExecuteRun),
+                                },
+                            )
+                            .await
+                            .map_err(store_failure)?;
+                        }
+                        Ok(SessionAgentEvent::Error { worker_id: Some(event_worker_id), phase, message, retriable }) if event_worker_id == worker_id => {
+                            self.handle_runtime_event(
+                                &mut run,
+                                active,
+                                RunEventPayload::Error {
+                                    phase,
+                                    message: message.clone(),
+                                    retriable,
+                                },
+                            )
+                            .await
+                            .map_err(store_failure)?;
+                            return Err(AttemptFailure {
+                                emitted_error: true,
+                                error: AppError::status(StatusCode::BAD_GATEWAY, message),
+                                phase,
+                                retriable,
+                                status: RunStatus::Failed,
+                            });
+                        }
+                        Ok(SessionAgentEvent::WorkerExit { worker_id: event_worker_id, kind: WorkerKind::Run, code, output_path, validation_issues, .. }) if event_worker_id == worker_id => {
+                            if let (Some(0), Some(output_path)) = (code, output_path) {
+                                self.handle_runtime_event(
+                                    &mut run,
+                                    active,
+                                    RunEventPayload::Status {
+                                        phase: RunPhase::PersistOutputs,
+                                        state: "started".to_string(),
+                                        session_guid: None,
+                                        operation_id: None,
+                                        timings: None,
+                                    },
+                                )
+                                .await
+                                .map_err(store_failure)?;
+                                let validation_issues = validation_issues.unwrap_or_default();
+                                self.handle_runtime_event(
+                                    &mut run,
+                                    active,
+                                    RunEventPayload::Result {
+                                        output_path: output_path.clone(),
+                                        validation_issues: validation_issues.clone(),
+                                    },
+                                )
+                                .await
+                                .map_err(store_failure)?;
+                                self.handle_runtime_event(
+                                    &mut run,
+                                    active,
+                                    RunEventPayload::Status {
+                                        phase: RunPhase::PersistOutputs,
+                                        state: "completed".to_string(),
+                                        session_guid: None,
+                                        operation_id: None,
+                                        timings: None,
+                                    },
+                                )
+                                .await
+                                .map_err(store_failure)?;
+                                return Ok(AttemptSuccess { output_path, validation_issues });
+                            }
+
+                            return Err(AttemptFailure {
+                                emitted_error: false,
+                                error: AppError::status(
+                                    StatusCode::BAD_GATEWAY,
+                                    format!("ADE run worker exited with code {}.", code.unwrap_or_default()),
+                                ),
+                                phase: Some(RunPhase::ExecuteRun),
+                                retriable: false,
+                                status: RunStatus::Failed,
+                            });
+                        }
+                        Ok(SessionAgentEvent::Error { worker_id: None, message, phase, retriable }) => {
+                            return Err(AttemptFailure {
+                                emitted_error: false,
+                                error: AppError::status(StatusCode::BAD_GATEWAY, message),
+                                phase,
+                                retriable,
+                                status: RunStatus::Failed,
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            return Err(AttemptFailure {
+                                emitted_error: false,
+                                error: AppError::status(
+                                    StatusCode::BAD_GATEWAY,
+                                    "Scope session agent event stream overflowed while the run was active.",
+                                ),
+                                phase: run.phase.or(Some(RunPhase::ExecuteRun)),
+                                retriable: true,
+                                status: RunStatus::Failed,
+                            });
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            return Err(AttemptFailure {
+                                emitted_error: false,
+                                error: AppError::status(
+                                    StatusCode::BAD_GATEWAY,
+                                    "Scope session agent disconnected while the run was active.",
+                                ),
+                                phase: run.phase.or(Some(RunPhase::ExecuteRun)),
+                                retriable: true,
+                                status: RunStatus::Failed,
+                            });
+                        }
+                    }
+                }
             }
         }
     }
 }
 
-async fn abandon_execution_task<T>(execution_task: &mut JoinHandle<T>) {
-    if !execution_task.is_finished() {
-        execution_task.abort();
-    }
-    let _ = execution_task.await;
-}
-
-fn execution_failure_message(execution: &PythonExecution) -> String {
-    if !execution.stderr.trim().is_empty() {
-        return execution.stderr.trim().to_string();
-    }
-    if !execution.stdout.trim().is_empty() {
-        return execution.stdout.trim().to_string();
-    }
-    format!("ADE run execution failed with status {}.", execution.status)
-}
-
-fn join_execution_result<T>(
-    result: Result<Result<T, AppError>, tokio::task::JoinError>,
-) -> Result<T, AppError> {
-    match result {
-        Ok(result) => result,
-        Err(error) if error.is_cancelled() => Err(AppError::request("Run cancelled.")),
-        Err(error) => Err(AppError::internal_with_source(
-            "Run execution task failed to join.",
-            error,
-        )),
-    }
-}
-
-fn note_session_guid(
-    current_session_guid: &mut Option<String>,
-    metadata: &SessionOperationMetadata,
-) -> Result<(), AppError> {
-    let Some(session_guid) = metadata.session_guid.as_ref() else {
-        return Ok(());
+fn resolve_artifact_access(
+    app_url: &Url,
+    access: ArtifactAccessGrant,
+) -> Result<SessionArtifactAccess, AppError> {
+    let url = match Url::parse(&access.url) {
+        Ok(url) => url.to_string(),
+        Err(_) => app_url
+            .join(&access.url)
+            .map_err(|error| {
+                AppError::internal_with_source("Failed to resolve an artifact access URL.", error)
+            })?
+            .to_string(),
     };
+    Ok(SessionArtifactAccess {
+        headers: access.headers,
+        method: access.method.to_string(),
+        url,
+    })
+}
 
-    if let Some(current) = current_session_guid.as_ref()
-        && current != session_guid
-    {
-        return Err(AppError::status(
-            StatusCode::BAD_GATEWAY,
-            "The Azure session was recycled while the run was in progress.",
-        ));
-    }
+fn streamed_lines(data: &str) -> Vec<String> {
+    data.lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
 
-    *current_session_guid = Some(session_guid.clone());
-    Ok(())
+fn uploaded_basename(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("input.bin")
+        .to_string()
 }
 
 fn store_failure(error: AppError) -> AttemptFailure {

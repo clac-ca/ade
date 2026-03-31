@@ -21,6 +21,7 @@ use crate::{
     error::AppError,
     readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::RunService,
+    session_agent::SessionAgentService,
     terminal::TerminalService,
 };
 
@@ -29,6 +30,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub probe_interval_ms: u64,
     pub run_service: Arc<RunService>,
+    pub session_agent_service: Arc<SessionAgentService>,
     pub terminal_service: Arc<TerminalService>,
     pub stale_after_ms: u64,
     pub web_root: Option<PathBuf>,
@@ -60,6 +62,7 @@ impl ServerInstance {
         let app = create_app(AppState {
             readiness: readiness.clone(),
             run_service: options.run_service,
+            session_agent_service: options.session_agent_service,
             terminal_service: options.terminal_service,
             web_root: options.web_root,
         });
@@ -234,6 +237,7 @@ mod tests {
         config::DEFAULT_READINESS_STALE_AFTER_MS,
         runs::{InMemoryRunStore, RunService},
         session::SessionService,
+        session_agent::SessionAgentService,
         terminal::TerminalService,
     };
 
@@ -278,10 +282,14 @@ mod tests {
 
     fn fixture_session_service() -> Arc<SessionService> {
         let tempdir = tempdir().unwrap();
+        let agent = tempdir.path().join("ade-session-agent");
         let engine = tempdir.path().join("ade_engine-0.1.0-py3-none-any.whl");
         let config = tempdir.path().join("ade_config-0.1.0-py3-none-any.whl");
+        let toolchain = tempdir.path().join("python-3.14.0-linux-x86_64.tar.gz");
+        std::fs::write(&agent, b"agent").unwrap();
         std::fs::write(&engine, b"engine").unwrap();
         std::fs::write(&config, b"config").unwrap();
+        std::fs::write(&toolchain, b"toolchain").unwrap();
 
         let env = [
             (
@@ -295,6 +303,14 @@ mod tests {
             (
                 "ADE_ENGINE_WHEEL_PATH".to_string(),
                 engine.display().to_string(),
+            ),
+            (
+                "ADE_SESSION_AGENT_BINARY_PATH".to_string(),
+                agent.display().to_string(),
+            ),
+            (
+                "ADE_PYTHON_TOOLCHAIN_BUNDLE_PATH".to_string(),
+                toolchain.display().to_string(),
             ),
             (
                 "ADE_CONFIG_TARGETS".to_string(),
@@ -314,17 +330,31 @@ mod tests {
         Arc::new(SessionService::from_env(&env).unwrap())
     }
 
-    fn fixture_terminal_service(session_service: Arc<SessionService>) -> Arc<TerminalService> {
+    fn fixture_session_agent_service(
+        session_service: Arc<SessionService>,
+    ) -> Arc<SessionAgentService> {
         let env = [(
             "ADE_APP_URL".to_string(),
             "http://127.0.0.1:8000".to_string(),
         )]
         .into_iter()
         .collect();
-        Arc::new(TerminalService::from_env(&env, session_service).unwrap())
+        Arc::new(SessionAgentService::from_env(&env, session_service).unwrap())
     }
 
-    fn fixture_run_service(session_service: Arc<SessionService>) -> Arc<RunService> {
+    fn fixture_terminal_service(
+        session_agent_service: Arc<SessionAgentService>,
+    ) -> Arc<TerminalService> {
+        let env = [(
+            "ADE_APP_URL".to_string(),
+            "http://127.0.0.1:8000".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        Arc::new(TerminalService::from_env(&env, session_agent_service).unwrap())
+    }
+
+    fn fixture_run_service(session_agent_service: Arc<SessionAgentService>) -> Arc<RunService> {
         let env = [
             (
                 "ADE_APP_URL".to_string(),
@@ -347,8 +377,12 @@ mod tests {
         .into_iter()
         .collect();
         Arc::new(
-            RunService::from_env(&env, session_service, Arc::new(InMemoryRunStore::default()))
-                .unwrap(),
+            RunService::from_env(
+                &env,
+                session_agent_service,
+                Arc::new(InMemoryRunStore::default()),
+            )
+            .unwrap(),
         )
     }
 
@@ -357,12 +391,14 @@ mod tests {
         let database: Arc<dyn DatabaseProbe> =
             Arc::new(FakeDatabase::new(vec![Err("sql unavailable".to_string())]));
         let session_service = fixture_session_service();
+        let session_agent_service = fixture_session_agent_service(Arc::clone(&session_service));
         let mut server = ServerInstance::new(ServerOptions {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
-            run_service: fixture_run_service(Arc::clone(&session_service)),
-            terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
+            run_service: fixture_run_service(Arc::clone(&session_agent_service)),
+            session_agent_service: Arc::clone(&session_agent_service),
+            terminal_service: fixture_terminal_service(Arc::clone(&session_agent_service)),
             stale_after_ms: DEFAULT_READINESS_STALE_AFTER_MS,
             web_root: None,
             database,
@@ -385,12 +421,14 @@ mod tests {
             Ok(()),
         ]));
         let session_service = fixture_session_service();
+        let session_agent_service = fixture_session_agent_service(Arc::clone(&session_service));
         let mut server = ServerInstance::new(ServerOptions {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
-            run_service: fixture_run_service(Arc::clone(&session_service)),
-            terminal_service: fixture_terminal_service(Arc::clone(&session_service)),
+            run_service: fixture_run_service(Arc::clone(&session_agent_service)),
+            session_agent_service: Arc::clone(&session_agent_service),
+            terminal_service: fixture_terminal_service(Arc::clone(&session_agent_service)),
             stale_after_ms: DEFAULT_READINESS_STALE_AFTER_MS,
             web_root: None,
             database,

@@ -58,7 +58,7 @@ Lock these assumptions in:
 - Blob Storage shared-key auth stays disabled
 - Blob Storage CORS allows only the ADE app origin and only the headers and methods required for browser PUT/GET/HEAD/OPTIONS traffic
 - the Azure SQL database uses the General Purpose serverless compute tier with auto-pause enabled
-- the shared Azure session pool uses the built-in `PythonLTS` container type
+- the shared Azure session pool uses the built-in `Shell` container type
 
 The storage account is intentionally boring:
 

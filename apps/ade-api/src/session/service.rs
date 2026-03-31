@@ -14,19 +14,34 @@ use crate::{
     scope::Scope,
 };
 
-use super::client::{PythonExecution, SessionFile, SessionOperationResult, SessionPoolClient};
+use super::client::{SessionExecution, SessionFile, SessionOperationResult, SessionPoolClient};
 
+const AGENT_BINARY_ENV_NAME: &str = "ADE_SESSION_AGENT_BINARY_PATH";
+const AGENT_BINARY_SESSION_PATH: &str = ".ade/bin/ade-session-agent";
+const AGENT_CONFIG_SESSION_PATH: &str = ".ade/session-agent.json";
 const CONFIG_PACKAGE_NAME: &str = "ade-config";
 const CONFIG_TARGETS_ENV_NAME: &str = "ADE_CONFIG_TARGETS";
+const DEFAULT_AGENT_BINARY_BASENAME: &str = "ade-session-agent";
+const DEFAULT_TOOLCHAIN_BUNDLE_PATH: &str = "/app/python/ade_python_toolchain.tar.gz";
 const ENGINE_PACKAGE_NAME: &str = "ade-engine";
 const ENGINE_WHEEL_ENV_NAME: &str = "ADE_ENGINE_WHEEL_PATH";
-const INSTALL_LOCK_SESSION_FILENAME: &str = ".ade-session-install.lock";
-const RUNS_ROOT: &str = "runs";
+const PYTHON_HOME_ROOT: &str = "/mnt/data/.ade/runtime/python";
+const PYTHON_TOOLCHAIN_BUNDLE_ENV_NAME: &str = "ADE_PYTHON_TOOLCHAIN_BUNDLE_PATH";
+const PYTHON_TOOLCHAIN_SESSION_DIR: &str = ".ade/toolchains";
 const SESSION_ROOT: &str = "/mnt/data";
 const SESSION_SECRET_ENV_NAME: &str = "ADE_SESSION_SECRET";
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct ScopeSessionId(String);
+
+impl ScopeSessionId {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct PackageWheel {
+struct FileArtifact {
     bytes: Vec<u8>,
     filename: String,
     version: String,
@@ -34,22 +49,36 @@ struct PackageWheel {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SessionRuntimeArtifacts {
+    pub(crate) agent_binary_bytes: Vec<u8>,
+    pub(crate) agent_binary_filename: String,
+    pub(crate) agent_binary_path: String,
+    pub(crate) agent_launch_config_filename: String,
+    pub(crate) agent_launch_config_path: String,
     pub(crate) config_filename: String,
     pub(crate) config_package_name: &'static str,
     pub(crate) config_version: String,
     pub(crate) config_wheel_bytes: Vec<u8>,
+    pub(crate) config_wheel_path: String,
     pub(crate) engine_filename: String,
     pub(crate) engine_package_name: &'static str,
     pub(crate) engine_version: String,
     pub(crate) engine_wheel_bytes: Vec<u8>,
-    pub(crate) install_lock_path: String,
-    pub(crate) runs_root: String,
+    pub(crate) engine_wheel_path: String,
+    pub(crate) python_executable_path: String,
+    pub(crate) python_home_path: String,
+    pub(crate) python_toolchain_bytes: Vec<u8>,
+    pub(crate) python_toolchain_filename: String,
+    pub(crate) python_toolchain_path: String,
+    pub(crate) python_toolchain_version: String,
+    pub(crate) session_root: String,
 }
 
 pub struct SessionService {
+    agent_binary: FileArtifact,
     client: SessionPoolClient,
-    config_targets: HashMap<Scope, PackageWheel>,
-    engine: PackageWheel,
+    config_targets: HashMap<Scope, FileArtifact>,
+    engine: FileArtifact,
+    python_toolchain: FileArtifact,
     session_secret: String,
 }
 
@@ -63,11 +92,20 @@ impl SessionService {
             })?;
 
         Ok(Self {
+            agent_binary: resolve_agent_binary(env)?,
             client: SessionPoolClient::from_env(env)?,
             config_targets: resolve_config_targets(env)?,
-            engine: resolve_required_wheel(env, ENGINE_WHEEL_ENV_NAME, "ade_engine")?,
+            engine: resolve_required_file(env, ENGINE_WHEEL_ENV_NAME, "ade_engine", ".whl")?,
+            python_toolchain: resolve_python_toolchain(env)?,
             session_secret,
         })
+    }
+
+    pub(crate) fn scope_session_id(&self, scope: &Scope) -> ScopeSessionId {
+        ScopeSessionId(derive_session_identifier(
+            &self.session_secret,
+            &format!("{}:{}", scope.workspace_id, scope.config_version_id),
+        ))
     }
 
     pub(crate) fn session_secret(&self) -> &str {
@@ -84,17 +122,37 @@ impl SessionService {
                 scope.config_version_id, scope.workspace_id
             ))
         })?;
+        let python_home_path = format!("{PYTHON_HOME_ROOT}/{}", self.python_toolchain.version);
+
         Ok(SessionRuntimeArtifacts {
+            agent_binary_bytes: self.agent_binary.bytes.clone(),
+            agent_binary_filename: AGENT_BINARY_SESSION_PATH.to_string(),
+            agent_binary_path: session_absolute_path(AGENT_BINARY_SESSION_PATH),
+            agent_launch_config_filename: AGENT_CONFIG_SESSION_PATH.to_string(),
+            agent_launch_config_path: session_absolute_path(AGENT_CONFIG_SESSION_PATH),
             config_filename: config.filename.clone(),
             config_package_name: CONFIG_PACKAGE_NAME,
             config_version: config.version.clone(),
             config_wheel_bytes: config.bytes.clone(),
+            config_wheel_path: session_absolute_path(&config.filename),
             engine_filename: self.engine.filename.clone(),
             engine_package_name: ENGINE_PACKAGE_NAME,
             engine_version: self.engine.version.clone(),
             engine_wheel_bytes: self.engine.bytes.clone(),
-            install_lock_path: format!("{SESSION_ROOT}/{INSTALL_LOCK_SESSION_FILENAME}"),
-            runs_root: format!("{SESSION_ROOT}/{RUNS_ROOT}"),
+            engine_wheel_path: session_absolute_path(&self.engine.filename),
+            python_executable_path: format!("{python_home_path}/bin/python3"),
+            python_home_path: python_home_path.clone(),
+            python_toolchain_bytes: self.python_toolchain.bytes.clone(),
+            python_toolchain_filename: format!(
+                "{PYTHON_TOOLCHAIN_SESSION_DIR}/{}",
+                self.python_toolchain.filename
+            ),
+            python_toolchain_path: session_absolute_path(&format!(
+                "{PYTHON_TOOLCHAIN_SESSION_DIR}/{}",
+                self.python_toolchain.filename
+            )),
+            python_toolchain_version: self.python_toolchain.version.clone(),
+            session_root: SESSION_ROOT.to_string(),
         })
     }
 
@@ -107,7 +165,7 @@ impl SessionService {
     ) -> Result<SessionOperationResult<SessionFile>, AppError> {
         self.client
             .upload_file(
-                &self.session_identifier(scope),
+                &self.scope_session_id(scope).0,
                 public_session_path(path)?,
                 content_type,
                 content,
@@ -115,22 +173,19 @@ impl SessionService {
             .await
     }
 
-    pub(crate) async fn execute_inline_python_detailed(
+    pub(crate) async fn execute_shell_detailed(
         &self,
         scope: &Scope,
-        code: String,
+        shell_command: String,
         timeout_in_seconds: Option<u64>,
-    ) -> Result<SessionOperationResult<PythonExecution>, AppError> {
+    ) -> Result<SessionOperationResult<SessionExecution>, AppError> {
         self.client
-            .execute(&self.session_identifier(scope), code, timeout_in_seconds)
+            .execute(
+                self.scope_session_id(scope).as_str(),
+                shell_command,
+                timeout_in_seconds,
+            )
             .await
-    }
-
-    fn session_identifier(&self, scope: &Scope) -> String {
-        derive_session_identifier(
-            &self.session_secret,
-            &format!("{}:{}", scope.workspace_id, scope.config_version_id),
-        )
     }
 }
 
@@ -170,14 +225,14 @@ fn public_session_path(path: &str) -> Result<String, AppError> {
     }
 
     let normalized = segments.join("/");
-    if normalized == INSTALL_LOCK_SESSION_FILENAME {
-        return Err(AppError::not_found("Session file not found."));
-    }
-
     Ok(normalized)
 }
 
-fn resolve_config_targets(env: &EnvBag) -> Result<HashMap<Scope, PackageWheel>, AppError> {
+fn session_absolute_path(path: &str) -> String {
+    format!("{SESSION_ROOT}/{}", path.trim_start_matches('/'))
+}
+
+fn resolve_config_targets(env: &EnvBag) -> Result<HashMap<Scope, FileArtifact>, AppError> {
     let targets_json =
         read_optional_trimmed_string(env, CONFIG_TARGETS_ENV_NAME).ok_or_else(|| {
             AppError::config(format!(
@@ -204,8 +259,12 @@ fn resolve_config_targets(env: &EnvBag) -> Result<HashMap<Scope, PackageWheel>, 
             workspace_id: target.workspace_id,
             config_version_id: target.config_version_id,
         };
-        let wheel =
-            resolve_wheel_from_path(CONFIG_TARGETS_ENV_NAME, "ade_config", &target.wheel_path)?;
+        let wheel = resolve_file_from_path(
+            CONFIG_TARGETS_ENV_NAME,
+            "ade_config",
+            ".whl",
+            &target.wheel_path,
+        )?;
         if resolved.insert(scope.clone(), wheel).is_some() {
             return Err(AppError::config(format!(
                 "Duplicate config target '{}:{}' in {CONFIG_TARGETS_ENV_NAME}.",
@@ -217,64 +276,103 @@ fn resolve_config_targets(env: &EnvBag) -> Result<HashMap<Scope, PackageWheel>, 
     Ok(resolved)
 }
 
-fn resolve_required_wheel(
+fn resolve_required_file(
     env: &EnvBag,
-    wheel_path_env_name: &str,
-    wheel_prefix: &str,
-) -> Result<PackageWheel, AppError> {
-    let wheel_path = PathBuf::from(
-        read_optional_trimmed_string(env, wheel_path_env_name).ok_or_else(|| {
-            AppError::config(format!(
-                "Missing required environment variable: {wheel_path_env_name}"
-            ))
-        })?,
-    );
-    resolve_wheel_from_path(wheel_path_env_name, wheel_prefix, &wheel_path)
+    env_name: &str,
+    prefix: &str,
+    required_extension: &str,
+) -> Result<FileArtifact, AppError> {
+    let path = PathBuf::from(read_optional_trimmed_string(env, env_name).ok_or_else(|| {
+        AppError::config(format!("Missing required environment variable: {env_name}"))
+    })?);
+    resolve_file_from_path(env_name, prefix, required_extension, &path)
 }
 
-fn resolve_wheel_from_path(
-    wheel_path_env_name: &str,
-    wheel_prefix: &str,
-    wheel_path: &Path,
-) -> Result<PackageWheel, AppError> {
-    if !wheel_path.is_file() {
+fn resolve_file_from_path(
+    env_name: &str,
+    prefix: &str,
+    required_extension: &str,
+    path: &Path,
+) -> Result<FileArtifact, AppError> {
+    if !path.is_file() {
         return Err(AppError::config(format!(
-            "Python package wheel configured by {wheel_path_env_name} was not found at '{}'.",
-            wheel_path.display()
+            "Runtime artifact configured by {env_name} was not found at '{}'.",
+            path.display()
         )));
     }
 
-    let resolved_wheel_path = fs::canonicalize(wheel_path).map_err(|error| {
+    let resolved_path = fs::canonicalize(path).map_err(|error| {
         AppError::io_with_source(
             format!(
-                "Failed to resolve the Python package wheel from '{}'.",
-                wheel_path.display()
+                "Failed to resolve the runtime artifact from '{}'.",
+                path.display()
             ),
             error,
         )
     })?;
-    let filename = wheel_filename(&resolved_wheel_path)?;
-    let version = parse_wheel_version(&filename, wheel_prefix).ok_or_else(|| {
-        AppError::config(format!(
-            "Unable to determine the package version from '{}'.",
-            wheel_path.display()
-        ))
-    })?;
-    let bytes = fs::read(wheel_path).map_err(|error| {
+    let filename = wheel_filename(&resolved_path)?;
+    if !filename.ends_with(required_extension) {
+        return Err(AppError::config(format!(
+            "Runtime artifact '{}' must end with '{required_extension}'.",
+            path.display()
+        )));
+    }
+    let version =
+        parse_artifact_version(&filename, prefix, required_extension).ok_or_else(|| {
+            AppError::config(format!(
+                "Unable to determine the runtime artifact version from '{}'.",
+                path.display()
+            ))
+        })?;
+    let bytes = fs::read(path).map_err(|error| {
         AppError::io_with_source(
             format!(
-                "Failed to read the Python package wheel from '{}'.",
-                wheel_path.display()
+                "Failed to read the runtime artifact from '{}'.",
+                path.display()
             ),
             error,
         )
     })?;
 
-    Ok(PackageWheel {
+    Ok(FileArtifact {
         bytes,
         filename,
         version,
     })
+}
+
+fn resolve_agent_binary(env: &EnvBag) -> Result<FileArtifact, AppError> {
+    let configured = read_optional_trimmed_string(env, AGENT_BINARY_ENV_NAME)
+        .map(PathBuf::from)
+        .unwrap_or_else(default_agent_binary_path);
+    resolve_file_from_path(
+        AGENT_BINARY_ENV_NAME,
+        DEFAULT_AGENT_BINARY_BASENAME,
+        if cfg!(windows) { ".exe" } else { "" },
+        &configured,
+    )
+}
+
+fn default_agent_binary_path() -> PathBuf {
+    let mut path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+    path.set_file_name(if cfg!(windows) {
+        "ade-session-agent.exe"
+    } else {
+        "ade-session-agent"
+    });
+    path
+}
+
+fn resolve_python_toolchain(env: &EnvBag) -> Result<FileArtifact, AppError> {
+    let configured = read_optional_trimmed_string(env, PYTHON_TOOLCHAIN_BUNDLE_ENV_NAME)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_TOOLCHAIN_BUNDLE_PATH));
+    resolve_file_from_path(
+        PYTHON_TOOLCHAIN_BUNDLE_ENV_NAME,
+        "python",
+        ".tar.gz",
+        &configured,
+    )
 }
 
 fn wheel_filename(wheel_path: &Path) -> Result<String, AppError> {
@@ -284,16 +382,25 @@ fn wheel_filename(wheel_path: &Path) -> Result<String, AppError> {
         .map(ToOwned::to_owned)
         .ok_or_else(|| {
             AppError::config(format!(
-                "Python package wheel path '{}' does not end with a valid filename.",
+                "Runtime artifact path '{}' does not end with a valid filename.",
                 wheel_path.display()
             ))
         })
 }
 
-fn parse_wheel_version(filename: &str, wheel_prefix: &str) -> Option<String> {
-    let prefix = format!("{wheel_prefix}-");
+fn parse_artifact_version(filename: &str, prefix: &str, extension: &str) -> Option<String> {
+    if extension.is_empty() {
+        if filename == prefix {
+            return Some("dev".to_string());
+        }
+        return filename
+            .strip_prefix(&format!("{prefix}-"))
+            .map(ToOwned::to_owned);
+    }
+
+    let prefix = format!("{prefix}-");
     let remainder = filename.strip_prefix(&prefix)?;
-    let without_extension = remainder.strip_suffix(".whl")?;
+    let without_extension = remainder.strip_suffix(extension)?;
     without_extension.split('-').next().map(ToOwned::to_owned)
 }
 
@@ -311,35 +418,38 @@ fn derive_session_identifier(secret: &str, scope: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use crate::{runs::CreateRunRequest, scope::Scope};
+    use crate::runs::CreateRunRequest;
 
     use super::{
-        CONFIG_PACKAGE_NAME, ENGINE_PACKAGE_NAME, derive_session_identifier, parse_wheel_version,
-        public_session_path,
+        CONFIG_PACKAGE_NAME, ENGINE_PACKAGE_NAME, ScopeSessionId, derive_session_identifier,
+        parse_artifact_version, public_session_path, session_absolute_path,
     };
-    use crate::session::python::{RUN_SENTINEL_PREFIX, RunPythonConfig, build_run_code};
 
     #[test]
-    fn parses_wheel_versions_from_standard_filenames() {
+    fn parses_runtime_versions_from_standard_filenames() {
         assert_eq!(
-            parse_wheel_version("ade_engine-0.1.0-py3-none-any.whl", "ade_engine"),
+            parse_artifact_version("ade_engine-0.1.0-py3-none-any.whl", "ade_engine", ".whl"),
             Some("0.1.0".to_string())
         );
         assert_eq!(
-            parse_wheel_version("ade_config-2026.3.1-py3-none-any.whl", "ade_config"),
-            Some("2026.3.1".to_string())
+            parse_artifact_version("python-3.14.0-linux-x86_64.tar.gz", "python", ".tar.gz"),
+            Some("3.14.0".to_string())
+        );
+        assert_eq!(
+            parse_artifact_version("ade-session-agent", "ade-session-agent", ""),
+            Some("dev".to_string())
         );
     }
 
     #[test]
     fn session_identifiers_are_stable_and_scope_specific() {
-        let first = derive_session_identifier("secret", "workspace-a:config-v1");
-        let second = derive_session_identifier("secret", "workspace-a:config-v1");
-        let third = derive_session_identifier("secret", "workspace-b:config-v1");
+        let first = ScopeSessionId(derive_session_identifier("secret", "workspace-a:config-v1"));
+        let second = ScopeSessionId(derive_session_identifier("secret", "workspace-a:config-v1"));
+        let third = ScopeSessionId(derive_session_identifier("secret", "workspace-b:config-v1"));
 
         assert_eq!(first, second);
         assert_ne!(first, third);
-        assert!(first.starts_with("cfg-"));
+        assert!(first.as_str().starts_with("cfg-"));
     }
 
     #[test]
@@ -354,18 +464,6 @@ mod tests {
     }
 
     #[test]
-    fn scope_deserializes_from_workspace_and_config_paths() {
-        let scope = serde_json::from_value::<Scope>(json!({
-            "workspaceId": "workspace-a",
-            "configVersionId": "config-v1",
-        }))
-        .unwrap();
-
-        assert_eq!(scope.workspace_id, "workspace-a");
-        assert_eq!(scope.config_version_id, "config-v1");
-    }
-
-    #[test]
     fn public_session_paths_must_be_relative_and_not_internal() {
         assert_eq!(public_session_path("input.csv").unwrap(), "input.csv");
         assert_eq!(
@@ -374,28 +472,19 @@ mod tests {
         );
         assert!(public_session_path("/input.csv").is_err());
         assert!(public_session_path("../input.csv").is_err());
-        assert!(public_session_path(".ade-session-install.lock").is_err());
     }
 
     #[test]
-    fn run_template_uses_a_package_install_lock_and_runs_root() {
-        let code = build_run_code(&RunPythonConfig {
-            config_package_name: CONFIG_PACKAGE_NAME,
-            config_version: "2.0.0".to_string(),
-            config_wheel_path: "/mnt/data/ade_config-2.0.0-py3-none-any.whl".to_string(),
-            engine_package_name: ENGINE_PACKAGE_NAME,
-            engine_version: "1.0.0".to_string(),
-            engine_wheel_path: "/mnt/data/ade_engine-1.0.0-py3-none-any.whl".to_string(),
-            input_path: "/mnt/data/input.csv".to_string(),
-            install_lock_path: "/mnt/data/.ade-session-install.lock".to_string(),
-            runs_root: "/mnt/data/runs".to_string(),
-            sentinel_prefix: RUN_SENTINEL_PREFIX,
-        })
-        .unwrap();
+    fn session_absolute_paths_resolve_under_mnt_data() {
+        assert_eq!(
+            session_absolute_path(".ade/bin/ade-session-agent"),
+            "/mnt/data/.ade/bin/ade-session-agent"
+        );
+    }
 
-        assert!(code.contains("json.loads"));
-        assert!(code.contains("fcntl.flock"));
-        assert!(code.contains("tempfile.mkdtemp"));
-        assert!(code.contains("/mnt/data/runs"));
+    #[test]
+    fn package_names_remain_stable() {
+        assert_eq!(CONFIG_PACKAGE_NAME, "ade-config");
+        assert_eq!(ENGINE_PACKAGE_NAME, "ade-engine");
     }
 }

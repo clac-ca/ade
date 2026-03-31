@@ -4,19 +4,14 @@ use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
-use axum::{
-    extract::ws::{Message, WebSocket},
-    http::StatusCode,
-};
+use axum::http::StatusCode;
 use reqwest::Url;
 use sha2::{Digest, Sha256};
 use tokio::{
     io::AsyncWriteExt,
-    sync::{Semaphore, broadcast, oneshot, watch},
-    task::JoinHandle,
+    sync::{Semaphore, broadcast, watch},
 };
 use tracing::error;
 use uuid::Uuid;
@@ -30,22 +25,10 @@ use crate::{
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
     scope::Scope,
-    session::{
-        PythonExecution, SessionOperationMetadata, SessionOperationResult, SessionRuntimeArtifacts,
-        SessionService,
-    },
-    unix_time_ms,
+    session_agent::SessionAgentService,
 };
 
 use super::{
-    bootstrap::{
-        RunBootstrapConfig, bootstrap_artifact_access, local_input_path, local_output_dir,
-        render_bootstrap_code, session_path,
-    },
-    bridge::{
-        PendingRunBridgeManager, RunBridgeClientMessage, RunBridgeServerMessage,
-        create_bridge_token, parse_bridge_message, verify_bridge_token,
-    },
     events::{RunEventFeed, archive_event_line},
     models::{
         AsyncRunResponse, CreateDownloadRequest, CreateDownloadResponse, CreateRunRequest,
@@ -56,13 +39,12 @@ use super::{
 };
 
 const APP_URL_ENV_NAME: &str = "ADE_APP_URL";
-const BRIDGE_READY_TIMEOUT: Duration = Duration::from_secs(45);
-const BRIDGE_TOKEN_TTL_MS: u64 = 60_000;
 const BULK_UPLOAD_ACCESS_TTL_SECONDS: u64 = 1_800;
 const BULK_UPLOAD_MAX_FILE_COUNT: usize = 100;
 const BULK_UPLOAD_MAX_TOTAL_SIZE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 const RUN_ACCESS_TTL_SECONDS: u64 = 900;
-const RUN_EXECUTION_TIMEOUT_SECONDS: u64 = 900;
+const RUN_ACCESS_TIMEOUT_BUFFER_SECONDS: u64 = 60;
+const RUN_TIMEOUT_DEFAULT_SECONDS: u64 = 900;
 const RUN_MAX_CONCURRENT_DEFAULT: usize = 4;
 const RUN_MAX_CONCURRENT_ENV_NAME: &str = "ADE_RUN_MAX_CONCURRENT";
 const RUN_MAX_ATTEMPTS: i32 = 2;
@@ -74,11 +56,9 @@ pub struct RunService {
     active_runs: ActiveRunManager,
     app_url: Url,
     artifact_store: Arc<BlobArtifactStore>,
-    bridge_manager: PendingRunBridgeManager,
     run_store: RunStoreHandle,
     permits: Arc<Semaphore>,
-    session_secret: String,
-    session_service: Arc<SessionService>,
+    session_agent_service: Arc<SessionAgentService>,
 }
 
 #[derive(Clone)]
@@ -314,7 +294,7 @@ fn run_id_for_input(scope: &Scope, input_path: &str) -> String {
 impl RunService {
     pub fn from_env(
         env: &EnvBag,
-        session_service: Arc<SessionService>,
+        session_agent_service: Arc<SessionAgentService>,
         run_store: Arc<dyn RunStore>,
     ) -> Result<Self, AppError> {
         let app_url = read_optional_trimmed_string(env, APP_URL_ENV_NAME).ok_or_else(|| {
@@ -339,11 +319,9 @@ impl RunService {
             active_runs: ActiveRunManager::default(),
             app_url,
             artifact_store: Arc::new(blob_artifact_store_from_env(env)?),
-            bridge_manager: PendingRunBridgeManager::default(),
             run_store,
             permits: Arc::new(Semaphore::new(read_run_max_concurrent(env)?)),
-            session_secret: session_service.session_secret().to_string(),
-            session_service,
+            session_agent_service,
         })
     }
 
@@ -387,11 +365,12 @@ impl RunService {
         .await;
         let service = self.clone();
         let run_id_for_task = run_id.clone();
+        let run_id_for_log = run_id.clone();
         let input_path_for_task = input_path.clone();
         let output_path_for_task = output_path.clone();
         let scope_for_task = scope.clone();
         tokio::spawn(async move {
-            let _ = service
+            match service
                 .drive_run(
                     scope_for_task,
                     run_id_for_task,
@@ -400,7 +379,14 @@ impl RunService {
                     request.timeout_in_seconds,
                     active,
                 )
-                .await;
+                .await
+            {
+                Err(error) if !matches!(&error, AppError::Request(message) if message == "Run cancelled.") =>
+                {
+                    error!(run_id = %run_id_for_log, error = %error, "Run task exited with an error.");
+                }
+                _ => {}
+            }
         });
 
         Ok(AsyncRunResponse {
@@ -529,15 +515,6 @@ impl RunService {
             StatusCode::CONFLICT,
             "Run is not active on this API instance and cannot be cancelled.",
         ))
-    }
-
-    pub(crate) fn claim_bridge(
-        &self,
-        bridge_id: &str,
-        token: &str,
-    ) -> Result<oneshot::Sender<WebSocket>, AppError> {
-        verify_bridge_token(&self.session_secret, bridge_id, token, unix_time_ms())?;
-        self.bridge_manager.claim(bridge_id)
     }
 
     pub(crate) async fn subscribe_run_events(
@@ -688,6 +665,14 @@ fn validate_upload_batch(request: &CreateUploadBatchRequest) -> Result<(), AppEr
     }
 
     Ok(())
+}
+
+fn run_access_ttl_seconds(timeout_in_seconds: Option<u64>) -> u64 {
+    run_timeout_in_seconds(timeout_in_seconds).saturating_add(RUN_ACCESS_TIMEOUT_BUFFER_SECONDS)
+}
+
+fn run_timeout_in_seconds(timeout_in_seconds: Option<u64>) -> u64 {
+    timeout_in_seconds.unwrap_or(RUN_TIMEOUT_DEFAULT_SECONDS)
 }
 
 #[cfg(test)]

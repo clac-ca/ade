@@ -16,19 +16,17 @@ use crate::{error::AppError, unix_time_ms};
 static CHANNEL_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default, Clone)]
-pub(crate) struct PendingTerminalManager {
+pub(crate) struct PendingSessionAgentManager {
     inner: Arc<Mutex<HashMap<String, oneshot::Sender<WebSocket>>>>,
 }
 
-impl PendingTerminalManager {
+impl PendingSessionAgentManager {
     pub(crate) fn create(&self, channel_id: String) -> oneshot::Receiver<WebSocket> {
         let (bridge_tx, bridge_rx) = oneshot::channel();
-
         self.inner
             .lock()
-            .expect("pending terminal bridge lock poisoned")
+            .expect("session-agent rendezvous lock poisoned")
             .insert(channel_id, bridge_tx);
-
         bridge_rx
     }
 
@@ -36,10 +34,10 @@ impl PendingTerminalManager {
         let Some(bridge_tx) = self
             .inner
             .lock()
-            .expect("pending terminal bridge lock poisoned")
+            .expect("session-agent rendezvous lock poisoned")
             .remove(channel_id)
         else {
-            return Err(AppError::not_found("Terminal bridge not found."));
+            return Err(AppError::not_found("Session agent rendezvous not found."));
         };
 
         Ok(bridge_tx)
@@ -49,12 +47,16 @@ impl PendingTerminalManager {
         let _ = self
             .inner
             .lock()
-            .expect("pending terminal bridge lock poisoned")
+            .expect("session-agent rendezvous lock poisoned")
             .remove(channel_id);
     }
 }
 
-pub(crate) fn create_bridge_token(secret: &str, channel_id: &str, expires_at_ms: u64) -> String {
+pub(crate) fn create_rendezvous_token(
+    secret: &str,
+    channel_id: &str,
+    expires_at_ms: u64,
+) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key is valid");
     mac.update(channel_id.as_bytes());
     mac.update(b":");
@@ -63,7 +65,7 @@ pub(crate) fn create_bridge_token(secret: &str, channel_id: &str, expires_at_ms:
     format!("{expires_at_ms}.{}", hex::encode(signature))
 }
 
-pub(crate) fn verify_bridge_token(
+pub(crate) fn verify_rendezvous_token(
     secret: &str,
     channel_id: &str,
     token: &str,
@@ -72,29 +74,27 @@ pub(crate) fn verify_bridge_token(
     let Some((expires_at_ms, signature_hex)) = token.split_once('.') else {
         return Err(AppError::status(
             StatusCode::UNAUTHORIZED,
-            "Invalid terminal bridge token.",
+            "Invalid session agent token.",
         ));
     };
-    let expires_at_ms = expires_at_ms.parse::<u64>().map_err(|_| {
-        AppError::status(StatusCode::UNAUTHORIZED, "Invalid terminal bridge token.")
-    })?;
+    let expires_at_ms = expires_at_ms
+        .parse::<u64>()
+        .map_err(|_| AppError::status(StatusCode::UNAUTHORIZED, "Invalid session agent token."))?;
     if now_ms > expires_at_ms {
         return Err(AppError::status(
             StatusCode::UNAUTHORIZED,
-            "Terminal bridge token expired.",
+            "Session agent token expired.",
         ));
     }
 
-    let signature = hex::decode(signature_hex).map_err(|_| {
-        AppError::status(StatusCode::UNAUTHORIZED, "Invalid terminal bridge token.")
-    })?;
+    let signature = hex::decode(signature_hex)
+        .map_err(|_| AppError::status(StatusCode::UNAUTHORIZED, "Invalid session agent token."))?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key is valid");
     mac.update(channel_id.as_bytes());
     mac.update(b":");
     mac.update(expires_at_ms.to_string().as_bytes());
-    mac.verify_slice(&signature).map_err(|_| {
-        AppError::status(StatusCode::UNAUTHORIZED, "Invalid terminal bridge token.")
-    })?;
+    mac.verify_slice(&signature)
+        .map_err(|_| AppError::status(StatusCode::UNAUTHORIZED, "Invalid session agent token."))?;
 
     Ok(())
 }

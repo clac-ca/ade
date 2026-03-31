@@ -117,15 +117,25 @@ class SessionPoolEmulator:
         self,
         *,
         identifier: str,
-        code: str,
+        code: str | None = None,
+        shell_command: str | None = None,
         timeout_seconds: int = DEFAULT_EXECUTION_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         session = self._job_session(identifier)
-        result = self._run_python_code(
-            session,
-            code,
-            timeout_seconds=min(timeout_seconds, DEFAULT_EXECUTION_TIMEOUT_SECONDS),
-        )
+        if isinstance(shell_command, str):
+            result = self._run_shell_command(
+                session,
+                shell_command,
+                timeout_seconds=min(timeout_seconds, DEFAULT_EXECUTION_TIMEOUT_SECONDS),
+            )
+        elif isinstance(code, str):
+            result = self._run_python_code(
+                session,
+                code,
+                timeout_seconds=min(timeout_seconds, DEFAULT_EXECUTION_TIMEOUT_SECONDS),
+            )
+        else:
+            raise ValueError("code or shellCommand is required.")
         payload = {
             "status": "Succeeded" if result.exit_code == 0 else "Failed",
             "result": {
@@ -167,6 +177,36 @@ class SessionPoolEmulator:
             completed = subprocess.run(
                 command,
                 cwd=session.data_dir,
+                text=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+                check=False,
+            )
+        return CommandResult(
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            exit_code=completed.returncode,
+            execution_time_in_milliseconds=int(
+                (time.perf_counter() - started_at) * 1000
+            ),
+        )
+
+    def _run_shell_command(
+        self,
+        session: PythonSession,
+        shell_command: str,
+        timeout_seconds: int,
+    ) -> CommandResult:
+        command = _rewrite_mnt_path(self.mnt_data_path, shell_command)
+        started_at = time.perf_counter()
+        with self._execution_lock:
+            _point_mnt_data(self.mnt_root, session.data_dir)
+            completed = subprocess.run(
+                command,
+                cwd=session.data_dir,
+                shell=True,
                 text=True,
                 capture_output=True,
                 encoding="utf-8",
@@ -267,8 +307,9 @@ class SessionPoolRequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/executions":
                 body = self._read_json_body()
                 code = body.get("code")
-                if not isinstance(code, str):
-                    raise ValueError("code is required.")
+                shell_command = body.get("shellCommand")
+                if not isinstance(code, str) and not isinstance(shell_command, str):
+                    raise ValueError("code or shellCommand is required.")
                 timeout_seconds = _coerce_timeout(
                     body.get("timeoutInSeconds"),
                     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
@@ -276,7 +317,8 @@ class SessionPoolRequestHandler(BaseHTTPRequestHandler):
                 )
                 payload = self.server.emulator.execute(
                     identifier=identifier,
-                    code=code,
+                    code=code if isinstance(code, str) else None,
+                    shell_command=shell_command if isinstance(shell_command, str) else None,
                     timeout_seconds=timeout_seconds,
                 )
                 self._write_json(HTTPStatus.OK, payload)

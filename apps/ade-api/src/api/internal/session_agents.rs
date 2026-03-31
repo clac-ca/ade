@@ -11,21 +11,20 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{error::AppError, runs::RunService};
+use crate::{error::AppError, session_agent::SessionAgentService};
 
 pub fn router() -> Router<crate::api::AppState> {
-    Router::new().route("/run-bridges/{bridgeId}", get(connect))
+    Router::new().route("/session-agents/{channelId}", get(connect))
 }
 
 async fn connect(
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
-    State(run_service): State<Arc<RunService>>,
-    Path(bridge_id): Path<String>,
-    Query(query): Query<BridgeQuery>,
+    State(session_agent_service): State<Arc<SessionAgentService>>,
+    Path(channel_id): Path<String>,
+    Query(query): Query<SessionAgentQuery>,
 ) -> Result<Response, AppError> {
     let ws = ws.map_err(|error| AppError::request(error.to_string()))?;
-    let bridge_tx = run_service.claim_bridge(&bridge_id, &query.token)?;
-
+    let bridge_tx = session_agent_service.claim_rendezvous(&channel_id, &query.token)?;
     Ok(ws
         .max_message_size(1024 * 1024)
         .on_upgrade(move |socket| async move {
@@ -34,6 +33,6 @@ async fn connect(
 }
 
 #[derive(Deserialize)]
-struct BridgeQuery {
+struct SessionAgentQuery {
     token: String,
 }
