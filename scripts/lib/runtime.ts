@@ -43,7 +43,7 @@ function readOptionalTrimmedString(
 }
 
 async function runMain(
-  main: () => Promise<void>,
+  main: () => void | Promise<void>,
   options: {
     logger?: Logger;
     processHandle?: ProcessHandle;
