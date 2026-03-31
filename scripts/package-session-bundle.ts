@@ -116,7 +116,7 @@ function buildReverseConnectBinary(outputDirectory: string): void {
   );
 }
 
-async function main(): Promise<void> {
+function main(): void {
   rmSync(bundleRoot, {
     force: true,
     recursive: true,
@@ -137,6 +137,6 @@ async function main(): Promise<void> {
   buildPythonToolchain(`${bundleRoot}/python`);
 }
 
-void runMain(async () => {
-  await main();
+void runMain(() => {
+  main();
 });
