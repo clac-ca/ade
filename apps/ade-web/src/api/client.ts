@@ -13,12 +13,12 @@ export class ApiError extends Error {
 
 export function createApiClient(
   baseUrl: string,
-  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+  fetchImpl?: typeof globalThis.fetch,
 ) {
   return createClient<paths>({
     baseUrl,
     fetch(request) {
-      return fetchImpl(request);
+      return (fetchImpl ?? globalThis.fetch)(request);
     },
   });
 }

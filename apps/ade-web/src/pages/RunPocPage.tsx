@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { apiClient } from "../api/client";
+import type { components } from "../api/schema";
 
 type RunPocStatus =
   | "idle"
@@ -16,30 +18,18 @@ type RunScope = {
   workspaceId: string;
 };
 
-type ArtifactAccessInstruction = {
-  expiresAt: string;
-  headers: Record<string, string>;
-  method: string;
-  url: string;
-};
-
-type RunDetail = {
-  errorMessage?: string | null;
-  logPath?: string | null;
-  outputPath?: string | null;
-  status: string;
-};
+type ArtifactAccessInstruction =
+  components["schemas"]["ArtifactAccessInstruction"];
+type RunDetailResponse = components["schemas"]["RunDetailResponse"];
+type RunStatus = components["schemas"]["RunStatus"];
 
 type RunCreatedEvent = {
   runId: string;
-  status: string;
+  status: RunStatus;
 };
 
 type RunStatusEvent = {
-  operationId?: string | null;
   phase: string;
-  runId: string;
-  sessionGuid?: string | null;
   state: string;
 };
 
@@ -47,31 +37,21 @@ type RunLogEvent = {
   level: string;
   message: string;
   phase: string;
-  runId: string;
 };
 
 type RunErrorEvent = {
   message: string;
   phase?: string | null;
-  retriable: boolean;
-  runId: string;
 };
 
 type RunResultEvent = {
   outputPath: string;
-  runId: string;
-  validationIssues: Array<{
-    field: string;
-    message: string;
-    rowIndex: number;
-  }>;
 };
 
 type RunCompletedEvent = {
-  finalStatus: string;
+  finalStatus: RunStatus;
   logPath?: string | null;
   outputPath?: string | null;
-  runId: string;
 };
 
 type BulkItemStatus =
@@ -109,15 +89,6 @@ type PersistedState = {
   lastSeenSeq: number | null;
   runId: string;
   workspaceId: string;
-};
-
-type BulkUploadBatchResponse = {
-  batchId: string;
-  items: Array<{
-    fileId: string;
-    filePath: string;
-    upload: ArtifactAccessInstruction;
-  }>;
 };
 
 const STORAGE_KEY = "ade.run-poc";
@@ -307,21 +278,13 @@ function loadPersistedState(): PersistedState {
   }
 }
 
-function buildRunsPath(workspaceId: string, configVersionId: string): string {
-  return `/api/workspaces/${encodeURIComponent(workspaceId)}/configs/${encodeURIComponent(configVersionId)}/runs`;
-}
-
-function buildRunPath(scope: RunScope, runId: string): string {
-  return `${buildRunsPath(scope.workspaceId, scope.configVersionId)}/${encodeURIComponent(runId)}`;
-}
-
 function buildEventsPath(
   scope: RunScope,
   runId: string,
   after: number | null,
 ): string {
   const url = new URL(
-    `${buildRunPath(scope, runId)}/events`,
+    `/api/workspaces/${encodeURIComponent(scope.workspaceId)}/configs/${encodeURIComponent(scope.configVersionId)}/runs/${encodeURIComponent(runId)}/events`,
     window.location.origin,
   );
   if (after !== null) {
@@ -330,29 +293,7 @@ function buildEventsPath(
   return url.toString();
 }
 
-function buildCancelPath(scope: RunScope, runId: string): string {
-  return `${buildRunPath(scope, runId)}/cancel`;
-}
-
-function buildUploadsPath(
-  workspaceId: string,
-  configVersionId: string,
-): string {
-  return `/api/workspaces/${encodeURIComponent(workspaceId)}/configs/${encodeURIComponent(configVersionId)}/uploads`;
-}
-
-function buildUploadBatchesPath(
-  workspaceId: string,
-  configVersionId: string,
-): string {
-  return `${buildUploadsPath(workspaceId, configVersionId)}/batches`;
-}
-
-function buildDownloadsPath(scope: RunScope, runId: string): string {
-  return `${buildRunPath(scope, runId)}/downloads`;
-}
-
-function mapRunStatusToBulkStatus(status: string): BulkItemStatus {
+function mapRunStatusToBulkStatus(status: RunStatus): BulkItemStatus {
   switch (status) {
     case "pending":
       return "runPending";
@@ -360,9 +301,14 @@ function mapRunStatusToBulkStatus(status: string): BulkItemStatus {
       return "running";
     case "succeeded":
       return "succeeded";
-    default:
+    case "failed":
+    case "cancelled":
       return "failed";
   }
+}
+
+function isRunTerminalStatus(status: RunStatus): boolean {
+  return status === "cancelled" || status === "failed" || status === "succeeded";
 }
 
 function shouldPollBulkItem(item: BulkItem): boolean {
@@ -385,23 +331,24 @@ function bulkProgressLabel(item: BulkItem): string {
       ? item.size
       : item.uploadedBytes;
   const percent = Math.round((completedBytes / item.size) * 100);
-  return `${Math.max(0, Math.min(percent, 100))}%`;
+  return `${String(Math.max(0, Math.min(percent, 100)))}%`;
 }
 
 async function readErrorMessage(response: Response): Promise<string> {
+  const fallback = `Request failed with ${String(response.status)}.`;
+  const text = await response.text();
+  if (!text) {
+    return fallback;
+  }
+
   try {
-    const payload = (await response.json()) as {
+    const payload = JSON.parse(text) as {
       message?: string;
       error?: string;
     };
-    return (
-      payload.message ??
-      payload.error ??
-      `Request failed with ${String(response.status)}.`
-    );
+    return payload.message ?? payload.error ?? text;
   } catch {
-    const text = await response.text();
-    return text || `Request failed with ${String(response.status)}.`;
+    return text;
   }
 }
 
@@ -410,10 +357,7 @@ async function uploadToStorage(
   upload: ArtifactAccessInstruction,
   onProgress: (loadedBytes: number) => void,
 ) {
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(upload.headers)) {
-    headers.set(name, value);
-  }
+  const headers = new Headers(upload.headers);
   if (!headers.has("content-type") && file.type) {
     headers.set("content-type", file.type);
   }
@@ -436,24 +380,19 @@ export function RunPocPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const logViewportRef = useRef<HTMLPreElement | null>(null);
   const statusRef = useRef<RunPocStatus>("idle");
-  const bulkSessionRef = useRef<PersistedBulkSession | null>(
-    persistedState.bulkSession,
-  );
-  const bulkPollInFlightRef = useRef(false);
+  const bulkSessionRef = useRef(persistedState.bulkSession);
   const [workspaceId, setWorkspaceId] = useState(persistedState.workspaceId);
   const [configVersionId, setConfigVersionId] = useState(
     persistedState.configVersionId,
   );
   const [runId, setRunId] = useState(persistedState.runId);
-  const [activeRunScope, setActiveRunScope] = useState<RunScope | null>(
+  const [activeRunScope, setActiveRunScope] = useState(
     persistedState.activeRunScope,
   );
   const [lastSeenSeq, setLastSeenSeq] = useState(persistedState.lastSeenSeq);
   const [logPath, setLogPath] = useState<string | null>(null);
   const [outputPath, setOutputPath] = useState<string | null>(null);
-  const [bulkSession, setBulkSession] = useState<PersistedBulkSession | null>(
-    persistedState.bulkSession,
-  );
+  const [bulkSession, setBulkSession] = useState(persistedState.bulkSession);
   const [status, setStatus] = useState<RunPocStatus>("idle");
   const [statusMessage, setStatusMessage] = useState(
     "Select one file for SSE drill-down or multiple files for bounded bulk upload and polling.",
@@ -462,6 +401,15 @@ export function RunPocPage() {
     "Temporary ADE run proof of concept.",
     "Single-file runs stream over SSE. Multi-file runs upload in parallel and poll for status.",
   ]);
+  const bulkInProgress =
+    bulkSession?.items.some((item) => !isBulkTerminalStatus(item.status)) ??
+    false;
+  const formLocked =
+    bulkInProgress ||
+    status === "uploading" ||
+    status === "starting" ||
+    status === "connecting" ||
+    status === "streaming";
 
   useEffect(() => {
     bulkSessionRef.current = bulkSession;
@@ -503,15 +451,16 @@ export function RunPocPage() {
   }, []);
 
   useEffect(() => {
-    if (bulkSession?.batchId === undefined) {
+    if (!bulkSession) {
       return;
     }
 
-    let disposed = false;
+    let cancelled = false;
+    let timeoutId: number | null = null;
 
     async function pollBulkRuns() {
       const current = bulkSessionRef.current;
-      if (disposed || !current || bulkPollInFlightRef.current) {
+      if (cancelled || !current) {
         return;
       }
 
@@ -529,16 +478,13 @@ export function RunPocPage() {
         return;
       }
 
-      bulkPollInFlightRef.current = true;
+      let updates;
       try {
-        const updates = await Promise.all(
+        updates = await Promise.all(
           pendingItems.map(async (item) => {
-            const response = await fetch(
-              buildRunPath(current.scope, item.runId ?? ""),
-            );
-            if (!response.ok) {
+            if (!item.runId) {
               return {
-                errorMessage: await readErrorMessage(response),
+                errorMessage: "Run is missing an identifier.",
                 fileId: item.fileId,
                 logPath: item.logPath,
                 outputPath: item.outputPath,
@@ -546,81 +492,112 @@ export function RunPocPage() {
               };
             }
 
-            const detail = (await response.json()) as RunDetail;
-            const nextStatus = mapRunStatusToBulkStatus(detail.status);
+            const { data } = await apiClient.GET(
+              "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}",
+              {
+                params: {
+                  path: {
+                    configVersionId: current.scope.configVersionId,
+                    runId: item.runId,
+                    workspaceId: current.scope.workspaceId,
+                  },
+                },
+              },
+            );
+            if (!data) {
+              return {
+                errorMessage: "Failed to load run status.",
+                fileId: item.fileId,
+                logPath: item.logPath,
+                outputPath: item.outputPath,
+                status: "failed" as const,
+              };
+            }
+
+            const detail = data;
             return {
               errorMessage: detail.errorMessage ?? null,
               fileId: item.fileId,
               logPath: detail.logPath ?? item.logPath,
               outputPath: detail.outputPath ?? item.outputPath,
-              status: nextStatus,
+              status: mapRunStatusToBulkStatus(detail.status),
             };
           }),
         );
-
-        const nextItems = current.items.map((item) => {
-          const update = updates.find(
-            (candidate) => candidate.fileId === item.fileId,
-          );
-          if (!update) {
-            return item;
-          }
-
-          if (item.status !== update.status) {
-            appendLogLine(
-              `[bulk/run/${item.fileName}] ${item.status} -> ${update.status}`,
-            );
-          }
-
-          return {
-            ...item,
-            errorMessage: update.errorMessage,
-            logPath: update.logPath,
-            outputPath: update.outputPath,
-            status: update.status,
-          };
-        });
-        setBulkSession((previous) => {
-          if (previous?.batchId !== current.batchId) {
-            return previous;
-          }
-
-          return {
-            ...previous,
-            items: nextItems,
-          };
-        });
-
-        const hasFailures = nextItems.some((item) => item.status === "failed");
-        const allTerminal = nextItems.every((item) =>
-          isBulkTerminalStatus(item.status),
+      } catch (error) {
+        setRunStatus(
+          "error",
+          error instanceof Error ? error.message : "Failed to poll bulk runs.",
         );
-        if (allTerminal) {
-          setRunStatus(
-            hasFailures ? "error" : "completed",
-            hasFailures
-              ? "Bulk run finished with failures."
-              : "Bulk run finished successfully.",
-          );
-        } else if (statusRef.current !== "error") {
-          setRunStatus(
-            "starting",
-            "Bulk upload finished. Polling run progress every 5 seconds.",
+        return;
+      }
+
+      const nextItems = current.items.map((item) => {
+        const update = updates.find(
+          (candidate) => candidate.fileId === item.fileId,
+        );
+        if (!update) {
+          return item;
+        }
+
+        if (item.status !== update.status) {
+          appendLogLine(
+            `[bulk/run/${item.fileName}] ${item.status} -> ${update.status}`,
           );
         }
-      } finally {
-        bulkPollInFlightRef.current = false;
+
+        return {
+          ...item,
+          errorMessage: update.errorMessage,
+          logPath: update.logPath,
+          outputPath: update.outputPath,
+          status: update.status,
+        };
+      });
+      setBulkSession((previous) => {
+        if (previous?.batchId !== current.batchId) {
+          return previous;
+        }
+
+        return {
+          ...previous,
+          items: nextItems,
+        };
+      });
+
+      const hasFailures = nextItems.some((item) => item.status === "failed");
+      const allTerminal = nextItems.every((item) =>
+        isBulkTerminalStatus(item.status),
+      );
+      if (allTerminal) {
+        setRunStatus(
+          hasFailures ? "error" : "completed",
+          hasFailures
+            ? "Bulk run finished with failures."
+            : "Bulk run finished successfully.",
+        );
+        return;
       }
+
+      if (statusRef.current !== "error") {
+        setRunStatus(
+          "starting",
+          "Bulk upload finished. Polling run progress every 5 seconds.",
+        );
+      }
+
+      timeoutId = window.setTimeout(() => {
+        void pollBulkRuns();
+      }, BULK_POLL_INTERVAL_MS);
     }
 
     void pollBulkRuns();
-    const intervalId = window.setInterval(() => {
-      void pollBulkRuns();
-    }, BULK_POLL_INTERVAL_MS);
 
     return () => {
-      disposed = true;
-      window.clearInterval(intervalId);
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [bulkSession?.batchId]);
 
@@ -635,10 +612,8 @@ export function RunPocPage() {
     return activeRunScope ?? currentScope();
   }
 
-  function isActiveEventSource(
-    source: EventSource | null,
-  ): source is EventSource {
-    return source !== null && eventSourceRef.current === source;
+  function isActiveEventSource(source: EventSource): boolean {
+    return eventSourceRef.current === source;
   }
 
   function appendLogLine(line: string) {
@@ -649,13 +624,12 @@ export function RunPocPage() {
   }
 
   function closeEventSource() {
-    const current = eventSourceRef.current;
+    eventSourceRef.current?.close();
     eventSourceRef.current = null;
-    current?.close();
   }
 
   function noteSeq(value: string | null) {
-    if (value === null || value.trim() === "") {
+    if (!value?.trim()) {
       return;
     }
 
@@ -671,22 +645,11 @@ export function RunPocPage() {
     setStatusMessage(message);
   }
 
-  function parseEventData<T>(data: string): T | null {
-    let payload: unknown;
-    try {
-      payload = JSON.parse(data);
-    } catch {
-      return null;
-    }
-
-    return payload as T;
-  }
-
-  function addRunEventListener<T>(
+  function addRunEventListener(
     source: EventSource,
     eventName: string,
     invalidMessage: string,
-    onPayload: (payload: T) => void,
+    onPayload: (payload: unknown) => void,
   ) {
     source.addEventListener(eventName, (event) => {
       if (!isActiveEventSource(source)) {
@@ -695,8 +658,10 @@ export function RunPocPage() {
 
       const message = event as MessageEvent<string>;
       noteSeq(message.lastEventId);
-      const payload = parseEventData<T>(message.data);
-      if (!payload) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(message.data) as unknown;
+      } catch {
         setRunStatus("error", invalidMessage);
         return;
       }
@@ -724,67 +689,75 @@ export function RunPocPage() {
       appendLogLine(`[run] connected to ${targetRunId}`);
     });
 
-    addRunEventListener<RunCreatedEvent>(
+    addRunEventListener(
       source,
       "run.created",
       "Received an invalid run.created payload.",
       (payload) => {
-        setRunId(payload.runId);
-        setRunStatus("streaming", `Run ${payload.runId} created.`);
-        appendLogLine(`[run] created ${payload.runId} (${payload.status})`);
+        const created = payload as RunCreatedEvent;
+        setRunId(created.runId);
+        setRunStatus("streaming", `Run ${created.runId} created.`);
+        appendLogLine(`[run] created ${created.runId} (${created.status})`);
       },
     );
 
-    addRunEventListener<RunStatusEvent>(
+    addRunEventListener(
       source,
       "run.status",
       "Received an invalid run.status payload.",
       (payload) => {
-        setRunStatus("streaming", `Run phase: ${payload.phase}.`);
-        appendLogLine(`[${payload.phase}] ${payload.state}`);
+        const statusEvent = payload as RunStatusEvent;
+        setRunStatus("streaming", `Run phase: ${statusEvent.phase}.`);
+        appendLogLine(`[${statusEvent.phase}] ${statusEvent.state}`);
       },
     );
 
-    addRunEventListener<RunLogEvent>(
+    addRunEventListener(
       source,
       "run.log",
       "Received an invalid run.log payload.",
       (payload) => {
-        appendLogLine(`[${payload.phase}/${payload.level}] ${payload.message}`);
-      },
-    );
-
-    addRunEventListener<RunErrorEvent>(
-      source,
-      "run.error",
-      "Received an invalid run.error payload.",
-      (payload) => {
-        setRunStatus("error", payload.message);
+        const logEvent = payload as RunLogEvent;
         appendLogLine(
-          `[error${payload.phase ? `/${payload.phase}` : ""}] ${payload.message}`,
+          `[${logEvent.phase}/${logEvent.level}] ${logEvent.message}`,
         );
       },
     );
 
-    addRunEventListener<RunResultEvent>(
+    addRunEventListener(
+      source,
+      "run.error",
+      "Received an invalid run.error payload.",
+      (payload) => {
+        const errorEvent = payload as RunErrorEvent;
+        setRunStatus("error", errorEvent.message);
+        appendLogLine(
+          `[error${errorEvent.phase ? `/${errorEvent.phase}` : ""}] ${errorEvent.message}`,
+        );
+      },
+    );
+
+    addRunEventListener(
       source,
       "run.result",
       "Received an invalid run.result payload.",
       (payload) => {
-        setOutputPath(payload.outputPath);
-        appendLogLine(`[result] ${payload.outputPath}`);
+        const resultEvent = payload as RunResultEvent;
+        setOutputPath(resultEvent.outputPath);
+        appendLogLine(`[result] ${resultEvent.outputPath}`);
       },
     );
 
-    addRunEventListener<RunCompletedEvent>(
+    addRunEventListener(
       source,
       "run.completed",
       "Received an invalid run.completed payload.",
       (payload) => {
-        setLogPath(payload.logPath ?? null);
-        setOutputPath(payload.outputPath ?? null);
-        setRunStatus("completed", `Run ${payload.finalStatus}.`);
-        appendLogLine(`[complete] ${payload.finalStatus}`);
+        const completed = payload as RunCompletedEvent;
+        setLogPath(completed.logPath ?? null);
+        setOutputPath(completed.outputPath ?? null);
+        setRunStatus("completed", `Run ${completed.finalStatus}.`);
+        appendLogLine(`[complete] ${completed.finalStatus}`);
         source.close();
         if (eventSourceRef.current === source) {
           eventSourceRef.current = null;
@@ -809,27 +782,48 @@ export function RunPocPage() {
   }
 
   async function createRun(scope: RunScope, inputPath: string) {
-    const response = await fetch(
-      buildRunsPath(scope.workspaceId, scope.configVersionId),
+    const { data } = await apiClient.POST(
+      "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs",
       {
-        body: JSON.stringify({
+        body: {
           inputPath,
-        }),
-        headers: {
-          "Content-Type": "application/json",
         },
-        method: "POST",
+        params: {
+          path: {
+            configVersionId: scope.configVersionId,
+            workspaceId: scope.workspaceId,
+          },
+        },
       },
     );
-
-    if (!response.ok) {
-      throw new Error(await readErrorMessage(response));
+    if (!data) {
+      throw new Error("Failed to create the run.");
     }
 
-    return (await response.json()) as {
-      runId: string;
-      status: string;
-    };
+    return data;
+  }
+
+  async function loadRunDetail(
+    scope: RunScope,
+    targetRunId: string,
+  ): Promise<RunDetailResponse> {
+    const { data } = await apiClient.GET(
+      "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}",
+      {
+        params: {
+          path: {
+            configVersionId: scope.configVersionId,
+            runId: targetRunId,
+            workspaceId: scope.workspaceId,
+          },
+        },
+      },
+    );
+    if (!data) {
+      throw new Error("Failed to load run details.");
+    }
+
+    return data;
   }
 
   async function downloadArtifact(kind: "log" | "output") {
@@ -838,52 +832,60 @@ export function RunPocPage() {
       return;
     }
 
-    const scope = currentRunScope();
-    const response = await fetch(buildDownloadsPath(scope, runId), {
-      body: JSON.stringify({
-        artifact: kind,
-      }),
-      headers: {
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-    });
+    try {
+      const scope = currentRunScope();
+      const { data } = await apiClient.POST(
+        "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/downloads",
+        {
+          body: {
+            artifact: kind,
+          },
+          params: {
+            path: {
+              configVersionId: scope.configVersionId,
+              runId,
+              workspaceId: scope.workspaceId,
+            },
+          },
+        },
+      );
+      if (!data) {
+        setRunStatus("error", "Failed to create download link.");
+        return;
+      }
 
-    if (!response.ok) {
-      setRunStatus("error", await readErrorMessage(response));
-      return;
+      const artifactResponse = await fetch(data.download.url, {
+        headers: new Headers(data.download.headers),
+        method: data.download.method,
+      });
+
+      if (!artifactResponse.ok) {
+        setRunStatus("error", await readErrorMessage(artifactResponse));
+        return;
+      }
+
+      const blob = await artifactResponse.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = data.filePath.split("/").pop() ?? `${kind}.bin`;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(objectUrl);
+
+      if (kind === "log") {
+        setLogPath(data.filePath);
+      } else {
+        setOutputPath(data.filePath);
+      }
+      appendLogLine(`[download/${kind}] ${data.filePath}`);
+    } catch (error) {
+      setRunStatus(
+        "error",
+        error instanceof Error ? error.message : "Failed to download artifact.",
+      );
     }
-
-    const payload = (await response.json()) as {
-      download: ArtifactAccessInstruction;
-      filePath: string;
-    };
-    const artifactResponse = await fetch(payload.download.url, {
-      headers: new Headers(payload.download.headers),
-      method: payload.download.method,
-    });
-
-    if (!artifactResponse.ok) {
-      setRunStatus("error", await readErrorMessage(artifactResponse));
-      return;
-    }
-
-    const blob = await artifactResponse.blob();
-    const objectUrl = window.URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = objectUrl;
-    anchor.download = payload.filePath.split("/").pop() ?? `${kind}.bin`;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    window.URL.revokeObjectURL(objectUrl);
-
-    if (kind === "log") {
-      setLogPath(payload.filePath);
-    } else {
-      setOutputPath(payload.filePath);
-    }
-    appendLogLine(`[download/${kind}] ${payload.filePath}`);
   }
 
   function updateBulkItem(
@@ -942,29 +944,36 @@ export function RunPocPage() {
     ]);
 
     setRunStatus("uploading", "Requesting upload instructions...");
-    const uploadResponse = await fetch(
-      buildUploadsPath(scope.workspaceId, scope.configVersionId),
-      {
-        body: JSON.stringify({
-          contentType: file.type || undefined,
-          filename: file.name,
-        }),
-        headers: {
-          "Content-Type": "application/json",
+    let uploadPayload;
+    try {
+      const { data } = await apiClient.POST(
+        "/api/workspaces/{workspaceId}/configs/{configVersionId}/uploads",
+        {
+          body: {
+            contentType: file.type || null,
+            filename: file.name,
+          },
+          params: {
+            path: {
+              configVersionId: scope.configVersionId,
+              workspaceId: scope.workspaceId,
+            },
+          },
         },
-        method: "POST",
-      },
-    );
-
-    if (!uploadResponse.ok) {
-      setRunStatus("error", await readErrorMessage(uploadResponse));
+      );
+      if (!data) {
+        setRunStatus("error", "Failed to create upload link.");
+        return;
+      }
+      uploadPayload = data;
+    } catch (error) {
+      setRunStatus(
+        "error",
+        error instanceof Error ? error.message : "Failed to create upload link.",
+      );
       return;
     }
 
-    const uploadPayload = (await uploadResponse.json()) as {
-      filePath: string;
-      upload: ArtifactAccessInstruction;
-    };
     appendLogLine(`[upload] reserved ${uploadPayload.filePath}`);
 
     try {
@@ -980,9 +989,22 @@ export function RunPocPage() {
     appendLogLine(`[upload] completed ${uploadPayload.filePath}`);
     setRunStatus("starting", "Creating run...");
 
-    let payload: { runId: string; status: string };
     try {
-      payload = await createRun(scope, uploadPayload.filePath);
+      const payload = await createRun(scope, uploadPayload.filePath);
+      setRunId(payload.runId);
+      appendLogLine(`[run] accepted ${payload.runId} (${payload.status})`);
+      if (isRunTerminalStatus(payload.status)) {
+        const detail = await loadRunDetail(scope, payload.runId);
+        setLogPath(detail.logPath ?? null);
+        setOutputPath(detail.outputPath ?? null);
+        setRunStatus(
+          payload.status === "succeeded" ? "completed" : "error",
+          `Run ${payload.status}.`,
+        );
+        appendLogLine(`[complete] ${payload.status}`);
+        return;
+      }
+      connectToRun(payload.runId, null, scope);
     } catch (error) {
       setRunStatus(
         "error",
@@ -990,10 +1012,6 @@ export function RunPocPage() {
       );
       return;
     }
-
-    setRunId(payload.runId);
-    appendLogLine(`[run] accepted ${payload.runId} (${payload.status})`);
-    connectToRun(payload.runId, null, scope);
   }
 
   async function startBulkRun(files: File[]) {
@@ -1006,33 +1024,44 @@ export function RunPocPage() {
     setOutputPath(null);
     setLogLines([
       "Temporary ADE run proof of concept.",
-      `Selected ${files.length} input files for bulk upload.`,
+      `Selected ${String(files.length)} input files for bulk upload.`,
     ]);
 
     setRunStatus("uploading", "Requesting bulk upload instructions...");
-    const response = await fetch(
-      buildUploadBatchesPath(scope.workspaceId, scope.configVersionId),
-      {
-        body: JSON.stringify({
-          files: files.map((file) => ({
-            contentType: file.type || undefined,
-            filename: file.name,
-            size: file.size,
-          })),
-        }),
-        headers: {
-          "Content-Type": "application/json",
+    let payload;
+    try {
+      const response = await apiClient.POST(
+        "/api/workspaces/{workspaceId}/configs/{configVersionId}/uploads/batches",
+        {
+          body: {
+            files: files.map((file) => ({
+              contentType: file.type || null,
+              filename: file.name,
+              size: file.size,
+            })),
+          },
+          params: {
+            path: {
+              configVersionId: scope.configVersionId,
+              workspaceId: scope.workspaceId,
+            },
+          },
         },
-        method: "POST",
-      },
-    );
-
-    if (!response.ok) {
-      setRunStatus("error", await readErrorMessage(response));
+      );
+      if (!response.data) {
+        setRunStatus("error", "Failed to create bulk upload links.");
+        return;
+      }
+      payload = response.data;
+    } catch (error) {
+      setRunStatus(
+        "error",
+        error instanceof Error
+          ? error.message
+          : "Failed to create bulk upload links.",
+      );
       return;
     }
-
-    const payload = (await response.json()) as BulkUploadBatchResponse;
     if (payload.items.length !== files.length) {
       setRunStatus(
         "error",
@@ -1070,7 +1099,9 @@ export function RunPocPage() {
       items,
       scope,
     });
-    appendLogLine(`[bulk] reserved ${payload.batchId} (${files.length} files)`);
+    appendLogLine(
+      `[bulk] reserved ${payload.batchId} (${String(files.length)} files)`,
+    );
 
     for (
       let index = 0;
@@ -1120,12 +1151,20 @@ export function RunPocPage() {
 
             try {
               const run = await createRun(scope, reserved.filePath);
+              const detail = isRunTerminalStatus(run.status)
+                ? await loadRunDetail(scope, run.runId)
+                : null;
               updateBulkItem(reserved.fileId, (item) => ({
                 ...item,
+                errorMessage: detail?.errorMessage ?? item.errorMessage,
+                logPath: detail?.logPath ?? item.logPath,
+                outputPath: detail?.outputPath ?? item.outputPath,
                 runId: run.runId,
-                status: run.status === "running" ? "running" : "runPending",
+                status: mapRunStatusToBulkStatus(run.status),
               }));
-              appendLogLine(`[bulk/run/${file.name}] accepted ${run.runId}`);
+              appendLogLine(
+                `[bulk/run/${file.name}] accepted ${run.runId} (${run.status})`,
+              );
             } catch (error) {
               updateBulkItem(reserved.fileId, (item) => ({
                 ...item,
@@ -1179,15 +1218,32 @@ export function RunPocPage() {
       return;
     }
 
-    const response = await fetch(buildCancelPath(currentRunScope(), runId), {
-      method: "POST",
-    });
-    if (!response.ok) {
-      setRunStatus("error", await readErrorMessage(response));
-      return;
-    }
+    try {
+      const scope = currentRunScope();
+      const { error } = await apiClient.POST(
+        "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/cancel",
+        {
+          params: {
+            path: {
+              configVersionId: scope.configVersionId,
+              runId,
+              workspaceId: scope.workspaceId,
+            },
+          },
+        },
+      );
+      if (error) {
+        setRunStatus("error", error.message);
+        return;
+      }
 
-    appendLogLine(`[run] cancel requested for ${runId}`);
+      appendLogLine(`[run] cancel requested for ${runId}`);
+    } catch (error) {
+      setRunStatus(
+        "error",
+        error instanceof Error ? error.message : "Failed to cancel the run.",
+      );
+    }
   }
 
   return (
@@ -1212,6 +1268,7 @@ export function RunPocPage() {
             <span>Workspace ID</span>
             <input
               className="terminal-poc__input"
+              disabled={formLocked}
               name="workspaceId"
               onChange={(event) => {
                 applyScope({
@@ -1227,6 +1284,7 @@ export function RunPocPage() {
             <span>Config Version ID</span>
             <input
               className="terminal-poc__input"
+              disabled={formLocked}
               name="configVersionId"
               onChange={(event) => {
                 applyScope({
@@ -1242,6 +1300,7 @@ export function RunPocPage() {
             <span>Run ID</span>
             <input
               className="terminal-poc__input"
+              disabled={formLocked}
               name="runId"
               onChange={(event) => {
                 setRunId(event.target.value);
@@ -1254,6 +1313,7 @@ export function RunPocPage() {
             <span>Input Files</span>
             <input
               className="terminal-poc__input"
+              disabled={formLocked}
               multiple
               name="inputFile"
               ref={fileInputRef}
@@ -1264,6 +1324,7 @@ export function RunPocPage() {
           <div className="terminal-poc__actions run-poc__actions">
             <button
               className="terminal-poc__button"
+              disabled={formLocked}
               onClick={() => {
                 void startRun();
               }}
@@ -1273,6 +1334,7 @@ export function RunPocPage() {
             </button>
             <button
               className="terminal-poc__button terminal-poc__button--secondary"
+              disabled={!runId}
               onClick={() => {
                 if (!runId) {
                   setRunStatus("error", "Enter a run ID before resuming.");
@@ -1286,6 +1348,7 @@ export function RunPocPage() {
             </button>
             <button
               className="terminal-poc__button terminal-poc__button--secondary"
+              disabled={!runId || bulkInProgress}
               onClick={() => {
                 void cancelRun();
               }}

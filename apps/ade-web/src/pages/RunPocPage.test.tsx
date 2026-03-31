@@ -52,6 +52,12 @@ class MockEventSource {
   }
 }
 
+function requestFrom(input: RequestInfo | URL, init?: RequestInit): Request {
+  return input instanceof Request && init === undefined
+    ? input
+    : new Request(input, init);
+}
+
 describe("RunPocPage", () => {
   beforeEach(() => {
     MockEventSource.instances = [];
@@ -124,7 +130,7 @@ describe("RunPocPage", () => {
 
   it("uploads a bulk batch directly to storage and polls run status", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
+      const url = requestFrom(input).url;
       if (url.endsWith("/uploads/batches")) {
         return new Response(
           JSON.stringify({
@@ -163,8 +169,7 @@ describe("RunPocPage", () => {
 
       if (url.endsWith("/runs") && !url.includes("/downloads")) {
         const nextRunId = fetchMock.mock.calls.filter(([candidate]) => {
-          const candidateUrl =
-            typeof candidate === "string" ? candidate : candidate.toString();
+          const candidateUrl = requestFrom(candidate).url;
           return (
             candidateUrl.endsWith("/runs") &&
             !candidateUrl.includes("/downloads")
@@ -231,7 +236,7 @@ describe("RunPocPage", () => {
       </MemoryRouter>,
     );
 
-    const input = screen.getByLabelText("Input Files") as HTMLInputElement;
+    const input = screen.getByLabelText("Input Files");
     fireEvent.change(input, {
       target: {
         files: [
@@ -246,8 +251,7 @@ describe("RunPocPage", () => {
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.filter(([candidate]) => {
-          const url =
-            typeof candidate === "string" ? candidate : candidate.toString();
+          const url = requestFrom(candidate).url;
           return url.startsWith("https://blob.example.com/");
         }),
       ).toHaveLength(2);
@@ -267,15 +271,13 @@ describe("RunPocPage", () => {
       () => {
         expect(
           fetchMock.mock.calls.some(([candidate]) => {
-            const url =
-              typeof candidate === "string" ? candidate : candidate.toString();
+            const url = requestFrom(candidate).url;
             return url.endsWith("/runs/run-1");
           }),
         ).toBe(true);
         expect(
           fetchMock.mock.calls.some(([candidate]) => {
-            const url =
-              typeof candidate === "string" ? candidate : candidate.toString();
+            const url = requestFrom(candidate).url;
             return url.endsWith("/runs/run-2");
           }),
         ).toBe(true);
@@ -287,8 +289,9 @@ describe("RunPocPage", () => {
 
   it("uploads a single file directly to storage before creating the run", async () => {
     const fetchMock = vi.fn(
-      async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
+      async (...args: [RequestInfo | URL, RequestInit?]) => {
+        const [input] = args;
+        const url = requestFrom(input).url;
         if (url.endsWith("/uploads")) {
           return new Response(
             JSON.stringify({
@@ -336,7 +339,7 @@ describe("RunPocPage", () => {
       </MemoryRouter>,
     );
 
-    const input = screen.getByLabelText("Input Files") as HTMLInputElement;
+    const input = screen.getByLabelText("Input Files");
     fireEvent.change(input, {
       target: {
         files: [new File(["alpha"], "alpha.csv", { type: "text/csv" })],
@@ -346,21 +349,151 @@ describe("RunPocPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        "https://blob.example.com/alpha.csv?sas",
-        expect.objectContaining({
-          body: expect.any(File),
-          method: "PUT",
-        }),
-      );
+      expect(
+        fetchMock.mock.calls.some(
+          ([candidate, init]) =>
+            requestFrom(candidate, init).url ===
+              "https://blob.example.com/alpha.csv?sas" &&
+            requestFrom(candidate, init).method === "PUT",
+        ),
+      ).toBe(true);
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/uploads"),
-      expect.any(Object),
+    expect(
+      fetchMock.mock.calls.some(([candidate]) =>
+        requestFrom(candidate).url.endsWith("/uploads"),
+      ),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(([candidate]) =>
+        requestFrom(candidate).url.endsWith("/runs"),
+      ),
+    ).toBe(true);
+
+    const uploadIndex = fetchMock.mock.calls.findIndex(
+      ([candidate]) =>
+        requestFrom(candidate).url === "https://blob.example.com/alpha.csv?sas",
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/runs"),
-      expect.any(Object),
+    const createRunIndex = fetchMock.mock.calls.findIndex(([candidate]) =>
+      requestFrom(candidate).url.endsWith("/runs"),
     );
+    expect(uploadIndex).toBeGreaterThanOrEqual(0);
+    expect(createRunIndex).toBeGreaterThan(uploadIndex);
+  });
+
+  it("loads final run details instead of opening SSE for an already completed run", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL) => {
+        const url = requestFrom(input).url;
+        if (url.endsWith("/uploads")) {
+          return new Response(
+            JSON.stringify({
+              filePath:
+                "workspaces/workspace-a/configs/config-v1/uploads/upl_123/alpha.csv",
+              upload: {
+                expiresAt: "2026-03-30T12:00:00Z",
+                headers: { "content-type": "text/csv" },
+                method: "PUT",
+                url: "https://blob.example.com/alpha.csv?sas",
+              },
+            }),
+            {
+              headers: { "Content-Type": "application/json" },
+              status: 200,
+            },
+          );
+        }
+
+        if (url.endsWith("/runs") && !url.includes("/downloads")) {
+          return new Response(
+            JSON.stringify({
+              runId: "run-1",
+              status: "succeeded",
+            }),
+            {
+              headers: { "Content-Type": "application/json" },
+              status: 202,
+            },
+          );
+        }
+
+        if (url.endsWith("/runs/run-1")) {
+          return new Response(
+            JSON.stringify({
+              errorMessage: null,
+              inputPath:
+                "workspaces/workspace-a/configs/config-v1/uploads/upl_123/alpha.csv",
+              logPath:
+                "workspaces/workspace-a/configs/config-v1/runs/run-1/logs/events.ndjson",
+              outputPath:
+                "workspaces/workspace-a/configs/config-v1/runs/run-1/output/normalized.xlsx",
+              phase: null,
+              runId: "run-1",
+              status: "succeeded",
+              validationIssues: [],
+            }),
+            {
+              headers: { "Content-Type": "application/json" },
+              status: 200,
+            },
+          );
+        }
+
+        if (url.startsWith("https://blob.example.com/")) {
+          return new Response(null, { status: 201 });
+        }
+
+        throw new Error(`Unhandled fetch: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <RunPocPage />
+      </MemoryRouter>,
+    );
+
+    const input = screen.getByLabelText("Input Files");
+    fireEvent.change(input, {
+      target: {
+        files: [new File(["alpha"], "alpha.csv", { type: "text/csv" })],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Run succeeded.")).toBeInTheDocument();
+    });
+    expect(screen.getByText("completed")).toBeInTheDocument();
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
+  it("surfaces network failures from the API client during upload negotiation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("Network down");
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <RunPocPage />
+      </MemoryRouter>,
+    );
+
+    const input = screen.getByLabelText("Input Files");
+    fireEvent.change(input, {
+      target: {
+        files: [new File(["alpha"], "alpha.csv", { type: "text/csv" })],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Run" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Network down")).toBeInTheDocument();
+    });
   });
 });

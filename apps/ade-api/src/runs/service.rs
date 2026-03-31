@@ -12,6 +12,7 @@ use axum::{
     http::StatusCode,
 };
 use reqwest::Url;
+use sha2::{Digest, Sha256};
 use tokio::{
     io::AsyncWriteExt,
     sync::{Semaphore, broadcast, oneshot, watch},
@@ -262,14 +263,8 @@ async fn append_run_log_line(
         .map_err(|error| {
             AppError::io_with_source(format!("Failed to open '{}'.", spool_path.display()), error)
         })?;
-    let line = archive_event_line(run_id, event)?;
+    let line = format!("{}\n", archive_event_line(run_id, event)?);
     file.write_all(line.as_bytes()).await.map_err(|error| {
-        AppError::io_with_source(
-            format!("Failed to write '{}'.", spool_path.display()),
-            error,
-        )
-    })?;
-    file.write_all(b"\n").await.map_err(|error| {
         AppError::io_with_source(
             format!("Failed to write '{}'.", spool_path.display()),
             error,
@@ -308,6 +303,14 @@ fn run_log_spool_path(run_id: &str) -> PathBuf {
         .join(format!("{run_id}-{}.ndjson", Uuid::new_v4().simple()))
 }
 
+fn run_id_for_input(scope: &Scope, input_path: &str) -> String {
+    let digest = Sha256::digest(format!(
+        "run:{}:{}:{}",
+        scope.workspace_id, scope.config_version_id, input_path
+    ));
+    format!("run_{}", hex::encode(&digest[..16]))
+}
+
 impl RunService {
     pub fn from_env(
         env: &EnvBag,
@@ -344,10 +347,6 @@ impl RunService {
         })
     }
 
-    pub async fn initialize(&self) -> Result<(), AppError> {
-        self.artifact_store.initialize().await
-    }
-
     pub(crate) async fn create_run(
         &self,
         scope: Scope,
@@ -358,11 +357,26 @@ impl RunService {
             return Err(AppError::not_found("Run inputPath was not found."));
         }
 
-        let run_id = format!("run_{}", Uuid::new_v4().simple());
+        let run_id = run_id_for_input(&scope, &input_path);
+        if let Some(existing) = self.run_store.get_run(&scope, &run_id).await? {
+            return Ok(AsyncRunResponse {
+                run_id: existing.run_id,
+                status: existing.status,
+            });
+        }
+
         let output_path = output_path_for_run(&scope, &run_id);
-        self.run_store
-            .create_run(&scope, &run_id, &input_path)
-            .await?;
+        if let Err(error) = self.run_store.create_run(&scope, &run_id, &input_path).await {
+            if let Some(existing) = self.run_store.get_run(&scope, &run_id).await?
+                && existing.input_path == input_path
+            {
+                return Ok(AsyncRunResponse {
+                    run_id: existing.run_id,
+                    status: existing.status,
+                });
+            }
+            return Err(error);
+        }
         let active = self.active_runs.register(&run_id);
         self.emit_event(
             &active,
@@ -499,7 +513,7 @@ impl RunService {
     }
 
     pub(crate) async fn cancel_run(&self, scope: &Scope, run_id: &str) -> Result<(), AppError> {
-        let Some(mut run) = self.run_store.get_run(scope, run_id).await? else {
+        let Some(run) = self.run_store.get_run(scope, run_id).await? else {
             return Err(AppError::not_found("Run not found."));
         };
 
@@ -511,13 +525,10 @@ impl RunService {
             return Ok(());
         }
 
-        run.status = RunStatus::Cancelled;
-        run.error_message = Some("Run cancelled.".to_string());
-        run.log_path = None;
-        run.output_path = None;
-        run.validation_issues.clear();
-        self.run_store.save_run(&run).await?;
-        Ok(())
+        Err(AppError::status(
+            StatusCode::CONFLICT,
+            "Run is not active on this API instance and cannot be cancelled.",
+        ))
     }
 
     pub(crate) fn claim_bridge(
