@@ -325,10 +325,25 @@ mod tests {
     }
 
     fn fixture_run_service(session_service: Arc<SessionService>) -> Arc<RunService> {
-        let env = [(
-            "ADE_APP_URL".to_string(),
-            "http://127.0.0.1:8000".to_string(),
-        )]
+        let env = [
+            (
+                "ADE_APP_URL".to_string(),
+                "http://127.0.0.1:8000".to_string(),
+            ),
+            (
+                "ADE_BLOB_ACCOUNT_URL".to_string(),
+                "http://127.0.0.1:65535/devstoreaccount1".to_string(),
+            ),
+            (
+                "ADE_BLOB_CONTAINER".to_string(),
+                "documents".to_string(),
+            ),
+            (
+                "ADE_BLOB_ACCOUNT_KEY".to_string(),
+                "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
+                    .to_string(),
+            ),
+        ]
         .into_iter()
         .collect();
         Arc::new(

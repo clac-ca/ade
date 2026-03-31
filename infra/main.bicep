@@ -224,6 +224,10 @@ module app 'modules/container-app.bicep' = {
         value: storage.outputs.blobEndpoint
       }
       {
+        name: 'ADE_BLOB_PUBLIC_ACCOUNT_URL'
+        value: storage.outputs.blobEndpoint
+      }
+      {
         name: 'ADE_BLOB_CONTAINER'
         value: storage.outputs.blobContainerName
       }

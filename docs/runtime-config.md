@@ -22,31 +22,31 @@ ADE does not add any extra runtime environment variables of its own for that cha
 
 ## Artifact Storage Config
 
-ADE stores user uploads and persisted run outputs in one durable blob container per environment.
+ADE stores user uploads, persisted run outputs, and archived run logs in one durable blob container per environment.
 
 The running API is the trusted component. It chooses blob paths, validates scoped input paths, and mints short-lived exact-blob access grants.
 
 The runtime storage settings are:
 
-| Name                           | Required | Used by | Notes                                                                                                   |
-| ------------------------------ | -------- | ------- | ------------------------------------------------------------------------------------------------------- |
-| `ADE_BLOB_ACCOUNT_URL`         | Yes      | API     | Blob service endpoint used by the API for container management and durable artifact reads and writes.   |
-| `ADE_BLOB_CONTAINER`           | Yes      | API     | Private blob container that stores scoped uploads and run outputs.                                      |
-| `ADE_BLOB_PUBLIC_ACCOUNT_URL`  | No       | API     | Optional browser-facing blob endpoint used when upload SAS URLs must differ from the API/runtime host.  |
-| `ADE_BLOB_RUNTIME_ACCOUNT_URL` | No       | API     | Optional session-facing blob endpoint used when the session runtime needs a different reachable host.    |
-| `ADE_BLOB_CORS_ALLOWED_ORIGINS` | No      | API     | Comma-separated browser origins to allow on the blob service. Used for managed local Azurite setup.     |
-| `ADE_BLOB_ACCOUNT_KEY`         | Local    | API     | Shared key used only for local Azurite management and local exact-blob SAS minting.                     |
-| `ADE_ARTIFACTS_ROOT`           | Fallback | API     | Filesystem fallback for internal tests or emergency local use when blob settings are intentionally omitted. |
+| Name                            | Required | Used by | Notes                                                                                                                       |
+| ------------------------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `ADE_BLOB_ACCOUNT_URL`          | Yes      | API     | Blob service endpoint used by the API for container management and durable artifact reads and writes.                       |
+| `ADE_BLOB_CONTAINER`            | Yes      | API     | Private blob container that stores scoped uploads and run outputs.                                                          |
+| `ADE_BLOB_PUBLIC_ACCOUNT_URL`   | No       | API     | Optional browser-facing blob endpoint used when browser upload and download SAS URLs must differ from the API/runtime host. |
+| `ADE_BLOB_RUNTIME_ACCOUNT_URL`  | No       | API     | Optional session-facing blob endpoint used when the session runtime needs a different reachable host.                       |
+| `ADE_BLOB_CORS_ALLOWED_ORIGINS` | No       | API     | Comma-separated browser origins to allow on the blob service. Used for managed local Azurite setup.                         |
+| `ADE_BLOB_ACCOUNT_KEY`          | Local    | API     | Shared key used only for local Azurite management and local exact-blob SAS minting.                                         |
 
-`pnpm dev`, `pnpm start`, and managed `pnpm test:acceptance` do not use `ADE_ARTIFACTS_ROOT` in the normal path. They provision local Azurite automatically and inject the blob settings instead.
+ADE has no filesystem artifact mode. If blob settings are missing or invalid, the API fails fast.
 
 Deployed environments use Azure Blob Storage with user delegation SAS:
 
 - browser upload grants are exact-blob `PUT` URLs
+- browser download grants are exact-blob `GET` URLs
 - session download grants are exact-blob read-only URLs
 - session output grants are exact-blob create/write URLs
 - the browser and session never receive container-wide credentials
-- the API does not proxy upload or output bytes
+- the API does not proxy upload, download, or output bytes
 
 Local development uses Azurite instead of Azure Blob Storage. Azurite does not support user delegation SAS, so ADE uses the Azurite shared key only for the local emulator path. The browser and session still receive exact-blob SAS URLs, and the API still owns path selection and container setup.
 
@@ -104,6 +104,14 @@ The server listen address is not environment-driven.
 - The container image runs the API on `0.0.0.0:8000`.
 - If you need a different listen address, pass `--host` and `--port` to `./bin/ade-api`.
 
+## Run Scheduler Config
+
+ADE queues run execution inside the API and starts at most a small bounded number of runs at once.
+
+| Name                     | Required | Used by | Notes                                                             |
+| ------------------------ | -------- | ------- | ----------------------------------------------------------------- |
+| `ADE_RUN_MAX_CONCURRENT` | No       | API     | Maximum concurrent run executions per API instance. Defaults to 4. |
+
 ## Local Defaults
 
 `pnpm dev` is host-based and always uses local infrastructure:
@@ -135,15 +143,17 @@ Managed local blob settings are injected as:
   - `ADE_CONFIG_TARGETS` mapping both sample scopes to `/app/python/ade_config.whl`
 - If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they require `ADE_SESSION_SECRET`, `ADE_ENGINE_WHEEL_PATH`, and `ADE_CONFIG_TARGETS` to already be configured in `.env` and pass them through unchanged.
 
-Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, one shared session-pool endpoint, and an explicit `ADE_CONFIG_TARGETS` JSON string in the app container. The running app gets Blob Storage RBAC so it can mint user delegation SAS, but the session runtime does not receive broad storage access.
+Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, a lifecycle policy that tiers scoped block blobs to Cool after 30 days and Archive after 180 days, one shared session-pool endpoint, and an explicit `ADE_CONFIG_TARGETS` JSON string in the app container. The running app gets Blob Storage RBAC so it can mint user delegation SAS, but the session runtime does not receive broad storage access.
 
 ## Public Runtime API
 
 The public runtime routes are workspace/config scoped:
 
 - `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/uploads`
+- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/uploads/batches`
 - `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/runs`
 - `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}`
+- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/downloads`
 - `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/events`
 - `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/cancel`
 - `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/terminal`
@@ -152,7 +162,6 @@ The public runtime routes are workspace/config scoped:
 
 ```json
 {
-  "uploadId": "upl_123",
   "filePath": "workspaces/workspace-a/configs/config-v1/uploads/upl_123/input.xlsx",
   "upload": {
     "method": "PUT",
@@ -167,19 +176,60 @@ The public runtime routes are workspace/config scoped:
 }
 ```
 
+`POST /uploads/batches` returns one exact-blob upload grant per file while keeping path selection server-owned:
+
+```json
+{
+  "batchId": "bat_123",
+  "items": [
+    {
+      "fileId": "fil_123",
+      "filePath": "workspaces/workspace-a/configs/config-v1/uploads/batches/bat_123/fil_123/input-a.xlsx",
+      "upload": {
+        "method": "PUT",
+        "url": "https://<account>.blob.core.windows.net/<container>/workspaces/workspace-a/configs/config-v1/uploads/batches/bat_123/fil_123/input-a.xlsx?<sas>",
+        "headers": {
+          "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "x-ms-blob-type": "BlockBlob",
+          "x-ms-version": "<version>"
+        },
+        "expiresAt": "2026-03-29T21:30:00Z"
+      }
+    }
+  ]
+}
+```
+
 `POST /runs` is always async and returns `202 Accepted` with a `Location` header:
 
 ```json
 {
   "runId": "run_123",
-  "status": "pending",
-  "inputPath": "workspaces/workspace-a/configs/config-v1/uploads/upl_123/input.xlsx",
-  "outputPath": null,
-  "eventsUrl": "/api/workspaces/workspace-a/configs/config-v1/runs/run_123/events"
+  "status": "pending"
 }
 ```
 
-`GET /runs/{runId}/events` returns `text/event-stream` and replays persisted events by sequence. SSE event ids are the run event sequence numbers, so clients can resume with `Last-Event-ID` or the `after` query parameter.
+`POST /runs/{runId}/downloads` mints a short-lived exact-blob `GET` grant for the requested artifact:
+
+```json
+{
+  "artifact": "log"
+}
+```
+
+```json
+{
+  "filePath": "workspaces/workspace-a/configs/config-v1/runs/run_123/logs/events.ndjson",
+  "download": {
+    "method": "GET",
+    "url": "https://<account>.blob.core.windows.net/<container>/workspaces/workspace-a/configs/config-v1/runs/run_123/logs/events.ndjson?<sas>",
+    "headers": {},
+    "expiresAt": "2026-03-29T21:15:00Z"
+  }
+}
+```
+
+`GET /runs/{runId}/events` returns `text/event-stream` for the active in-memory event feed. SSE event ids are per-run sequence numbers, so clients can resume with `Last-Event-ID` or the `after` query parameter while the run is still active on the current API instance. Durable history is archived as `events.ndjson` and downloaded through `POST /runs/{runId}/downloads`. The terminal `run.completed` event includes the final `outputPath` and `logPath`, so the browser does not need an extra detail fetch just to discover artifact locations.
 
 `GET /terminal` is the only public WebSocket route. Terminal traffic is bidirectional. Run events are not multiplexed onto the terminal socket.
 
@@ -197,8 +247,17 @@ The product flow is:
 ```
 
 4. Poll `GET /runs/{runId}` for current state or reconnect safety.
-5. Stream logs and lifecycle changes from `GET /runs/{runId}/events` over SSE.
-6. Read the final `outputPath` from the run resource when the run succeeds.
+5. Stream logs and lifecycle changes from `GET /runs/{runId}/events` over SSE while the run is active.
+6. Read the final `outputPath` and `logPath` from the terminal `run.completed` event or `GET /runs/{runId}`.
+7. Download the output or archived NDJSON log directly from Blob Storage through `POST /runs/{runId}/downloads`.
+
+The bulk flow is the same model, just repeated with bounded fanout:
+
+1. Request one batch of exact-blob upload grants through `POST /uploads/batches`.
+2. Upload each file directly to Blob Storage from the browser with a bounded worker pool.
+3. Call `POST /runs` once per successfully uploaded file.
+4. Let the API scheduler hold excess runs in `pending` until a slot is free.
+5. Poll `GET /runs/{runId}` for each active bulk row.
 
 Public `/files` and `/executions` routes are removed. The session-pool `/files` and `/executions` endpoints remain internal implementation details for wheel staging and Python bootstrap execution.
 

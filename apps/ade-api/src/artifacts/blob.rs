@@ -1,6 +1,5 @@
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{collections::BTreeMap, path::Path, sync::Mutex};
 
-use async_trait::async_trait;
 use azure_core::credentials::TokenCredential;
 use azure_identity::{DeveloperToolsCredential, ManagedIdentityCredential};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -13,13 +12,14 @@ use reqwest::{
 use serde::Deserialize;
 use sha2::Sha256;
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
+use tokio_util::io::ReaderStream;
 
 use crate::error::AppError;
 
 use super::{
-    ArtifactAccessGrant, ArtifactMetadata, ArtifactStore, BLOB_ACCOUNT_KEY_ENV_NAME,
-    BLOB_ACCOUNT_URL_ENV_NAME, BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME, BLOB_RUNTIME_ACCOUNT_URL_ENV_NAME,
-    artifact_content_type, format_iso_8601, normalize_artifact_path,
+    ArtifactAccessGrant, ArtifactMetadata, BLOB_ACCOUNT_KEY_ENV_NAME, BLOB_ACCOUNT_URL_ENV_NAME,
+    BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME, BLOB_RUNTIME_ACCOUNT_URL_ENV_NAME, artifact_content_type,
+    format_iso_8601, normalize_artifact_path,
 };
 
 const BLOB_CORS_MAX_AGE_SECONDS: u64 = 3600;
@@ -41,13 +41,13 @@ enum BlobAuthMode {
     UserDelegation,
 }
 
-pub(super) struct BlobArtifactStore {
+pub(crate) struct BlobArtifactStore {
     account_name: String,
     account_url: Url,
     auth_mode: BlobAuthMode,
     client: Client,
     container: String,
-    local_blob_account_key: Option<String>,
+    shared_key: Option<String>,
     local_cors_allowed_origins: Vec<String>,
     local_setup_complete: Mutex<bool>,
     public_account_url: Url,
@@ -61,7 +61,7 @@ impl BlobArtifactStore {
         public_account_url: Option<String>,
         runtime_account_url: Option<String>,
         container: String,
-        local_blob_account_key: Option<String>,
+        shared_key: Option<String>,
         local_cors_allowed_origins: Vec<String>,
     ) -> Result<Self, AppError> {
         let account_url = Url::parse(&account_url).map_err(|error| {
@@ -71,7 +71,7 @@ impl BlobArtifactStore {
             )
         })?;
         let account_name = storage_account_name(&account_url)?;
-        let auth_mode = if local_blob_account_key.is_some() {
+        let auth_mode = if shared_key.is_some() {
             BlobAuthMode::SharedKey
         } else {
             BlobAuthMode::UserDelegation
@@ -89,7 +89,7 @@ impl BlobArtifactStore {
             auth_mode,
             client: Client::new(),
             container,
-            local_blob_account_key,
+            shared_key,
             local_cors_allowed_origins,
             local_setup_complete: Mutex::new(false),
             public_account_url,
@@ -126,9 +126,9 @@ impl BlobArtifactStore {
     }
 
     fn shared_key(&self) -> Result<&str, AppError> {
-        self.local_blob_account_key
+        self.shared_key
             .as_deref()
-            .ok_or_else(|| AppError::internal("Local Blob account key is not configured."))
+            .ok_or_else(|| AppError::internal("Blob shared key is not configured."))
     }
 
     async fn ensure_local_blob_ready(&self) -> Result<(), AppError> {
@@ -148,10 +148,14 @@ impl BlobArtifactStore {
         Ok(())
     }
 
+    pub(crate) async fn initialize(&self) -> Result<(), AppError> {
+        self.ensure_local_blob_ready().await
+    }
+
     async fn configure_local_cors(&self) -> Result<(), AppError> {
         let allowed_origins = self.local_cors_allowed_origins.join(",");
         let body = format!(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?><StorageServiceProperties><Cors><CorsRule><AllowedOrigins>{allowed_origins}</AllowedOrigins><AllowedMethods>GET,HEAD,OPTIONS,PUT</AllowedMethods><MaxAgeInSeconds>{BLOB_CORS_MAX_AGE_SECONDS}</MaxAgeInSeconds><ExposedHeaders>etag,x-ms-*</ExposedHeaders><AllowedHeaders>content-type,x-ms-*</AllowedHeaders></CorsRule></Cors><DefaultServiceVersion>{STORAGE_SERVICE_VERSION}</DefaultServiceVersion></StorageServiceProperties>"
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><StorageServiceProperties><Cors><CorsRule><AllowedOrigins>{allowed_origins}</AllowedOrigins><AllowedMethods>GET,HEAD,OPTIONS,PUT</AllowedMethods><MaxAgeInSeconds>{BLOB_CORS_MAX_AGE_SECONDS}</MaxAgeInSeconds><ExposedHeaders>etag,x-ms-*</ExposedHeaders><AllowedHeaders>*</AllowedHeaders></CorsRule></Cors><DefaultServiceVersion>{STORAGE_SERVICE_VERSION}</DefaultServiceVersion></StorageServiceProperties>"
         );
         let mut headers = blob_request_headers(Some("application/xml"))?;
         headers.insert(
@@ -312,6 +316,58 @@ impl BlobArtifactStore {
         })
     }
 
+    async fn send_authenticated_stream_request(
+        &self,
+        method: Method,
+        url: Url,
+        mut headers: HeaderMap,
+        body: reqwest::Body,
+        body_len: usize,
+    ) -> Result<reqwest::Response, AppError> {
+        headers.insert(
+            CONTENT_LENGTH,
+            HeaderValue::from_str(&body_len.to_string()).map_err(|error| {
+                AppError::internal_with_source(
+                    "Failed to encode the Azure Blob Storage content length.".to_string(),
+                    error,
+                )
+            })?,
+        );
+
+        let mut builder = self.client.request(method.clone(), url.clone());
+
+        match self.auth_mode {
+            BlobAuthMode::UserDelegation => {
+                builder = builder.bearer_auth(blob_access_token().await?);
+            }
+            BlobAuthMode::SharedKey => {
+                let authorization =
+                    self.shared_key_authorization(&method, &url, &headers, Some(body_len))?;
+                headers.insert(
+                    AUTHORIZATION,
+                    HeaderValue::from_str(&authorization).map_err(|error| {
+                        AppError::internal_with_source(
+                            "Failed to encode the local Blob authorization header.".to_string(),
+                            error,
+                        )
+                    })?,
+                );
+            }
+        }
+
+        builder
+            .headers(headers)
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| {
+                AppError::internal_with_source(
+                    "Failed to call Azure Blob Storage.".to_string(),
+                    error,
+                )
+            })
+    }
+
     async fn request(
         &self,
         method: Method,
@@ -321,6 +377,31 @@ impl BlobArtifactStore {
     ) -> Result<reqwest::Response, AppError> {
         let response = self
             .send_authenticated_request(method, url, headers, body)
+            .await?;
+
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(match status {
+            StatusCode::NOT_FOUND => AppError::not_found("Artifact not found."),
+            StatusCode::BAD_REQUEST | StatusCode::CONFLICT => AppError::request(body),
+            _ => AppError::status(status, body),
+        })
+    }
+
+    async fn request_stream(
+        &self,
+        method: Method,
+        url: Url,
+        headers: HeaderMap,
+        body: reqwest::Body,
+        body_len: usize,
+    ) -> Result<reqwest::Response, AppError> {
+        let response = self
+            .send_authenticated_stream_request(method, url, headers, body, body_len)
             .await?;
 
         if response.status().is_success() {
@@ -534,9 +615,18 @@ impl BlobArtifactStore {
     }
 }
 
-#[async_trait]
-impl ArtifactStore for BlobArtifactStore {
-    async fn create_browser_upload_access(
+impl BlobArtifactStore {
+    pub(crate) async fn create_browser_download_access(
+        &self,
+        path: &str,
+        expires_at: OffsetDateTime,
+    ) -> Result<ArtifactAccessGrant, AppError> {
+        self.ensure_local_blob_ready().await?;
+        self.create_access_grant(&self.public_account_url, path, "r", "GET", None, expires_at)
+            .await
+    }
+
+    pub(crate) async fn create_browser_upload_access(
         &self,
         path: &str,
         content_type: Option<&str>,
@@ -554,7 +644,7 @@ impl ArtifactStore for BlobArtifactStore {
         .await
     }
 
-    async fn create_download_access(
+    pub(crate) async fn create_download_access(
         &self,
         path: &str,
         expires_at: OffsetDateTime,
@@ -571,7 +661,7 @@ impl ArtifactStore for BlobArtifactStore {
         .await
     }
 
-    async fn create_upload_access(
+    pub(crate) async fn create_upload_access(
         &self,
         path: &str,
         content_type: Option<&str>,
@@ -589,33 +679,7 @@ impl ArtifactStore for BlobArtifactStore {
         .await
     }
 
-    async fn download_bytes(&self, path: &str) -> Result<(String, Vec<u8>), AppError> {
-        self.ensure_local_blob_ready().await?;
-        let normalized = normalize_artifact_path(path)?;
-        let response = self
-            .request(
-                Method::GET,
-                self.blob_url(&normalized)?,
-                blob_request_headers(None)?,
-                None,
-            )
-            .await?;
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("application/octet-stream")
-            .to_string();
-        let body = response.bytes().await.map_err(|error| {
-            AppError::internal_with_source(
-                "Failed to read the Azure Blob Storage response.".to_string(),
-                error,
-            )
-        })?;
-        Ok((content_type, body.to_vec()))
-    }
-
-    async fn metadata(&self, path: &str) -> Result<Option<ArtifactMetadata>, AppError> {
+    pub(crate) async fn metadata(&self, path: &str) -> Result<Option<ArtifactMetadata>, AppError> {
         self.ensure_local_blob_ready().await?;
         let normalized = normalize_artifact_path(path)?;
         let Some(response) = self
@@ -645,28 +709,43 @@ impl ArtifactStore for BlobArtifactStore {
         Ok(Some(ArtifactMetadata { content_type, size }))
     }
 
-    async fn upload_bytes(
+    pub(crate) async fn upload_file(
         &self,
         path: &str,
         content_type: Option<&str>,
-        content: Vec<u8>,
+        source_path: &Path,
     ) -> Result<ArtifactMetadata, AppError> {
         self.ensure_local_blob_ready().await?;
         let normalized = normalize_artifact_path(path)?;
         let resolved_content_type = artifact_content_type(&normalized, content_type);
+        let file = tokio::fs::File::open(source_path).await.map_err(|error| {
+            AppError::io_with_source(
+                format!("Failed to read '{}'.", source_path.display()),
+                error,
+            )
+        })?;
+        let metadata = file.metadata().await.map_err(|error| {
+            AppError::io_with_source(
+                format!("Failed to read metadata for '{}'.", source_path.display()),
+                error,
+            )
+        })?;
+        let size = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+        let stream = ReaderStream::new(file);
         let mut headers = blob_request_headers(Some(&resolved_content_type))?;
         headers.insert("x-ms-blob-type", HeaderValue::from_static("BlockBlob"));
-        self.request(
+        self.request_stream(
             Method::PUT,
             self.blob_url(&normalized)?,
             headers,
-            Some(content.clone()),
+            reqwest::Body::wrap_stream(stream),
+            size,
         )
         .await?;
 
         Ok(ArtifactMetadata {
             content_type: resolved_content_type,
-            size: content.len(),
+            size,
         })
     }
 }
@@ -682,7 +761,7 @@ fn access_headers(
 
     BTreeMap::from([
         (
-            "Content-Type".to_string(),
+            "content-type".to_string(),
             artifact_content_type(path, content_type),
         ),
         ("x-ms-blob-type".to_string(), "BlockBlob".to_string()),
@@ -1027,9 +1106,9 @@ mod tests {
     use time::{Duration as TimeDuration, OffsetDateTime};
 
     use super::{
-        UserDelegationKey, UserDelegationKeyResponse, canonicalized_resource_for_request,
-        format_iso_8601, shared_key_sas_string_to_sign, shared_key_string_to_sign,
-        user_delegation_string_to_sign,
+        BlobArtifactStore, UserDelegationKey, UserDelegationKeyResponse,
+        canonicalized_resource_for_request, format_iso_8601, shared_key_sas_string_to_sign,
+        shared_key_string_to_sign, user_delegation_string_to_sign,
     };
 
     #[test]
@@ -1173,6 +1252,56 @@ mod tests {
                 "comp:properties\n",
                 "restype:service"
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_grants_use_the_public_blob_base_url() {
+        let store = BlobArtifactStore::new(
+            "https://runtime.example.com".to_string(),
+            Some("https://public.example.com".to_string()),
+            Some("https://runtime.example.com".to_string()),
+            "documents".to_string(),
+            Some("c2hhcmVkLWtleQ==".to_string()),
+            Vec::new(),
+        )
+        .unwrap();
+        let expires_at = OffsetDateTime::UNIX_EPOCH + TimeDuration::minutes(15);
+
+        let upload = store
+            .create_access_grant(
+                &store.public_account_url,
+                "workspaces/a/configs/b/uploads/u/input.csv",
+                "cw",
+                "PUT",
+                Some("text/csv"),
+                expires_at,
+            )
+            .await
+            .unwrap();
+        let upload_url = Url::parse(&upload.url).unwrap();
+        assert_eq!(upload_url.host_str(), Some("public.example.com"));
+        assert_eq!(
+            upload_url.query_pairs().find(|(name, _)| name == "sp"),
+            Some(("sp".into(), "cw".into()))
+        );
+
+        let download = store
+            .create_access_grant(
+                &store.public_account_url,
+                "workspaces/a/configs/b/runs/run_1/logs/events.ndjson",
+                "r",
+                "GET",
+                None,
+                expires_at,
+            )
+            .await
+            .unwrap();
+        let download_url = Url::parse(&download.url).unwrap();
+        assert_eq!(download_url.host_str(), Some("public.example.com"));
+        assert_eq!(
+            download_url.query_pairs().find(|(name, _)| name == "sp"),
+            Some(("sp".into(), "r".into()))
         );
     }
 }

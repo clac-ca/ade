@@ -46,6 +46,7 @@ async fn main() {
             Arc::clone(&session_service),
             run_store,
         )?);
+        run_service.initialize().await?;
         let terminal_service = Arc::new(TerminalService::from_env(
             &env,
             Arc::clone(&session_service),

@@ -51,8 +51,8 @@ Lock these assumptions in:
 - the Container Apps subnet uses service endpoints for `Microsoft.Sql` and same-region `Microsoft.Storage`
 - Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a virtual network rule
 - the running app authenticates to Blob Storage with its system-assigned managed identity and mints user delegation SAS for exact blobs only
-- Blob Storage is the durable store for uploaded scope files and persisted run outputs
-- browser file upload goes directly to Blob Storage with short-lived exact-blob SAS URLs returned by the API
+- Blob Storage is the durable store for uploaded scope files, persisted run outputs, and archived run logs
+- browser file upload and download go directly to Blob Storage with short-lived exact-blob SAS URLs returned by the API
 - the session pool does not receive Blob Storage RBAC and does not choose blob paths
 - Blob Storage public network access stays enabled because browser clients upload directly to the blob endpoint, but the container stays private and access is still SAS-gated
 - Blob Storage shared-key auth stays disabled
@@ -68,6 +68,7 @@ The storage account is intentionally boring:
 - shared-key auth disabled in Azure
 - one private `documents` container
 - blob CORS configured in Bicep for the ADE app origin only
+- scoped block blobs tier to Cool after 30 days and Archive after 180 days
 - RBAC grants that let the running app mint user delegation SAS without giving the session runtime broad storage permissions
 
 ## Prerequisites

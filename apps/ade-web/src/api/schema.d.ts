@@ -116,6 +116,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["create_download"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/events": {
         parameters: {
             query?: never;
@@ -164,32 +180,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workspaces/{workspaceId}/configs/{configVersionId}/uploads/batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["create_upload_batch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ArtifactAccessInstruction: {
+            expiresAt: string;
+            headers: {
+                [key: string]: string;
+            };
+            method: string;
+            url: string;
+        };
         AsyncRunResponse: {
-            eventsUrl: string;
-            inputPath: string;
-            outputPath?: string | null;
             runId: string;
             status: components["schemas"]["RunStatus"];
+        };
+        CreateDownloadRequest: {
+            artifact: components["schemas"]["RunArtifactKind"];
+        };
+        CreateDownloadResponse: {
+            download: components["schemas"]["ArtifactAccessInstruction"];
+            filePath: string;
         };
         CreateRunRequest: {
             inputPath: string;
             /** Format: int64 */
             timeoutInSeconds?: number | null;
         };
-        CreateUploadRequest: {
+        CreateUploadBatchFile: {
             contentType?: string | null;
             filename: string;
             /** Format: int64 */
             size: number;
         };
+        CreateUploadBatchItem: {
+            fileId: string;
+            filePath: string;
+            upload: components["schemas"]["ArtifactAccessInstruction"];
+        };
+        CreateUploadBatchRequest: {
+            files: components["schemas"]["CreateUploadBatchFile"][];
+        };
+        CreateUploadBatchResponse: {
+            batchId: string;
+            items: components["schemas"]["CreateUploadBatchItem"][];
+        };
+        CreateUploadRequest: {
+            contentType?: string | null;
+            filename: string;
+        };
         CreateUploadResponse: {
             filePath: string;
-            upload: components["schemas"]["UploadInstruction"];
-            uploadId: string;
+            upload: components["schemas"]["ArtifactAccessInstruction"];
         };
         ErrorResponse: {
             error: string;
@@ -202,9 +261,12 @@ export interface components {
             status: string;
             version: string;
         };
+        /** @enum {string} */
+        RunArtifactKind: "log" | "output";
         RunDetailResponse: {
             errorMessage?: string | null;
             inputPath: string;
+            logPath?: string | null;
             outputPath?: string | null;
             phase?: null | components["schemas"]["RunPhase"];
             runId: string;
@@ -223,14 +285,6 @@ export interface components {
         ServiceStatusResponse: {
             service: string;
             status: string;
-        };
-        UploadInstruction: {
-            expiresAt: string;
-            headers: {
-                [key: string]: string;
-            };
-            method: string;
-            url: string;
         };
         VersionResponse: {
             service: string;
@@ -478,6 +532,73 @@ export interface operations {
             };
         };
     };
+    create_download: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id. */
+                workspaceId: string;
+                /** @description Config version id. */
+                configVersionId: string;
+                /** @description Run identifier */
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDownloadRequest"];
+            };
+        };
+        responses: {
+            /** @description Artifact download instructions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateDownloadResponse"];
+                };
+            };
+            /** @description Invalid download request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Artifact not ready */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     stream_run_events: {
         parameters: {
             query?: {
@@ -508,6 +629,15 @@ export interface operations {
             };
             /** @description Run not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Replay window expired */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -604,6 +734,62 @@ export interface operations {
                 };
             };
             /** @description Invalid upload request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Scope not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_upload_batch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id. */
+                workspaceId: string;
+                /** @description Config version id. */
+                configVersionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUploadBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Bulk upload instructions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateUploadBatchResponse"];
+                };
+            };
+            /** @description Invalid upload batch request */
             400: {
                 headers: {
                     [name: string]: unknown;

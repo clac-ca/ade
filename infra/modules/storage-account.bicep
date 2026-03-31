@@ -29,8 +29,7 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2024-01-01'
       corsRules: [
         {
           allowedHeaders: [
-            'content-type'
-            'x-ms-*'
+            '*'
           ]
           allowedMethods: [
             'GET'
@@ -55,6 +54,42 @@ resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/container
   name: blobContainerName
   properties: {
     publicAccess: 'None'
+  }
+}
+
+resource managementPolicy 'Microsoft.Storage/storageAccounts/managementPolicies@2024-01-01' = {
+  parent: storageAccount
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          enabled: true
+          name: 'tierScopedArtifacts'
+          type: 'Lifecycle'
+          definition: {
+            actions: {
+              baseBlob: {
+                tierToArchive: {
+                  daysAfterModificationGreaterThan: 180
+                }
+                tierToCool: {
+                  daysAfterModificationGreaterThan: 30
+                }
+              }
+            }
+            filters: {
+              blobTypes: [
+                'blockBlob'
+              ]
+              prefixMatch: [
+                '${blobContainerName}/workspaces/'
+              ]
+            }
+          }
+        }
+      ]
+    }
   }
 }
 

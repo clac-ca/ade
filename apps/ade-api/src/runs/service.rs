@@ -1,7 +1,8 @@
 mod execution;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -12,15 +13,18 @@ use axum::{
 };
 use reqwest::Url;
 use tokio::{
-    sync::{broadcast, oneshot, watch},
+    io::AsyncWriteExt,
+    sync::{Semaphore, broadcast, oneshot, watch},
     task::JoinHandle,
 };
+use tracing::error;
 use uuid::Uuid;
 
 use crate::{
     artifacts::{
-        ArtifactStoreHandle, artifact_store_from_env, output_path_for_run, upload_id,
-        upload_path_for_file, validate_input_path, verify_local_artifact_access,
+        BlobArtifactStore, blob_artifact_store_from_env, log_path_for_run, output_path_for_run,
+        upload_batch_id, upload_file_id, upload_id, upload_path_for_batch_file,
+        upload_path_for_file, validate_input_path,
     },
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
@@ -41,10 +45,11 @@ use super::{
         PendingRunBridgeManager, RunBridgeClientMessage, RunBridgeServerMessage,
         create_bridge_token, parse_bridge_message, verify_bridge_token,
     },
-    events::{RunEventFeed, run_events_path},
+    events::{RunEventFeed, archive_event_line},
     models::{
-        AsyncRunResponse, CreateRunRequest, CreateUploadRequest, CreateUploadResponse,
-        RunDetailResponse, RunValidationIssue, UploadInstruction,
+        AsyncRunResponse, CreateDownloadRequest, CreateDownloadResponse, CreateRunRequest,
+        CreateUploadBatchRequest, CreateUploadBatchResponse, CreateUploadRequest,
+        CreateUploadResponse, RunArtifactKind, RunDetailResponse, RunValidationIssue,
     },
     store::{RunEvent, RunEventPayload, RunPhase, RunStatus, RunStore, RunStoreHandle, StoredRun},
 };
@@ -52,17 +57,25 @@ use super::{
 const APP_URL_ENV_NAME: &str = "ADE_APP_URL";
 const BRIDGE_READY_TIMEOUT: Duration = Duration::from_secs(45);
 const BRIDGE_TOKEN_TTL_MS: u64 = 60_000;
+const BULK_UPLOAD_ACCESS_TTL_SECONDS: u64 = 1_800;
+const BULK_UPLOAD_MAX_FILE_COUNT: usize = 100;
+const BULK_UPLOAD_MAX_TOTAL_SIZE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 const RUN_ACCESS_TTL_SECONDS: u64 = 900;
 const RUN_EXECUTION_TIMEOUT_SECONDS: u64 = 900;
+const RUN_MAX_CONCURRENT_DEFAULT: usize = 4;
+const RUN_MAX_CONCURRENT_ENV_NAME: &str = "ADE_RUN_MAX_CONCURRENT";
 const RUN_MAX_ATTEMPTS: i32 = 2;
+const RUN_LOG_CONTENT_TYPE: &str = "application/x-ndjson";
+const RUN_REPLAY_WINDOW_SIZE: usize = 2_048;
 
 #[derive(Clone)]
 pub struct RunService {
     active_runs: ActiveRunManager,
     app_url: Url,
-    artifact_store: ArtifactStoreHandle,
+    artifact_store: Arc<BlobArtifactStore>,
     bridge_manager: PendingRunBridgeManager,
     run_store: RunStoreHandle,
+    permits: Arc<Semaphore>,
     session_secret: String,
     session_service: Arc<SessionService>,
 }
@@ -71,6 +84,14 @@ pub struct RunService {
 struct ActiveRunState {
     broadcaster: broadcast::Sender<RunEvent>,
     cancel_tx: watch::Sender<bool>,
+    events: Arc<tokio::sync::Mutex<ActiveRunBuffer>>,
+}
+
+struct ActiveRunBuffer {
+    log_spool_failed: bool,
+    next_seq: i64,
+    replay: VecDeque<RunEvent>,
+    spool_path: PathBuf,
 }
 
 #[derive(Clone, Default)]
@@ -85,18 +106,24 @@ impl ActiveRunManager {
         let state = ActiveRunState {
             broadcaster: broadcaster.clone(),
             cancel_tx,
+            events: Arc::new(tokio::sync::Mutex::new(ActiveRunBuffer {
+                log_spool_failed: false,
+                next_seq: 1,
+                replay: VecDeque::with_capacity(RUN_REPLAY_WINDOW_SIZE),
+                spool_path: run_log_spool_path(run_id),
+            })),
         };
 
         self.inner
             .lock()
             .expect("active run lock poisoned")
-            .insert(run_id.to_string(), state);
+            .insert(run_id.to_string(), state.clone());
 
         ActiveRunHandle {
             cancel_rx,
             manager: self.clone(),
             run_id: run_id.to_string(),
-            sender: broadcaster,
+            state,
         }
     }
 
@@ -115,12 +142,12 @@ impl ActiveRunManager {
         true
     }
 
-    fn subscribe(&self, run_id: &str) -> Option<broadcast::Receiver<RunEvent>> {
+    fn get(&self, run_id: &str) -> Option<ActiveRunState> {
         self.inner
             .lock()
             .expect("active run lock poisoned")
             .get(run_id)
-            .map(|state| state.broadcaster.subscribe())
+            .cloned()
     }
 }
 
@@ -128,7 +155,7 @@ struct ActiveRunHandle {
     cancel_rx: watch::Receiver<bool>,
     manager: ActiveRunManager,
     run_id: String,
-    sender: broadcast::Sender<RunEvent>,
+    state: ActiveRunState,
 }
 
 impl Drop for ActiveRunHandle {
@@ -139,6 +166,146 @@ impl Drop for ActiveRunHandle {
             .expect("active run lock poisoned")
             .remove(&self.run_id);
     }
+}
+
+impl ActiveRunState {
+    async fn archive_log(
+        &self,
+        run_id: &str,
+        artifact_store: &BlobArtifactStore,
+        log_path: &str,
+    ) -> Result<(), AppError> {
+        let spool_path = {
+            let events = self.events.lock().await;
+            if events.log_spool_failed {
+                return Err(AppError::internal(format!(
+                    "Run log spool failed for '{run_id}'."
+                )));
+            }
+            events.spool_path.clone()
+        };
+
+        artifact_store
+            .upload_file(log_path, Some(RUN_LOG_CONTENT_TYPE), &spool_path)
+            .await?;
+        if let Err(error) = tokio::fs::remove_file(&spool_path).await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            error!(
+                run_id,
+                path = %spool_path.display(),
+                error = %error,
+                "Failed to remove the run log spool file."
+            );
+        }
+        Ok(())
+    }
+
+    async fn emit_event(&self, run_id: &str, event: RunEventPayload) -> RunEvent {
+        let event = {
+            let mut events = self.events.lock().await;
+            let event = event.with_seq(events.next_seq);
+            events.next_seq += 1;
+            events.replay.push_back(event.clone());
+            while events.replay.len() > RUN_REPLAY_WINDOW_SIZE {
+                events.replay.pop_front();
+            }
+
+            if !events.log_spool_failed {
+                match append_run_log_line(&events.spool_path, run_id, &event).await {
+                    Ok(()) => {}
+                    Err(error) => {
+                        events.log_spool_failed = true;
+                        error!(
+                            run_id,
+                            path = %events.spool_path.display(),
+                            error = %error,
+                            "Failed to append a run event to the NDJSON spool."
+                        );
+                    }
+                }
+            }
+
+            event
+        };
+
+        let _ = self.broadcaster.send(event.clone());
+        event
+    }
+
+    async fn replay_events(&self, after_seq: Option<i64>) -> Result<Vec<RunEvent>, AppError> {
+        let events = self.events.lock().await;
+        replay_run_events(&events.replay, after_seq)
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<RunEvent> {
+        self.broadcaster.subscribe()
+    }
+}
+
+async fn append_run_log_line(
+    spool_path: &PathBuf,
+    run_id: &str,
+    event: &RunEvent,
+) -> Result<(), AppError> {
+    if let Some(parent) = spool_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            AppError::io_with_source(format!("Failed to create '{}'.", parent.display()), error)
+        })?;
+    }
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(spool_path)
+        .await
+        .map_err(|error| {
+            AppError::io_with_source(format!("Failed to open '{}'.", spool_path.display()), error)
+        })?;
+    let line = archive_event_line(run_id, event)?;
+    file.write_all(line.as_bytes()).await.map_err(|error| {
+        AppError::io_with_source(
+            format!("Failed to write '{}'.", spool_path.display()),
+            error,
+        )
+    })?;
+    file.write_all(b"\n").await.map_err(|error| {
+        AppError::io_with_source(
+            format!("Failed to write '{}'.", spool_path.display()),
+            error,
+        )
+    })?;
+    Ok(())
+}
+
+fn replay_run_events(
+    replay: &VecDeque<RunEvent>,
+    after_seq: Option<i64>,
+) -> Result<Vec<RunEvent>, AppError> {
+    let Some(after_seq) = after_seq else {
+        return Ok(replay.iter().cloned().collect());
+    };
+
+    if let Some(oldest_seq) = replay.front().map(RunEvent::seq)
+        && after_seq < oldest_seq.saturating_sub(1)
+    {
+        return Err(AppError::status(
+            StatusCode::CONFLICT,
+            "Run event replay window expired. Use the archived log artifact for full history.",
+        ));
+    }
+
+    Ok(replay
+        .iter()
+        .filter(|event| event.seq() > after_seq)
+        .cloned()
+        .collect())
+}
+
+fn run_log_spool_path(run_id: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join("ade-run-logs")
+        .join(format!("{run_id}-{}.ndjson", Uuid::new_v4().simple()))
 }
 
 impl RunService {
@@ -168,12 +335,17 @@ impl RunService {
         Ok(Self {
             active_runs: ActiveRunManager::default(),
             app_url,
-            artifact_store: artifact_store_from_env(env, session_service.session_secret())?,
+            artifact_store: Arc::new(blob_artifact_store_from_env(env)?),
             bridge_manager: PendingRunBridgeManager::default(),
             run_store,
+            permits: Arc::new(Semaphore::new(read_run_max_concurrent(env)?)),
             session_secret: session_service.session_secret().to_string(),
             session_service,
         })
+    }
+
+    pub async fn initialize(&self) -> Result<(), AppError> {
+        self.artifact_store.initialize().await
     }
 
     pub(crate) async fn create_run(
@@ -188,20 +360,17 @@ impl RunService {
 
         let run_id = format!("run_{}", Uuid::new_v4().simple());
         let output_path = output_path_for_run(&scope, &run_id);
-        let _ = self
-            .run_store
+        self.run_store
             .create_run(&scope, &run_id, &input_path)
             .await?;
+        let active = self.active_runs.register(&run_id);
         self.emit_event(
-            &run_id,
-            None,
+            &active,
             RunEventPayload::Created {
                 status: RunStatus::Pending,
             },
         )
-        .await?;
-
-        let active = self.active_runs.register(&run_id);
+        .await;
         let service = self.clone();
         let run_id_for_task = run_id.clone();
         let input_path_for_task = input_path.clone();
@@ -209,7 +378,7 @@ impl RunService {
         let scope_for_task = scope.clone();
         tokio::spawn(async move {
             let _ = service
-                .execute_run(
+                .drive_run(
                     scope_for_task,
                     run_id_for_task,
                     input_path_for_task,
@@ -221,9 +390,6 @@ impl RunService {
         });
 
         Ok(AsyncRunResponse {
-            events_url: run_events_path(&scope.workspace_id, &scope.config_version_id, &run_id),
-            input_path,
-            output_path: None,
             run_id,
             status: RunStatus::Pending,
         })
@@ -235,7 +401,7 @@ impl RunService {
         request: CreateUploadRequest,
     ) -> Result<CreateUploadResponse, AppError> {
         let upload_id = upload_id();
-        let file_path = upload_path_for_file(scope, &upload_id, &request.filename);
+        let file_path = upload_path_for_file(scope, &upload_id, &request.filename)?;
         let expires_at = time::OffsetDateTime::now_utc()
             + time::Duration::seconds(RUN_ACCESS_TTL_SECONDS as i64);
         let upload = self
@@ -245,13 +411,68 @@ impl RunService {
 
         Ok(CreateUploadResponse {
             file_path,
-            upload: UploadInstruction {
-                expires_at: upload.expires_at,
-                headers: upload.headers,
-                method: upload.method.to_string(),
-                url: upload.url,
-            },
-            upload_id,
+            upload: upload.into(),
+        })
+    }
+
+    pub(crate) async fn create_upload_batch(
+        &self,
+        scope: &Scope,
+        request: CreateUploadBatchRequest,
+    ) -> Result<CreateUploadBatchResponse, AppError> {
+        validate_upload_batch(&request)?;
+
+        let batch_id = upload_batch_id();
+        let expires_at = time::OffsetDateTime::now_utc()
+            + time::Duration::seconds(BULK_UPLOAD_ACCESS_TTL_SECONDS as i64);
+        let mut items = Vec::with_capacity(request.files.len());
+        for file in request.files {
+            let file_id = upload_file_id();
+            let file_path = upload_path_for_batch_file(scope, &batch_id, &file_id, &file.filename)?;
+            let upload = self
+                .artifact_store
+                .create_browser_upload_access(&file_path, file.content_type.as_deref(), expires_at)
+                .await?;
+            items.push(super::models::CreateUploadBatchItem {
+                file_id,
+                file_path,
+                upload: upload.into(),
+            });
+        }
+
+        Ok(CreateUploadBatchResponse { batch_id, items })
+    }
+
+    pub(crate) async fn create_download(
+        &self,
+        scope: &Scope,
+        run_id: &str,
+        request: CreateDownloadRequest,
+    ) -> Result<CreateDownloadResponse, AppError> {
+        let run = self
+            .run_store
+            .get_run(scope, run_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Run not found."))?;
+        let file_path = match request.artifact {
+            RunArtifactKind::Log => run
+                .log_path
+                .clone()
+                .ok_or_else(|| AppError::status(StatusCode::CONFLICT, "Run log is not ready."))?,
+            RunArtifactKind::Output => run.output_path.clone().ok_or_else(|| {
+                AppError::status(StatusCode::CONFLICT, "Run output is not ready.")
+            })?,
+        };
+        let expires_at = time::OffsetDateTime::now_utc()
+            + time::Duration::seconds(RUN_ACCESS_TTL_SECONDS as i64);
+        let download = self
+            .artifact_store
+            .create_browser_download_access(&file_path, expires_at)
+            .await?;
+
+        Ok(CreateDownloadResponse {
+            download: download.into(),
+            file_path,
         })
     }
 
@@ -268,6 +489,7 @@ impl RunService {
         Ok(RunDetailResponse {
             error_message: run.error_message.clone(),
             input_path: run.input_path.clone(),
+            log_path: run.log_path.clone(),
             output_path: run.output_path.clone(),
             phase: run.phase,
             run_id: run.run_id.clone(),
@@ -291,15 +513,10 @@ impl RunService {
 
         run.status = RunStatus::Cancelled;
         run.error_message = Some("Run cancelled.".to_string());
+        run.log_path = None;
+        run.output_path = None;
+        run.validation_issues.clear();
         self.run_store.save_run(&run).await?;
-        self.emit_event(
-            run_id,
-            None,
-            RunEventPayload::Complete {
-                final_status: RunStatus::Cancelled,
-            },
-        )
-        .await?;
         Ok(())
     }
 
@@ -310,21 +527,6 @@ impl RunService {
     ) -> Result<oneshot::Sender<WebSocket>, AppError> {
         verify_bridge_token(&self.session_secret, bridge_id, token, unix_time_ms())?;
         self.bridge_manager.claim(bridge_id)
-    }
-
-    pub(crate) async fn download_local_artifact(
-        &self,
-        path: &str,
-        token: &str,
-    ) -> Result<(String, Vec<u8>), AppError> {
-        let normalized = verify_local_artifact_access(
-            path,
-            &axum::http::Method::GET,
-            token,
-            &self.session_secret,
-            time::OffsetDateTime::now_utc(),
-        )?;
-        self.artifact_store.download_bytes(&normalized).await
     }
 
     pub(crate) async fn subscribe_run_events(
@@ -338,11 +540,24 @@ impl RunService {
             .get_run(scope, run_id)
             .await?
             .ok_or_else(|| AppError::not_found("Run not found."))?;
-        let replay = self.run_store.list_events_after(run_id, after_seq).await?;
+        let Some(active) = self.active_runs.get(run_id) else {
+            return if run.status.is_terminal() {
+                Ok(RunEventFeed {
+                    replay: Vec::new(),
+                    subscription: None,
+                })
+            } else {
+                Err(AppError::status(
+                    StatusCode::CONFLICT,
+                    "Run event stream is unavailable because the run is not active on this API instance.",
+                ))
+            };
+        };
+        let replay = active.replay_events(after_seq).await?;
         let subscription = if run.status.is_terminal() {
             None
         } else {
-            self.active_runs.subscribe(run_id)
+            Some(active.subscribe())
         };
 
         Ok(RunEventFeed {
@@ -350,37 +565,175 @@ impl RunService {
             subscription,
         })
     }
-
-    pub(crate) async fn upload_local_artifact(
+    async fn drive_run(
         &self,
-        path: &str,
-        token: &str,
-        content_type: Option<String>,
-        content: Vec<u8>,
+        scope: Scope,
+        run_id: String,
+        input_path: String,
+        output_path: String,
+        timeout_in_seconds: Option<u64>,
+        active: ActiveRunHandle,
     ) -> Result<(), AppError> {
-        let normalized = verify_local_artifact_access(
-            path,
-            &axum::http::Method::PUT,
-            token,
-            &self.session_secret,
-            time::OffsetDateTime::now_utc(),
-        )?;
-        self.artifact_store
-            .upload_bytes(&normalized, content_type.as_deref(), content)
-            .await?;
-        Ok(())
+        let mut cancel_rx = active.cancel_rx.clone();
+        let _permit = match tokio::select! {
+            permit = Arc::clone(&self.permits).acquire_owned() => permit,
+            _ = cancel_rx.changed() => return self.finish_cancelled(&scope, &run_id, &active).await,
+        } {
+            Ok(permit) => permit,
+            Err(_) => {
+                return self
+                    .finish_failure(
+                        &scope,
+                        &run_id,
+                        0,
+                        &input_path,
+                        execution::attempt_failure(
+                            AppError::internal("Run scheduler is unavailable."),
+                            Some(RunPhase::ExecuteRun),
+                        ),
+                        &active,
+                    )
+                    .await;
+            }
+        };
+
+        self.execute_run(
+            scope,
+            run_id,
+            input_path,
+            output_path,
+            timeout_in_seconds,
+            active,
+        )
+        .await
     }
 
-    async fn emit_event(
-        &self,
-        run_id: &str,
-        active: Option<&ActiveRunHandle>,
-        event: RunEventPayload,
-    ) -> Result<RunEvent, AppError> {
-        let event = self.run_store.append_event(run_id, event).await?;
-        if let Some(active) = active {
-            let _ = active.sender.send(event.clone());
+    async fn finalize_run_log(&self, scope: &Scope, run: &mut StoredRun, active: &ActiveRunHandle) {
+        let log_path = log_path_for_run(scope, &run.run_id);
+
+        match active
+            .state
+            .archive_log(&active.run_id, self.artifact_store.as_ref(), &log_path)
+            .await
+        {
+            Ok(()) => {
+                run.log_path = Some(log_path);
+            }
+            Err(error) => {
+                error!(
+                    run_id = %run.run_id,
+                    error = %error,
+                    "Failed to archive the run log."
+                );
+            }
         }
-        Ok(event)
+    }
+
+    async fn emit_event(&self, active: &ActiveRunHandle, event: RunEventPayload) {
+        active.state.emit_event(&active.run_id, event).await;
+    }
+}
+
+fn read_run_max_concurrent(env: &EnvBag) -> Result<usize, AppError> {
+    let Some(value) = read_optional_trimmed_string(env, RUN_MAX_CONCURRENT_ENV_NAME) else {
+        return Ok(RUN_MAX_CONCURRENT_DEFAULT);
+    };
+    let parsed = value.parse::<usize>().map_err(|error| {
+        AppError::config_with_source(
+            format!("{RUN_MAX_CONCURRENT_ENV_NAME} must be a positive integer."),
+            error,
+        )
+    })?;
+    if parsed == 0 {
+        return Err(AppError::config(format!(
+            "{RUN_MAX_CONCURRENT_ENV_NAME} must be greater than zero."
+        )));
+    }
+    Ok(parsed)
+}
+
+fn validate_upload_batch(request: &CreateUploadBatchRequest) -> Result<(), AppError> {
+    if request.files.is_empty() || request.files.len() > BULK_UPLOAD_MAX_FILE_COUNT {
+        return Err(AppError::request(format!(
+            "Bulk upload batches must include between 1 and {BULK_UPLOAD_MAX_FILE_COUNT} files."
+        )));
+    }
+
+    let total_size = request.files.iter().try_fold(0_u64, |total, file| {
+        if file.size == 0 {
+            return Err(AppError::request(
+                "Bulk upload files must declare a size greater than zero.",
+            ));
+        }
+        total.checked_add(file.size).ok_or_else(|| {
+            AppError::request("Bulk upload batch size exceeded the supported limit.")
+        })
+    })?;
+
+    if total_size > BULK_UPLOAD_MAX_TOTAL_SIZE_BYTES {
+        return Err(AppError::request(
+            "Bulk upload batches must not exceed 5 GiB in declared size.",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use axum::http::StatusCode;
+
+    use super::{RUN_REPLAY_WINDOW_SIZE, replay_run_events};
+    use crate::runs::store::{RunEvent, RunPhase, RunStatus};
+
+    #[test]
+    fn replay_buffer_rejects_requests_older_than_the_oldest_available_event() {
+        let replay = (2..=RUN_REPLAY_WINDOW_SIZE as i64 + 1)
+            .map(|seq| RunEvent::Log {
+                seq,
+                level: "info".to_string(),
+                message: format!("event {seq}"),
+                phase: RunPhase::ExecuteRun,
+            })
+            .collect::<VecDeque<_>>();
+
+        let error = replay_run_events(&replay, Some(0)).unwrap_err();
+        match error {
+            crate::error::AppError::Response { status, .. } => {
+                assert_eq!(status, StatusCode::CONFLICT);
+            }
+            other => panic!("expected conflict response, got {other}"),
+        }
+    }
+
+    #[test]
+    fn replay_buffer_returns_events_after_the_requested_sequence() {
+        let replay = VecDeque::from([
+            RunEvent::Created {
+                seq: 10,
+                status: RunStatus::Pending,
+            },
+            RunEvent::Status {
+                seq: 11,
+                phase: RunPhase::ExecuteRun,
+                state: "started".to_string(),
+                session_guid: None,
+                operation_id: None,
+                timings: None,
+            },
+            RunEvent::Complete {
+                seq: 12,
+                final_status: RunStatus::Succeeded,
+                log_path: None,
+                output_path: None,
+            },
+        ]);
+
+        let replayed = replay_run_events(&replay, Some(10)).unwrap();
+        assert_eq!(replayed.len(), 2);
+        assert_eq!(replayed[0].seq(), 11);
+        assert_eq!(replayed[1].seq(), 12);
     }
 }

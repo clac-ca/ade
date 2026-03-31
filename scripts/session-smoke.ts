@@ -26,11 +26,9 @@ type UploadResponse = {
     method: string;
     url: string;
   };
-  uploadId: string;
 };
 
 type RunCreatedResponse = {
-  eventsUrl: string;
   inputPath: string;
   outputPath: string | null;
   runId: string;
@@ -73,9 +71,7 @@ function hostBlobConfig() {
     throw new Error("Managed local Blob config was incomplete.");
   }
 
-  const accountUrl = new URL(
-    configuredAccountUrl,
-  );
+  const accountUrl = new URL(configuredAccountUrl);
   const accountName =
     accountUrl.hostname === "127.0.0.1" || accountUrl.hostname === "localhost"
       ? accountUrl.pathname.split("/").filter(Boolean)[0]
@@ -151,7 +147,6 @@ async function createUpload(
       body: JSON.stringify({
         contentType,
         filename,
-        size: content.byteLength,
       }),
       headers: {
         "content-type": "application/json",
@@ -159,11 +154,7 @@ async function createUpload(
       method: "POST",
     },
   );
-  await directUpload(
-    apiUrl("/"),
-    response.upload,
-    content,
-  );
+  await directUpload(apiUrl("/"), response.upload, content);
   return response;
 }
 
@@ -372,7 +363,9 @@ async function main(logger = createConsoleLogger()): Promise<void> {
         "workspaces/workspace-a/configs/config-v1/uploads/upl_",
       )
     ) {
-      throw new Error("First upload path was not scoped under workspace-a/config-v1.");
+      throw new Error(
+        "First upload path was not scoped under workspace-a/config-v1.",
+      );
     }
 
     const firstRun = await createRun(
@@ -420,7 +413,9 @@ async function main(logger = createConsoleLogger()): Promise<void> {
       2,
     );
     if (parseSseIds(resumedEvents).some((id) => id <= 2)) {
-      throw new Error("Run SSE resume replay did not honor the requested sequence.");
+      throw new Error(
+        "Run SSE resume replay did not honor the requested sequence.",
+      );
     }
 
     const firstOutputBytes = await fetchBlobBytes(firstDetail.outputPath);
@@ -440,7 +435,9 @@ async function main(logger = createConsoleLogger()): Promise<void> {
         "workspaces/workspace-b/configs/config-v2/uploads/upl_",
       )
     ) {
-      throw new Error("Second upload path was not scoped under workspace-b/config-v2.");
+      throw new Error(
+        "Second upload path was not scoped under workspace-b/config-v2.",
+      );
     }
 
     const secondRun = await createRun(
@@ -459,7 +456,9 @@ async function main(logger = createConsoleLogger()): Promise<void> {
         "workspaces/workspace-b/configs/config-v2/runs/",
       )
     ) {
-      throw new Error("Scoped run outputs were not isolated per workspace/config.");
+      throw new Error(
+        "Scoped run outputs were not isolated per workspace/config.",
+      );
     }
 
     logger.info("Local session smoke passed.");

@@ -1,9 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicI64, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
@@ -109,6 +106,12 @@ pub enum RunEvent {
         seq: i64,
         #[serde(rename = "finalStatus")]
         final_status: RunStatus,
+        #[serde(rename = "logPath")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        log_path: Option<String>,
+        #[serde(rename = "outputPath")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_path: Option<String>,
     },
     Error {
         seq: i64,
@@ -167,6 +170,12 @@ pub enum RunEventPayload {
     Complete {
         #[serde(rename = "finalStatus")]
         final_status: RunStatus,
+        #[serde(rename = "logPath")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        log_path: Option<String>,
+        #[serde(rename = "outputPath")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_path: Option<String>,
     },
     Error {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,21 +209,19 @@ pub enum RunEventPayload {
 }
 
 impl RunEventPayload {
-    fn event_type(&self) -> &'static str {
-        match self {
-            Self::Created { .. } => "created",
-            Self::Complete { .. } => "complete",
-            Self::Error { .. } => "error",
-            Self::Log { .. } => "log",
-            Self::Result { .. } => "result",
-            Self::Status { .. } => "status",
-        }
-    }
-
-    fn with_seq(self, seq: i64) -> RunEvent {
+    pub(crate) fn with_seq(self, seq: i64) -> RunEvent {
         match self {
             Self::Created { status } => RunEvent::Created { seq, status },
-            Self::Complete { final_status } => RunEvent::Complete { seq, final_status },
+            Self::Complete {
+                final_status,
+                log_path,
+                output_path,
+            } => RunEvent::Complete {
+                seq,
+                final_status,
+                log_path,
+                output_path,
+            },
             Self::Error {
                 phase,
                 message,
@@ -271,6 +278,8 @@ pub struct StoredRun {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_session_guid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phase: Option<RunPhase>,
@@ -281,22 +290,8 @@ pub struct StoredRun {
     pub config_version_id: String,
 }
 
-impl StoredRun {
-    pub fn scope(&self) -> Scope {
-        Scope {
-            workspace_id: self.workspace_id.clone(),
-            config_version_id: self.config_version_id.clone(),
-        }
-    }
-}
-
 #[async_trait]
 pub trait RunStore: Send + Sync {
-    async fn append_event(
-        &self,
-        run_id: &str,
-        event: RunEventPayload,
-    ) -> Result<RunEvent, AppError>;
     async fn create_run(
         &self,
         scope: &Scope,
@@ -304,28 +299,18 @@ pub trait RunStore: Send + Sync {
         input_path: &str,
     ) -> Result<StoredRun, AppError>;
     async fn get_run(&self, scope: &Scope, run_id: &str) -> Result<Option<StoredRun>, AppError>;
-    async fn last_event_seq(&self, run_id: &str) -> Result<Option<i64>, AppError>;
-    async fn list_events_after(
-        &self,
-        run_id: &str,
-        after_seq: Option<i64>,
-    ) -> Result<Vec<RunEvent>, AppError>;
     async fn save_run(&self, run: &StoredRun) -> Result<(), AppError>;
 }
 
 pub(crate) type RunStoreHandle = Arc<dyn RunStore>;
 
 pub struct InMemoryRunStore {
-    events: Mutex<HashMap<String, Vec<RunEvent>>>,
-    next_seq: AtomicI64,
     runs: Mutex<HashMap<String, StoredRun>>,
 }
 
 impl Default for InMemoryRunStore {
     fn default() -> Self {
         Self {
-            events: Mutex::new(HashMap::new()),
-            next_seq: AtomicI64::new(1),
             runs: Mutex::new(HashMap::new()),
         }
     }
@@ -333,21 +318,6 @@ impl Default for InMemoryRunStore {
 
 #[async_trait]
 impl RunStore for InMemoryRunStore {
-    async fn append_event(
-        &self,
-        run_id: &str,
-        event: RunEventPayload,
-    ) -> Result<RunEvent, AppError> {
-        let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
-        let event = event.with_seq(seq);
-        let mut events = self.events.lock().unwrap();
-        events
-            .entry(run_id.to_string())
-            .or_default()
-            .push(event.clone());
-        Ok(event)
-    }
-
     async fn create_run(
         &self,
         scope: &Scope,
@@ -359,6 +329,7 @@ impl RunStore for InMemoryRunStore {
             error_message: None,
             input_path: input_path.to_string(),
             last_session_guid: None,
+            log_path: None,
             output_path: None,
             phase: None,
             run_id: run_id.to_string(),
@@ -387,32 +358,6 @@ impl RunStore for InMemoryRunStore {
             .cloned())
     }
 
-    async fn last_event_seq(&self, run_id: &str) -> Result<Option<i64>, AppError> {
-        Ok(self
-            .events
-            .lock()
-            .unwrap()
-            .get(run_id)
-            .and_then(|events| events.last().map(RunEvent::seq)))
-    }
-
-    async fn list_events_after(
-        &self,
-        run_id: &str,
-        after_seq: Option<i64>,
-    ) -> Result<Vec<RunEvent>, AppError> {
-        Ok(self
-            .events
-            .lock()
-            .unwrap()
-            .get(run_id)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|event| after_seq.is_none_or(|seq| event.seq() > seq))
-            .collect())
-    }
-
     async fn save_run(&self, run: &StoredRun) -> Result<(), AppError> {
         self.runs
             .lock()
@@ -434,29 +379,6 @@ impl SqlRunStore {
 
 #[async_trait]
 impl RunStore for SqlRunStore {
-    async fn append_event(
-        &self,
-        run_id: &str,
-        event: RunEventPayload,
-    ) -> Result<RunEvent, AppError> {
-        let event_type = event.event_type();
-        let payload_json = serde_json::to_string(&event).map_err(|error| {
-            AppError::internal_with_source("Failed to encode a run event.", error)
-        })?;
-        let row = self
-            .database
-            .query_optional(
-                "INSERT INTO ade.run_events (run_id, event_type, payload_json) OUTPUT INSERTED.seq VALUES (@P1, @P2, @P3)",
-                &[&run_id, &event_type, &payload_json],
-            )
-            .await?
-            .ok_or_else(|| AppError::internal("Failed to insert a run event."))?;
-        let seq: i64 = row
-            .get(0)
-            .ok_or_else(|| AppError::internal("Failed to read the run event sequence."))?;
-        Ok(event.with_seq(seq))
-    }
-
     async fn create_run(
         &self,
         scope: &Scope,
@@ -468,6 +390,7 @@ impl RunStore for SqlRunStore {
             error_message: None,
             input_path: input_path.to_string(),
             last_session_guid: None,
+            log_path: None,
             output_path: None,
             phase: None,
             run_id: run_id.to_string(),
@@ -497,38 +420,11 @@ impl RunStore for SqlRunStore {
         let row = self
             .database
             .query_optional(
-                "SELECT run_id, workspace_id, config_version_id, input_path, status, phase, attempt_count, last_session_guid, output_path, validation_issues_json, error_message FROM ade.runs WHERE run_id = @P1 AND workspace_id = @P2 AND config_version_id = @P3",
+                "SELECT run_id, workspace_id, config_version_id, input_path, status, phase, attempt_count, last_session_guid, output_path, log_path, validation_issues_json, error_message FROM ade.runs WHERE run_id = @P1 AND workspace_id = @P2 AND config_version_id = @P3",
                 &[&run_id, &scope.workspace_id, &scope.config_version_id],
             )
             .await?;
         row.map(run_from_row).transpose()
-    }
-
-    async fn last_event_seq(&self, run_id: &str) -> Result<Option<i64>, AppError> {
-        let row = self
-            .database
-            .query_optional(
-                "SELECT MAX(seq) FROM ade.run_events WHERE run_id = @P1",
-                &[&run_id],
-            )
-            .await?;
-        Ok(row.and_then(|row| row.get(0)))
-    }
-
-    async fn list_events_after(
-        &self,
-        run_id: &str,
-        after_seq: Option<i64>,
-    ) -> Result<Vec<RunEvent>, AppError> {
-        let min_seq = after_seq.unwrap_or(0);
-        let rows = self
-            .database
-            .query_all(
-                "SELECT seq, event_type, payload_json FROM ade.run_events WHERE run_id = @P1 AND seq > @P2 ORDER BY seq ASC",
-                &[&run_id, &min_seq],
-            )
-            .await?;
-        rows.into_iter().map(run_event_from_row).collect()
     }
 
     async fn save_run(&self, run: &StoredRun) -> Result<(), AppError> {
@@ -542,7 +438,7 @@ impl RunStore for SqlRunStore {
             })?;
         self.database
             .execute(
-                "UPDATE ade.runs SET status = @P2, phase = @P3, attempt_count = @P4, last_session_guid = @P5, output_path = @P6, validation_issues_json = @P7, error_message = @P8, updated_at = SYSUTCDATETIME() WHERE run_id = @P1",
+                "UPDATE ade.runs SET status = @P2, phase = @P3, attempt_count = @P4, last_session_guid = @P5, output_path = @P6, log_path = @P7, validation_issues_json = @P8, error_message = @P9, updated_at = SYSUTCDATETIME() WHERE run_id = @P1",
                 &[
                     &run.run_id,
                     &run.status.as_str(),
@@ -550,6 +446,7 @@ impl RunStore for SqlRunStore {
                     &run.attempt_count,
                     &run.last_session_guid,
                     &run.output_path,
+                    &run.log_path,
                     &validation_issues_json,
                     &run.error_message,
                 ],
@@ -560,7 +457,7 @@ impl RunStore for SqlRunStore {
 
 fn run_from_row(row: tiberius::Row) -> Result<StoredRun, AppError> {
     let validation_issues_json: &str = row
-        .get(9)
+        .get(10)
         .ok_or_else(|| AppError::internal("Failed to read run validation issues."))?;
     let validation_issues = serde_json::from_str::<Vec<RunValidationIssue>>(validation_issues_json)
         .map_err(|error| {
@@ -594,34 +491,10 @@ fn run_from_row(row: tiberius::Row) -> Result<StoredRun, AppError> {
             .ok_or_else(|| AppError::internal("Failed to read run attempt count."))?,
         last_session_guid: row.get::<&str, _>(7).map(ToOwned::to_owned),
         output_path: row.get::<&str, _>(8).map(ToOwned::to_owned),
+        log_path: row.get::<&str, _>(9).map(ToOwned::to_owned),
         validation_issues,
-        error_message: row.get::<&str, _>(10).map(ToOwned::to_owned),
+        error_message: row.get::<&str, _>(11).map(ToOwned::to_owned),
     })
-}
-
-fn run_event_from_row(row: tiberius::Row) -> Result<RunEvent, AppError> {
-    let seq: i64 = row
-        .get(0)
-        .ok_or_else(|| AppError::internal("Failed to read the run event sequence."))?;
-    let payload_json: &str = row
-        .get(2)
-        .ok_or_else(|| AppError::internal("Failed to read the run event payload."))?;
-    let event_type: &str = row
-        .get(1)
-        .ok_or_else(|| AppError::internal("Failed to read the run event type."))?;
-    let payload = match event_type {
-        "complete" | "created" | "error" | "log" | "result" | "status" => {
-            serde_json::from_str::<RunEventPayload>(payload_json).map_err(|error| {
-                AppError::internal_with_source("Failed to decode a run event payload.", error)
-            })?
-        }
-        _ => {
-            return Err(AppError::internal(format!(
-                "Unsupported run event '{event_type}'."
-            )));
-        }
-    };
-    Ok(payload.with_seq(seq))
 }
 
 #[cfg(test)]
@@ -641,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn event_types_match_wire_names() {
+    fn event_payloads_apply_sequences() {
         assert_eq!(
             RunEventPayload::Status {
                 phase: RunPhase::UploadArtifacts,
@@ -650,15 +523,17 @@ mod tests {
                 operation_id: None,
                 timings: None,
             }
-            .event_type(),
-            "status"
+            .with_seq(7)
+            .seq(),
+            7
         );
         assert_eq!(
             RunEventPayload::Created {
                 status: RunStatus::Pending
             }
-            .event_type(),
-            "created"
+            .with_seq(8)
+            .seq(),
+            8
         );
     }
 }
