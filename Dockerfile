@@ -57,11 +57,12 @@ ENV ADE_PLATFORM_VERSION="${SERVICE_VERSION}"
 RUN --mount=type=cache,id=ade-api-target,target=/build/apps/ade-api/target \
     --mount=type=cache,id=ade-api-cargo-git,target=/usr/local/cargo/git/db \
     --mount=type=cache,id=ade-api-cargo-registry,target=/usr/local/cargo/registry \
-    cargo build --locked --release --bin ade-api --bin ade-migrate \
+    cargo build --locked --release --bin ade-api --bin ade-migrate --bin ade-session-agent \
     && install -Dm755 /build/apps/ade-api/target/release/ade-api /build/bin/ade-api \
-    && install -Dm755 /build/apps/ade-api/target/release/ade-migrate /build/bin/ade-migrate
+    && install -Dm755 /build/apps/ade-api/target/release/ade-migrate /build/bin/ade-migrate \
+    && install -Dm755 /build/apps/ade-api/target/release/ade-session-agent /build/bin/ade-session-agent
 
-FROM python:3.14-slim AS python-builder
+FROM python:3.14.0-slim AS python-builder
 
 WORKDIR /build
 
@@ -71,7 +72,8 @@ COPY packages/ade-engine ./packages/ade-engine
 COPY packages/ade-config ./packages/ade-config
 
 RUN python -m build --wheel --outdir /dist /build/packages/ade-engine \
-    && python -m build --wheel --outdir /dist /build/packages/ade-config
+    && python -m build --wheel --outdir /dist /build/packages/ade-config \
+    && tar -C /usr/local -czf /dist/python-3.14.0-linux-x86_64.tar.gz .
 
 FROM alpine:3.23
 
@@ -87,7 +89,9 @@ ENV ADE_ENGINE_WHEEL_PATH=/app/python/ade_engine.whl
 COPY --from=web-builder --chown=ade:ade /build/apps/ade-web/dist ./public
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-api ./bin/ade-api
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-migrate ./bin/ade-migrate
+COPY --from=api-builder --chown=ade:ade /build/bin/ade-session-agent ./bin/ade-session-agent
 COPY --from=python-builder --chown=ade:ade /dist/*.whl ./python/
+COPY --from=python-builder --chown=ade:ade /dist/python-3.14.0-linux-x86_64.tar.gz ./python/
 
 RUN engine_wheel="$(basename ./python/ade_engine-*.whl)" \
     && config_wheel="$(basename ./python/ade_config-*.whl)" \
