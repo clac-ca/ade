@@ -159,10 +159,6 @@ impl BlobArtifactStore {
         Ok(())
     }
 
-    pub(crate) async fn initialize(&self) -> Result<(), AppError> {
-        self.ensure_local_blob_ready().await
-    }
-
     async fn configure_local_cors(&self) -> Result<(), AppError> {
         let allowed_origins = self.local_cors_allowed_origins.join(",");
         let body = format!(
