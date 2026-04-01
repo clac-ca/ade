@@ -6,10 +6,9 @@
 
 1. The connector opens a WebSocket connection to a server.
 2. It authenticates with a bearer token in the `Authorization` header.
-3. It negotiates the `reverse-connect.v1` WebSocket subprotocol.
-4. It sends `connector.hello`.
-5. The server opens `exec` or `pty` channels with JSON-RPC requests.
-6. The connector streams input, output, resize, signal, and exit events for each channel.
+3. It sends `connector.hello`.
+4. The server opens `exec` or `pty` channels with JSON-RPC requests.
+5. The connector streams input, output, resize, signal, and exit events for each channel.
 
 ## CLI
 
@@ -29,4 +28,3 @@ Options:
 
 - [protocol.rs](./src/protocol.rs): JSON-RPC message and parameter types
 - [connector.rs](./src/connector.rs): connection and channel runtime
-

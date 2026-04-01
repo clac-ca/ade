@@ -37,7 +37,7 @@ async fn main() {
     };
 
     if let Err(error) = result {
-        tracing::error!(error = %error, "reverse-connect failed");
+        eprintln!("reverse-connect failed: {error}");
         std::process::exit(1);
     }
 }
