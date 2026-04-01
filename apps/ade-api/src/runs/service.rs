@@ -38,7 +38,7 @@ use super::{
     store::{RunEvent, RunEventPayload, RunPhase, RunStatus, RunStore, RunStoreHandle, StoredRun},
 };
 
-const APP_URL_ENV_NAME: &str = "ADE_APP_URL";
+const PUBLIC_API_URL_ENV_NAME: &str = "ADE_PUBLIC_API_URL";
 const BULK_UPLOAD_ACCESS_TTL_SECONDS: u64 = 1_800;
 const BULK_UPLOAD_MAX_FILE_COUNT: usize = 100;
 const BULK_UPLOAD_MAX_TOTAL_SIZE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
@@ -312,20 +312,23 @@ impl RunService {
         scope_session_service: Arc<ScopeSessionService>,
         run_store: Arc<dyn RunStore>,
     ) -> Result<Self, AppError> {
-        let app_url = read_optional_trimmed_string(env, APP_URL_ENV_NAME).ok_or_else(|| {
+        let app_url = read_optional_trimmed_string(env, PUBLIC_API_URL_ENV_NAME).ok_or_else(|| {
             AppError::config(format!(
-                "Missing required environment variable: {APP_URL_ENV_NAME}"
+                "Missing required environment variable: {PUBLIC_API_URL_ENV_NAME}"
             ))
         })?;
         let app_url = Url::parse(&app_url).map_err(|error| {
-            AppError::config_with_source("ADE_APP_URL is not a valid URL.".to_string(), error)
+            AppError::config_with_source(
+                "ADE_PUBLIC_API_URL is not a valid URL.".to_string(),
+                error,
+            )
         })?;
 
         match app_url.scheme() {
             "http" | "https" => {}
             _ => {
                 return Err(AppError::config(
-                    "ADE_APP_URL must use http or https.".to_string(),
+                    "ADE_PUBLIC_API_URL must use http or https.".to_string(),
                 ));
             }
         }

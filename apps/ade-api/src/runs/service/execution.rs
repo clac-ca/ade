@@ -1,78 +1,18 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 use super::*;
+use serde::Serialize;
 
 use crate::{
     artifacts::ArtifactAccessGrant,
     runs::models::ArtifactAccessInstruction,
     scope_session::{
         ChannelId, ChannelKind, ChannelOpenParams, ChannelStream, ScopeSessionEvent, SignalName,
+        ScopeSession,
     },
 };
 
-const PROCESS_RESULT_PREFIX: &str = "__ADE_PROCESS_RESULT__=";
-const RUN_SCRIPT: &str = r#"exec "$ADE_PYTHON_BIN" - <<'PY'
-import json
-import os
-import shutil
-from pathlib import Path
-from urllib.request import Request, urlopen
-
-from ade_engine import load_config
-from ade_engine.runner import process
-
-PROCESS_RESULT_PREFIX = "__ADE_PROCESS_RESULT__="
-
-def access(name: str) -> dict:
-    return json.loads(os.environ[name])
-
-def download(blob: dict, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    request = Request(blob["url"], headers=blob["headers"], method=blob["method"])
-    with urlopen(request) as response, destination.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-
-def upload(blob: dict, source: Path) -> None:
-    request = Request(
-        blob["url"],
-        data=source.read_bytes(),
-        headers=blob["headers"],
-        method=blob["method"],
-    )
-    with urlopen(request) as response:
-        response.read()
-
-input_path = Path(os.environ["ADE_LOCAL_INPUT_PATH"])
-output_dir = Path(os.environ["ADE_LOCAL_OUTPUT_DIR"])
-print(f"Downloading input to {input_path}", flush=True)
-download(access("ADE_INPUT_ACCESS_JSON"), input_path)
-
-print(f"Processing workbook into {output_dir}", flush=True)
-config = load_config("ade_config", name="ade-config")
-result = process(config=config, input_path=input_path, output_dir=output_dir)
-
-print(f"Uploading output from {result.output_path}", flush=True)
-upload(access("ADE_OUTPUT_ACCESS_JSON"), result.output_path)
-print(
-    PROCESS_RESULT_PREFIX
-    + json.dumps(
-        {
-            "outputPath": os.environ["ADE_OUTPUT_PATH"],
-            "validationIssues": [
-                {
-                    "rowIndex": issue.row_index,
-                    "field": issue.field,
-                    "message": issue.message,
-                }
-                for issue in result.validation_issues
-            ],
-        },
-        separators=(",", ":"),
-    ),
-    flush=True,
-)
-PY
-"#;
+const REMOTE_MANIFEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Clone, Debug)]
 struct AttemptSuccess {
@@ -85,6 +25,16 @@ struct AttemptSuccess {
 struct ProcessResult {
     output_path: String,
     validation_issues: Vec<RunValidationIssue>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunRequestPayload {
+    input_access: ArtifactAccessInstruction,
+    local_input_path: String,
+    local_output_dir: String,
+    output_access: ArtifactAccessInstruction,
+    output_path: String,
 }
 
 struct RunAttempt<'a> {
@@ -400,6 +350,72 @@ impl RunService {
                 status: RunStatus::Failed,
             })?;
 
+        let local_input_path = format!(
+            "{}/ade/runs/{}/attempt-{}/input/{}",
+            handle.session_root(),
+            attempt.run_id,
+            attempt.attempt,
+            uploaded_basename(attempt.input_path)
+        );
+        let local_output_dir = format!(
+            "{}/ade/runs/{}/attempt-{}/output",
+            handle.session_root(),
+            attempt.run_id,
+            attempt.attempt
+        );
+        let request_path = format!("/app/ade/runs/{}/attempt-{}/request.json", attempt.run_id, attempt.attempt);
+        let result_path = format!(
+            "{}/ade/runs/{}/attempt-{}/result.json",
+            handle.session_root(),
+            attempt.run_id,
+            attempt.attempt
+        );
+        let request_payload = RunRequestPayload {
+            input_access: resolve_artifact_access(&self.app_url, input_download).map_err(|error| {
+                AttemptFailure {
+                    emitted_error: false,
+                    error,
+                    phase: Some(RunPhase::ExecuteRun),
+                    retriable: false,
+                    status: RunStatus::Failed,
+                }
+            })?,
+            local_input_path,
+            local_output_dir,
+            output_access: resolve_artifact_access(&self.app_url, output_upload).map_err(|error| {
+                AttemptFailure {
+                    emitted_error: false,
+                    error,
+                    phase: Some(RunPhase::PersistOutputs),
+                    retriable: false,
+                    status: RunStatus::Failed,
+                }
+            })?,
+            output_path: attempt.output_path.to_string(),
+        };
+        let request_body = serde_json::to_vec(&request_payload).map_err(|error| AttemptFailure {
+            emitted_error: false,
+            error: AppError::internal_with_source("Failed to encode the run request payload.", error),
+            phase: Some(RunPhase::ExecuteRun),
+            retriable: false,
+            status: RunStatus::Failed,
+        })?;
+        self.scope_session_service
+            .upload_scope_file(
+                attempt.scope,
+                format!("ade/runs/{}/attempt-{}/request.json", attempt.run_id, attempt.attempt),
+                "application/json",
+                request_body,
+            )
+            .await
+            .map_err(|error| AttemptFailure {
+                emitted_error: false,
+                error,
+                phase: Some(RunPhase::ExecuteRun),
+                retriable: true,
+                status: RunStatus::Failed,
+            })?;
+
         let channel_id = ChannelId::new(format!(
             "run-{}-attempt-{}",
             attempt.run_id, attempt.attempt
@@ -408,47 +424,15 @@ impl RunService {
         handle
             .open_channel(ChannelOpenParams {
                 channel_id: channel_id.clone(),
-                command: RUN_SCRIPT.to_string(),
+                command: format!(
+                    "{} {} {} {}",
+                    shell_single_quote(handle.python_executable_path()),
+                    shell_single_quote(handle.run_script_path()),
+                    shell_single_quote(&request_path),
+                    shell_single_quote(&result_path),
+                ),
                 cwd: Some(handle.session_root().to_string()),
-                env: run_env(
-                    handle.python_executable_path().to_string(),
-                    resolve_artifact_access(&self.app_url, input_download).map_err(|error| {
-                        AttemptFailure {
-                            emitted_error: false,
-                            error,
-                            phase: Some(RunPhase::ExecuteRun),
-                            retriable: false,
-                            status: RunStatus::Failed,
-                        }
-                    })?,
-                    resolve_artifact_access(&self.app_url, output_upload).map_err(|error| {
-                        AttemptFailure {
-                            emitted_error: false,
-                            error,
-                            phase: Some(RunPhase::PersistOutputs),
-                            retriable: false,
-                            status: RunStatus::Failed,
-                        }
-                    })?,
-                    format!(
-                        "/mnt/data/work/input/{}/attempt-{}/{}",
-                        attempt.run_id,
-                        attempt.attempt,
-                        uploaded_basename(attempt.input_path)
-                    ),
-                    format!(
-                        "/mnt/data/runs/{}/attempt-{}/output",
-                        attempt.run_id, attempt.attempt
-                    ),
-                    attempt.output_path.to_string(),
-                )
-                .map_err(|error| AttemptFailure {
-                    emitted_error: false,
-                    error,
-                    phase: Some(RunPhase::ExecuteRun),
-                    retriable: false,
-                    status: RunStatus::Failed,
-                })?,
+                env: Default::default(),
                 kind: ChannelKind::Exec,
                 pty: None,
             })
@@ -482,8 +466,6 @@ impl RunService {
         tokio::pin!(timeout);
         let mut stdout_lines = LineBuffer::default();
         let mut stderr_lines = LineBuffer::default();
-        let mut success = None;
-
         loop {
             tokio::select! {
                 _ = cancel_rx.changed() => {
@@ -520,19 +502,6 @@ impl RunService {
                             match stream {
                                 ChannelStream::Stdout => {
                                     for line in stdout_lines.push(&data) {
-                                        if let Some(process_result) = parse_process_result(&line).map_err(|error| AttemptFailure {
-                                            emitted_error: false,
-                                            error,
-                                            phase: Some(RunPhase::PersistOutputs),
-                                            retriable: false,
-                                            status: RunStatus::Failed,
-                                        })? {
-                                            success = Some(AttemptSuccess {
-                                                output_path: process_result.output_path,
-                                                validation_issues: process_result.validation_issues,
-                                            });
-                                            continue;
-                                        }
                                         self.handle_runtime_event(
                                             &mut run,
                                             active,
@@ -565,7 +534,14 @@ impl RunService {
                             }
                         }
                         Ok(ScopeSessionEvent::Exit { channel_id: event_channel_id, code }) if event_channel_id == channel_id => {
-                            if let (Some(0), Some(success)) = (code, success) {
+                            if code == Some(0) {
+                                let success = self.read_attempt_result(&handle, attempt.run_id, attempt.attempt, &result_path).await.map_err(|error| AttemptFailure {
+                                    emitted_error: false,
+                                    error,
+                                    phase: Some(RunPhase::PersistOutputs),
+                                    retriable: false,
+                                    status: RunStatus::Failed,
+                                })?;
                                 self.handle_runtime_event(
                                     &mut run,
                                     active,
@@ -675,6 +651,95 @@ impl RunService {
             }
         }
     }
+
+    async fn read_attempt_result(
+        &self,
+        handle: &ScopeSession,
+        run_id: &str,
+        attempt: i32,
+        result_path: &str,
+    ) -> Result<AttemptSuccess, AppError> {
+        let channel_id = ChannelId::new(format!("run-result-{run_id}-attempt-{attempt}"));
+        let mut events = handle.subscribe();
+        handle
+            .open_channel(ChannelOpenParams {
+                channel_id: channel_id.clone(),
+                command: format!("cat {}", shell_single_quote(result_path)),
+                cwd: Some(handle.session_root().to_string()),
+                env: Default::default(),
+                kind: ChannelKind::Exec,
+                pty: None,
+            })
+            .await?;
+
+        let timeout = tokio::time::sleep(REMOTE_MANIFEST_TIMEOUT);
+        tokio::pin!(timeout);
+        let mut stdout = LineBuffer::default();
+        let mut stderr = LineBuffer::default();
+
+        loop {
+            tokio::select! {
+                event = events.recv() => {
+                    match event {
+                        Ok(ScopeSessionEvent::Data { channel_id: event_channel_id, data, stream }) if event_channel_id == channel_id => {
+                            match stream {
+                                ChannelStream::Stdout => {
+                                    let _ = stdout.push(&data);
+                                }
+                                ChannelStream::Stderr => {
+                                    let _ = stderr.push(&data);
+                                }
+                                ChannelStream::Pty => {}
+                            }
+                        }
+                        Ok(ScopeSessionEvent::Exit { channel_id: event_channel_id, code }) if event_channel_id == channel_id => {
+                            if code == Some(0) {
+                                let payload = stdout.finish().join("\n");
+                                let result: ProcessResult = serde_json::from_str(&payload).map_err(|error| {
+                                    AppError::internal_with_source("Failed to parse the run result manifest.", error)
+                                })?;
+                                return Ok(AttemptSuccess {
+                                    output_path: result.output_path,
+                                    validation_issues: result.validation_issues,
+                                });
+                            }
+
+                            return Err(AppError::status(
+                                StatusCode::BAD_GATEWAY,
+                                run_exit_message(code, &stdout, &stderr),
+                            ));
+                        }
+                        Ok(ScopeSessionEvent::Error { channel_id: Some(event_channel_id), message }) if event_channel_id == channel_id => {
+                            return Err(AppError::status(StatusCode::BAD_GATEWAY, message));
+                        }
+                        Ok(ScopeSessionEvent::Error { channel_id: None, message }) => {
+                            return Err(AppError::status(StatusCode::BAD_GATEWAY, message));
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            return Err(AppError::status(
+                                StatusCode::BAD_GATEWAY,
+                                "Scope session connector event stream overflowed while reading the run result.",
+                            ));
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            return Err(AppError::status(
+                                StatusCode::BAD_GATEWAY,
+                                "Scope session connector disconnected while reading the run result.",
+                            ));
+                        }
+                    }
+                }
+                _ = &mut timeout => {
+                    let _ = handle.close_channel(channel_id.clone()).await;
+                    return Err(AppError::status(
+                        StatusCode::BAD_GATEWAY,
+                        "Timed out while reading the run result manifest.",
+                    ));
+                }
+            }
+        }
+    }
 }
 
 fn resolve_artifact_access(
@@ -695,43 +760,6 @@ fn resolve_artifact_access(
         headers: access.headers,
         method: access.method.to_string(),
         url,
-    })
-}
-
-fn run_env(
-    python_bin: String,
-    input_access: ArtifactAccessInstruction,
-    output_access: ArtifactAccessInstruction,
-    local_input_path: String,
-    local_output_dir: String,
-    output_path: String,
-) -> Result<BTreeMap<String, String>, AppError> {
-    Ok(BTreeMap::from([
-        (
-            "ADE_INPUT_ACCESS_JSON".to_string(),
-            serde_json::to_string(&input_access).map_err(|error| {
-                AppError::internal_with_source("Failed to encode input artifact access.", error)
-            })?,
-        ),
-        (
-            "ADE_OUTPUT_ACCESS_JSON".to_string(),
-            serde_json::to_string(&output_access).map_err(|error| {
-                AppError::internal_with_source("Failed to encode output artifact access.", error)
-            })?,
-        ),
-        ("ADE_LOCAL_INPUT_PATH".to_string(), local_input_path),
-        ("ADE_LOCAL_OUTPUT_DIR".to_string(), local_output_dir),
-        ("ADE_OUTPUT_PATH".to_string(), output_path),
-        ("ADE_PYTHON_BIN".to_string(), python_bin),
-    ]))
-}
-
-fn parse_process_result(line: &str) -> Result<Option<ProcessResult>, AppError> {
-    let Some(payload) = line.strip_prefix(PROCESS_RESULT_PREFIX) else {
-        return Ok(None);
-    };
-    serde_json::from_str(payload).map(Some).map_err(|error| {
-        AppError::internal_with_source("Failed to parse the run result payload.", error)
     })
 }
 
@@ -761,6 +789,10 @@ fn uploaded_basename(path: &str) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("input.bin")
         .to_string()
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r#"'"'"'"#))
 }
 
 #[derive(Default)]

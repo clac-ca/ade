@@ -114,7 +114,7 @@ describe("AppRouter", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Interactive shell over the session bridge.",
+        name: "Interactive shell over the session.",
       }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();

@@ -16,17 +16,32 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const bundleRoot = fileURLToPath(
   new URL("../.package/session-bundle", import.meta.url),
 );
+const configRoot = fileURLToPath(
+  new URL("../.package/session-configs", import.meta.url),
+);
 const prepareScriptPath = fileURLToPath(
   new URL(
     "../apps/ade-api/assets/session-bundle/bin/prepare.sh",
     import.meta.url,
   ),
 );
+const runScriptPath = fileURLToPath(
+  new URL("../apps/ade-api/assets/session-bundle/bin/run.py", import.meta.url),
+);
 const engineWheelPath = newestWheel(
   fileURLToPath(new URL("../packages/ade-engine/dist", import.meta.url)),
   "ade_engine-",
 );
-const pythonToolchainName = "python-3.14.0-linux-x86_64.tar.gz";
+const configWheelPath = newestWheel(
+  fileURLToPath(new URL("../packages/ade-config/dist", import.meta.url)),
+  "ade_config-",
+);
+const pythonToolchainImage = "python:3.12.11-slim-bullseye";
+const pythonToolchainName = "python-3.12.11-linux-x86_64.tar.gz";
+const sampleScopes = [
+  ["workspace-a", "config-v1"],
+  ["workspace-b", "config-v2"],
+] as const;
 
 function newestWheel(directoryPath: string, prefix: string): string {
   const candidates = readdirSync(directoryPath)
@@ -51,9 +66,11 @@ function buildPythonToolchain(outputDirectory: string): void {
     [
       "run",
       "--rm",
+      "--platform",
+      "linux/amd64",
       "--volume",
       `${outputDirectory}:/out`,
-      "python:3.14.0-slim",
+      pythonToolchainImage,
       "sh",
       "-lc",
       `tar -C /usr/local -czf /out/${pythonToolchainName} .`,
@@ -78,7 +95,7 @@ function buildBaseWheelhouse(
       `${dirname(engineWheelPath)}:/wheel-src`,
       "--volume",
       `${outputDirectory}:/out`,
-      "python:3.14.0-slim",
+      pythonToolchainImage,
       "sh",
       "-lc",
       `python -m pip download --dest /out /wheel-src/${basename(engineWheelPath)}`,
@@ -96,6 +113,8 @@ function buildReverseConnectBinary(outputDirectory: string): void {
     [
       "run",
       "--rm",
+      "--platform",
+      "linux/amd64",
       "--volume",
       `${rootDir}:/workspace`,
       "--volume",
@@ -104,10 +123,10 @@ function buildReverseConnectBinary(outputDirectory: string): void {
       "/workspace",
       "--env",
       "CARGO_TARGET_DIR=/tmp/target",
-      "rust:1.94.1",
+      "rust:1.94.1-alpine",
       "sh",
       "-lc",
-      "apt-get update >/dev/null && apt-get install --yes --no-install-recommends pkg-config perl >/dev/null && /usr/local/cargo/bin/cargo build --locked --package reverse-connect --bin reverse-connect && cp /tmp/target/debug/reverse-connect /out/reverse-connect",
+      "apk add --no-cache build-base musl-dev pkgconfig perl >/dev/null && /usr/local/cargo/bin/cargo build --locked --package reverse-connect --bin reverse-connect --release && cp /tmp/target/release/reverse-connect /out/reverse-connect",
     ],
     {
       cwd: rootDir,
@@ -118,6 +137,10 @@ function buildReverseConnectBinary(outputDirectory: string): void {
 
 function main(): void {
   rmSync(bundleRoot, {
+    force: true,
+    recursive: true,
+  });
+  rmSync(configRoot, {
     force: true,
     recursive: true,
   });
@@ -133,8 +156,15 @@ function main(): void {
 
   buildReverseConnectBinary(`${bundleRoot}/bin`);
   copyFileSync(prepareScriptPath, `${bundleRoot}/bin/prepare.sh`);
+  copyFileSync(runScriptPath, `${bundleRoot}/bin/run.py`);
   buildBaseWheelhouse(engineWheelPath, `${bundleRoot}/wheelhouse/base`);
   buildPythonToolchain(`${bundleRoot}/python`);
+
+  for (const [workspaceId, configVersionId] of sampleScopes) {
+    const scopeDirectory = join(configRoot, workspaceId, configVersionId);
+    mkdirSync(scopeDirectory, { recursive: true });
+    copyFileSync(configWheelPath, join(scopeDirectory, basename(configWheelPath)));
+  }
 }
 
 void runMain(() => {

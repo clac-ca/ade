@@ -1,0 +1,3010 @@
+{
+  "apiVersion": "2025-10-02-preview",
+  "supportedVersionsHeader": "2025-02-02-preview, 2025-10-02-preview",
+  "host": {
+    "arch": "x86_64",
+    "cwd": "/mnt/data",
+    "glibc": "2.35",
+    "home": "/root",
+    "os": "Ubuntu",
+    "path": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "shell": "/bin/bash",
+    "user": "root",
+    "version": "22.04.5 LTS (Jammy Jellyfish)"
+  },
+  "filesystem": {
+    "pathScopedUploadRoot": "/app",
+    "rootUploadRoot": "/mnt/data",
+    "permissions": {
+      "app": "755",
+      "mntData": "777",
+      "root": "700",
+      "tmp": "1777"
+    }
+  },
+  "execution": {
+    "defaultShell": [
+      "/bin/bash",
+      "-lc"
+    ],
+    "failureStatus": "1",
+    "successStatus": "0",
+    "timeoutStatus": "-1"
+  },
+  "scale": {
+    "cooldownPeriodSeconds": 3600,
+    "maxConcurrentSessions": 5
+  },
+  "metadata": {
+    "createdAt": "2026-03-31T19:10:27.964154",
+    "lastUpdatedAt": "2026-03-31T19:10:27.964154",
+    "runtimes": [
+      {
+        "name": "Ubuntu",
+        "version": "22.04.5 LTS (Jammy Jellyfish)"
+      }
+    ],
+    "preInstalledPackages": [
+      {
+        "name": "adduser",
+        "version": "3.118ubuntu5"
+      },
+      {
+        "name": "adwaita-icon-theme",
+        "version": "41.0-1ubuntu1"
+      },
+      {
+        "name": "alsa-topology-conf",
+        "version": "1.2.5.1-2"
+      },
+      {
+        "name": "alsa-ucm-conf",
+        "version": "1.2.6.3-1ubuntu1.12"
+      },
+      {
+        "name": "apparmor",
+        "version": "3.0.4-2ubuntu2.4"
+      },
+      {
+        "name": "apt",
+        "version": "2.4.14"
+      },
+      {
+        "name": "at-spi2-core",
+        "version": "2.44.0-3"
+      },
+      {
+        "name": "autoconf",
+        "version": "2.71-2"
+      },
+      {
+        "name": "automake",
+        "version": "1:1.16.5-1.3"
+      },
+      {
+        "name": "autotools-dev",
+        "version": "20220109.1"
+      },
+      {
+        "name": "base-files",
+        "version": "12ubuntu4.7"
+      },
+      {
+        "name": "base-passwd",
+        "version": "3.5.52build1"
+      },
+      {
+        "name": "bash",
+        "version": "5.1-6ubuntu1.1"
+      },
+      {
+        "name": "binutils-common",
+        "version": "2.38-4ubuntu2.8"
+      },
+      {
+        "name": "binutils-x86-64-linux-gnu",
+        "version": "2.38-4ubuntu2.8"
+      },
+      {
+        "name": "binutils",
+        "version": "2.38-4ubuntu2.8"
+      },
+      {
+        "name": "bsdutils",
+        "version": "1:2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "build-essential",
+        "version": "12.9ubuntu3"
+      },
+      {
+        "name": "bzip2",
+        "version": "1.0.8-5build1"
+      },
+      {
+        "name": "ca-certificates-java",
+        "version": "20190909ubuntu1.2"
+      },
+      {
+        "name": "ca-certificates",
+        "version": "20240203~22.04.1"
+      },
+      {
+        "name": "coreutils",
+        "version": "8.32-4.1ubuntu1.2"
+      },
+      {
+        "name": "cpp-11",
+        "version": "11.4.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "cpp",
+        "version": "4:11.2.0-1ubuntu1"
+      },
+      {
+        "name": "cron",
+        "version": "3.0pl1-137ubuntu3"
+      },
+      {
+        "name": "curl",
+        "version": "7.81.0-1ubuntu1.20"
+      },
+      {
+        "name": "dash",
+        "version": "0.5.11+git20210903+057cd650a4ed-3build1"
+      },
+      {
+        "name": "dbus-user-session",
+        "version": "1.12.20-2ubuntu4.1"
+      },
+      {
+        "name": "dbus",
+        "version": "1.12.20-2ubuntu4.1"
+      },
+      {
+        "name": "dconf-gsettings-backend",
+        "version": "0.40.0-3"
+      },
+      {
+        "name": "dconf-service",
+        "version": "0.40.0-3"
+      },
+      {
+        "name": "debconf",
+        "version": "1.5.79ubuntu1"
+      },
+      {
+        "name": "debianutils",
+        "version": "5.5-1ubuntu2"
+      },
+      {
+        "name": "default-jre-headless",
+        "version": "2:1.11-72build2"
+      },
+      {
+        "name": "default-jre",
+        "version": "2:1.11-72build2"
+      },
+      {
+        "name": "dictionaries-common",
+        "version": "1.28.14"
+      },
+      {
+        "name": "diffutils",
+        "version": "1:3.8-0ubuntu2"
+      },
+      {
+        "name": "dirmngr",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "dmsetup",
+        "version": "2:1.02.175-2.1ubuntu5"
+      },
+      {
+        "name": "dpkg-dev",
+        "version": "1.21.1ubuntu2.3"
+      },
+      {
+        "name": "dpkg",
+        "version": "1.21.1ubuntu2.3"
+      },
+      {
+        "name": "e2fsprogs",
+        "version": "1.46.5-2ubuntu1.2"
+      },
+      {
+        "name": "emacsen-common",
+        "version": "3.0.4"
+      },
+      {
+        "name": "fakeroot",
+        "version": "1.28-1ubuntu1"
+      },
+      {
+        "name": "ffmpeg",
+        "version": "7:4.4.2-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "findutils",
+        "version": "4.8.0-1ubuntu3"
+      },
+      {
+        "name": "firebird3.0-common-doc",
+        "version": "3.0.8.33535.ds4-1ubuntu2"
+      },
+      {
+        "name": "firebird3.0-common",
+        "version": "3.0.8.33535.ds4-1ubuntu2"
+      },
+      {
+        "name": "firebird3.0-server-core",
+        "version": "3.0.8.33535.ds4-1ubuntu2"
+      },
+      {
+        "name": "firebird3.0-utils",
+        "version": "3.0.8.33535.ds4-1ubuntu2"
+      },
+      {
+        "name": "fontconfig-config",
+        "version": "2.13.1-4.2ubuntu5"
+      },
+      {
+        "name": "fontconfig",
+        "version": "2.13.1-4.2ubuntu5"
+      },
+      {
+        "name": "fonts-crosextra-caladea",
+        "version": "20130214-2.1"
+      },
+      {
+        "name": "fonts-crosextra-carlito",
+        "version": "20130920-1.1"
+      },
+      {
+        "name": "fonts-dejavu-core",
+        "version": "2.37-2build1"
+      },
+      {
+        "name": "fonts-dejavu-extra",
+        "version": "2.37-2build1"
+      },
+      {
+        "name": "fonts-dejavu",
+        "version": "2.37-2build1"
+      },
+      {
+        "name": "fonts-liberation2",
+        "version": "2.1.5-1"
+      },
+      {
+        "name": "fonts-liberation",
+        "version": "1:1.07.4-11"
+      },
+      {
+        "name": "fonts-linuxlibertine",
+        "version": "5.3.0-6"
+      },
+      {
+        "name": "fonts-noto-core",
+        "version": "20201225-1build1"
+      },
+      {
+        "name": "fonts-noto-extra",
+        "version": "20201225-1build1"
+      },
+      {
+        "name": "fonts-noto-mono",
+        "version": "20201225-1build1"
+      },
+      {
+        "name": "fonts-noto-ui-core",
+        "version": "20201225-1build1"
+      },
+      {
+        "name": "fonts-opensymbol",
+        "version": "2:102.12+LibO7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "fonts-sil-gentium-basic",
+        "version": "1.102-1.1"
+      },
+      {
+        "name": "fonts-sil-gentium",
+        "version": "20081126:1.03-4"
+      },
+      {
+        "name": "fuse3",
+        "version": "3.10.5-1build1"
+      },
+      {
+        "name": "g++-11",
+        "version": "11.4.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "g++",
+        "version": "4:11.2.0-1ubuntu1"
+      },
+      {
+        "name": "gawk",
+        "version": "1:5.1.0-1ubuntu0.1"
+      },
+      {
+        "name": "gcc-11-base",
+        "version": "11.4.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "gcc-11",
+        "version": "11.4.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "gcc-12-base",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "gcc",
+        "version": "4:11.2.0-1ubuntu1"
+      },
+      {
+        "name": "gir1.2-glib-2.0",
+        "version": "1.72.0-1"
+      },
+      {
+        "name": "gnupg-l10n",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "gnupg-utils",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "gnupg",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "gpg-agent",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "gpg-wks-client",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "gpg-wks-server",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "gpg",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "gpgconf",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "gpgsm",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "gpgv",
+        "version": "2.2.27-3ubuntu2.4"
+      },
+      {
+        "name": "grep",
+        "version": "3.7-1build1"
+      },
+      {
+        "name": "gsettings-desktop-schemas",
+        "version": "42.0-1ubuntu1"
+      },
+      {
+        "name": "gstreamer1.0-gl",
+        "version": "1.20.1-1ubuntu0.5"
+      },
+      {
+        "name": "gstreamer1.0-gtk3",
+        "version": "1.20.3-0ubuntu1.4"
+      },
+      {
+        "name": "gstreamer1.0-plugins-base",
+        "version": "1.20.1-1ubuntu0.5"
+      },
+      {
+        "name": "gtk-update-icon-cache",
+        "version": "3.24.33-1ubuntu2.2"
+      },
+      {
+        "name": "gzip",
+        "version": "1.10-4ubuntu4.1"
+      },
+      {
+        "name": "hicolor-icon-theme",
+        "version": "0.17-2"
+      },
+      {
+        "name": "hostname",
+        "version": "3.23ubuntu2"
+      },
+      {
+        "name": "humanity-icon-theme",
+        "version": "0.6.16"
+      },
+      {
+        "name": "hunspell-en-us",
+        "version": "1:2020.12.07-2"
+      },
+      {
+        "name": "i965-va-driver",
+        "version": "2.4.1+dfsg1-1"
+      },
+      {
+        "name": "init-system-helpers",
+        "version": "1.62"
+      },
+      {
+        "name": "intel-media-va-driver",
+        "version": "22.3.1+dfsg1-1ubuntu2"
+      },
+      {
+        "name": "iputils-ping",
+        "version": "3:20211215-1ubuntu0.1"
+      },
+      {
+        "name": "iso-codes",
+        "version": "4.9.0-1"
+      },
+      {
+        "name": "java-common",
+        "version": "0.72build2"
+      },
+      {
+        "name": "jq",
+        "version": "1.6-2.1ubuntu3.1"
+      },
+      {
+        "name": "libaacs0",
+        "version": "0.11.1-1"
+      },
+      {
+        "name": "libabsl20210324",
+        "version": "0~20210324.2-2ubuntu0.2"
+      },
+      {
+        "name": "libabw-0.1-1",
+        "version": "0.1.3-1build3"
+      },
+      {
+        "name": "libacl1",
+        "version": "2.3.1-1"
+      },
+      {
+        "name": "libalgorithm-diff-perl",
+        "version": "1.201-1"
+      },
+      {
+        "name": "libalgorithm-diff-xs-perl",
+        "version": "0.04-6build3"
+      },
+      {
+        "name": "libalgorithm-merge-perl",
+        "version": "0.08-3"
+      },
+      {
+        "name": "libaom3",
+        "version": "3.3.0-1ubuntu0.1"
+      },
+      {
+        "name": "libapparmor1",
+        "version": "3.0.4-2ubuntu2.4"
+      },
+      {
+        "name": "libapt-pkg6.0",
+        "version": "2.4.14"
+      },
+      {
+        "name": "libargon2-1",
+        "version": "0~20171227-0.3"
+      },
+      {
+        "name": "libasan6",
+        "version": "11.4.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libasound2-data",
+        "version": "1.2.6.1-1ubuntu1"
+      },
+      {
+        "name": "libasound2",
+        "version": "1.2.6.1-1ubuntu1"
+      },
+      {
+        "name": "libass9",
+        "version": "1:0.15.2-1"
+      },
+      {
+        "name": "libassuan0",
+        "version": "2.5.5-1build1"
+      },
+      {
+        "name": "libasyncns0",
+        "version": "0.8-6build2"
+      },
+      {
+        "name": "libatk-bridge2.0-0",
+        "version": "2.38.0-3"
+      },
+      {
+        "name": "libatk-wrapper-java-jni",
+        "version": "0.38.0-5build1"
+      },
+      {
+        "name": "libatk-wrapper-java",
+        "version": "0.38.0-5build1"
+      },
+      {
+        "name": "libatk1.0-0",
+        "version": "2.36.0-3build1"
+      },
+      {
+        "name": "libatk1.0-data",
+        "version": "2.36.0-3build1"
+      },
+      {
+        "name": "libatomic1",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libatspi2.0-0",
+        "version": "2.44.0-3"
+      },
+      {
+        "name": "libattr1",
+        "version": "1:2.5.1-1build1"
+      },
+      {
+        "name": "libaudit-common",
+        "version": "1:3.0.7-1build1"
+      },
+      {
+        "name": "libaudit1",
+        "version": "1:3.0.7-1build1"
+      },
+      {
+        "name": "libauthen-sasl-perl",
+        "version": "2.1600-1.1"
+      },
+      {
+        "name": "libavahi-client3",
+        "version": "0.8-5ubuntu5.2"
+      },
+      {
+        "name": "libavahi-common-data",
+        "version": "0.8-5ubuntu5.2"
+      },
+      {
+        "name": "libavahi-common3",
+        "version": "0.8-5ubuntu5.2"
+      },
+      {
+        "name": "libavc1394-0",
+        "version": "0.5.4-5build2"
+      },
+      {
+        "name": "libavcodec58",
+        "version": "7:4.4.2-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libavdevice58",
+        "version": "7:4.4.2-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libavfilter7",
+        "version": "7:4.4.2-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libavformat58",
+        "version": "7:4.4.2-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libavutil56",
+        "version": "7:4.4.2-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libbdplus0",
+        "version": "0.2.0-1"
+      },
+      {
+        "name": "libbinutils",
+        "version": "2.38-4ubuntu2.8"
+      },
+      {
+        "name": "libblas3",
+        "version": "3.10.0-2ubuntu1"
+      },
+      {
+        "name": "libblkid-dev",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "libblkid1",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "libbluray2",
+        "version": "1:1.3.1-1"
+      },
+      {
+        "name": "libboost-filesystem1.74.0",
+        "version": "1.74.0-14ubuntu3"
+      },
+      {
+        "name": "libboost-iostreams1.74.0",
+        "version": "1.74.0-14ubuntu3"
+      },
+      {
+        "name": "libboost-locale1.74.0",
+        "version": "1.74.0-14ubuntu3"
+      },
+      {
+        "name": "libboost-thread1.74.0",
+        "version": "1.74.0-14ubuntu3"
+      },
+      {
+        "name": "libbrotli-dev",
+        "version": "1.0.9-2build6"
+      },
+      {
+        "name": "libbrotli1",
+        "version": "1.0.9-2build6"
+      },
+      {
+        "name": "libbs2b0",
+        "version": "3.1.0+dfsg-2.2build1"
+      },
+      {
+        "name": "libbsd0",
+        "version": "0.11.5-1"
+      },
+      {
+        "name": "libbsh-java",
+        "version": "2.0b4-20"
+      },
+      {
+        "name": "libbz2-1.0",
+        "version": "1.0.8-5build1"
+      },
+      {
+        "name": "libc-bin",
+        "version": "2.35-0ubuntu3.10"
+      },
+      {
+        "name": "libc-dev-bin",
+        "version": "2.35-0ubuntu3.10"
+      },
+      {
+        "name": "libc-devtools",
+        "version": "2.35-0ubuntu3.10"
+      },
+      {
+        "name": "libc6-dev",
+        "version": "2.35-0ubuntu3.10"
+      },
+      {
+        "name": "libc6",
+        "version": "2.35-0ubuntu3.10"
+      },
+      {
+        "name": "libcaca0",
+        "version": "0.99.beta19-2.2ubuntu4"
+      },
+      {
+        "name": "libcairo-gobject2",
+        "version": "1.16.0-5ubuntu2"
+      },
+      {
+        "name": "libcairo-script-interpreter2",
+        "version": "1.16.0-5ubuntu2"
+      },
+      {
+        "name": "libcairo2-dev",
+        "version": "1.16.0-5ubuntu2"
+      },
+      {
+        "name": "libcairo2",
+        "version": "1.16.0-5ubuntu2"
+      },
+      {
+        "name": "libcap-ng0",
+        "version": "0.7.9-2.2build3"
+      },
+      {
+        "name": "libcap2-bin",
+        "version": "1:2.44-1ubuntu0.22.04.2"
+      },
+      {
+        "name": "libcap2",
+        "version": "1:2.44-1ubuntu0.22.04.2"
+      },
+      {
+        "name": "libcc1-0",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libcdio-cdda2",
+        "version": "10.2+2.0.0-1build3"
+      },
+      {
+        "name": "libcdio-paranoia2",
+        "version": "10.2+2.0.0-1build3"
+      },
+      {
+        "name": "libcdio19",
+        "version": "2.1.0-3ubuntu0.2"
+      },
+      {
+        "name": "libcdparanoia0",
+        "version": "3.10.2+debian-14build2"
+      },
+      {
+        "name": "libcdr-0.1-1",
+        "version": "0.1.6-2build2"
+      },
+      {
+        "name": "libchromaprint1",
+        "version": "1.5.1-2"
+      },
+      {
+        "name": "libclone-perl",
+        "version": "0.45-1build3"
+      },
+      {
+        "name": "libclucene-contribs1v5",
+        "version": "2.3.3.4+dfsg-1ubuntu5"
+      },
+      {
+        "name": "libclucene-core1v5",
+        "version": "2.3.3.4+dfsg-1ubuntu5"
+      },
+      {
+        "name": "libcodec2-1.0",
+        "version": "1.0.1-3"
+      },
+      {
+        "name": "libcolamd2",
+        "version": "1:5.10.1+dfsg-4build1"
+      },
+      {
+        "name": "libcolord2",
+        "version": "1.4.6-1"
+      },
+      {
+        "name": "libcom-err2",
+        "version": "1.46.5-2ubuntu1.2"
+      },
+      {
+        "name": "libcrypt-dev",
+        "version": "1:4.4.27-1"
+      },
+      {
+        "name": "libcrypt1",
+        "version": "1:4.4.27-1"
+      },
+      {
+        "name": "libcryptsetup12",
+        "version": "2:2.4.3-1ubuntu1.3"
+      },
+      {
+        "name": "libctf-nobfd0",
+        "version": "2.38-4ubuntu2.8"
+      },
+      {
+        "name": "libctf0",
+        "version": "2.38-4ubuntu2.8"
+      },
+      {
+        "name": "libcups2",
+        "version": "2.4.1op1-1ubuntu4.12"
+      },
+      {
+        "name": "libcurl3-gnutls",
+        "version": "7.81.0-1ubuntu1.20"
+      },
+      {
+        "name": "libcurl4",
+        "version": "7.81.0-1ubuntu1.20"
+      },
+      {
+        "name": "libdata-dump-perl",
+        "version": "1.25-1"
+      },
+      {
+        "name": "libdatrie1",
+        "version": "0.2.13-2"
+      },
+      {
+        "name": "libdav1d5",
+        "version": "0.9.2-1"
+      },
+      {
+        "name": "libdb5.3",
+        "version": "5.3.28+dfsg1-0.8ubuntu3"
+      },
+      {
+        "name": "libdbus-1-3",
+        "version": "1.12.20-2ubuntu4.1"
+      },
+      {
+        "name": "libdbus-1-dev",
+        "version": "1.12.20-2ubuntu4.1"
+      },
+      {
+        "name": "libdc1394-25",
+        "version": "2.2.6-4"
+      },
+      {
+        "name": "libdconf1",
+        "version": "0.40.0-3"
+      },
+      {
+        "name": "libdebconfclient0",
+        "version": "0.261ubuntu1"
+      },
+      {
+        "name": "libdecor-0-0",
+        "version": "0.1.0-3build1"
+      },
+      {
+        "name": "libdecor-0-plugin-1-cairo",
+        "version": "0.1.0-3build1"
+      },
+      {
+        "name": "libdeflate0",
+        "version": "1.10-2"
+      },
+      {
+        "name": "libdevmapper1.02.1",
+        "version": "2:1.02.175-2.1ubuntu5"
+      },
+      {
+        "name": "libdpkg-perl",
+        "version": "1.21.1ubuntu2.3"
+      },
+      {
+        "name": "libdrm-amdgpu1",
+        "version": "2.4.113-2~ubuntu0.22.04.1"
+      },
+      {
+        "name": "libdrm-common",
+        "version": "2.4.113-2~ubuntu0.22.04.1"
+      },
+      {
+        "name": "libdrm-intel1",
+        "version": "2.4.113-2~ubuntu0.22.04.1"
+      },
+      {
+        "name": "libdrm-nouveau2",
+        "version": "2.4.113-2~ubuntu0.22.04.1"
+      },
+      {
+        "name": "libdrm-radeon1",
+        "version": "2.4.113-2~ubuntu0.22.04.1"
+      },
+      {
+        "name": "libdrm2",
+        "version": "2.4.113-2~ubuntu0.22.04.1"
+      },
+      {
+        "name": "libdw1",
+        "version": "0.186-1ubuntu0.1"
+      },
+      {
+        "name": "libe-book-0.1-1",
+        "version": "0.1.3-2build2"
+      },
+      {
+        "name": "libedit2",
+        "version": "3.1-20210910-1build1"
+      },
+      {
+        "name": "libegl-mesa0",
+        "version": "23.2.1-1ubuntu3.1~22.04.3"
+      },
+      {
+        "name": "libegl1",
+        "version": "1.4.0-1"
+      },
+      {
+        "name": "libel-api-java",
+        "version": "3.0.0-3"
+      },
+      {
+        "name": "libelf1",
+        "version": "0.186-1ubuntu0.1"
+      },
+      {
+        "name": "libencode-locale-perl",
+        "version": "1.05-1.1"
+      },
+      {
+        "name": "libeot0",
+        "version": "0.01-5build2"
+      },
+      {
+        "name": "libepoxy0",
+        "version": "1.5.10-1"
+      },
+      {
+        "name": "libepubgen-0.1-1",
+        "version": "0.1.1-1ubuntu5"
+      },
+      {
+        "name": "libetonyek-0.1-1",
+        "version": "0.1.10-3build1"
+      },
+      {
+        "name": "libexpat1-dev",
+        "version": "2.4.7-1ubuntu0.6"
+      },
+      {
+        "name": "libexpat1",
+        "version": "2.4.7-1ubuntu0.6"
+      },
+      {
+        "name": "libext2fs2",
+        "version": "1.46.5-2ubuntu1.2"
+      },
+      {
+        "name": "libexttextcat-2.0-0",
+        "version": "3.4.5-1build2"
+      },
+      {
+        "name": "libexttextcat-data",
+        "version": "3.4.5-1build2"
+      },
+      {
+        "name": "libfakeroot",
+        "version": "1.28-1ubuntu1"
+      },
+      {
+        "name": "libfbclient2",
+        "version": "3.0.8.33535.ds4-1ubuntu2"
+      },
+      {
+        "name": "libffi-dev",
+        "version": "3.4.2-4"
+      },
+      {
+        "name": "libffi8",
+        "version": "3.4.2-4"
+      },
+      {
+        "name": "libfile-basedir-perl",
+        "version": "0.09-1"
+      },
+      {
+        "name": "libfile-desktopentry-perl",
+        "version": "0.22-2"
+      },
+      {
+        "name": "libfile-fcntllock-perl",
+        "version": "0.22-3build7"
+      },
+      {
+        "name": "libfile-listing-perl",
+        "version": "6.14-1"
+      },
+      {
+        "name": "libfile-mimeinfo-perl",
+        "version": "0.31-1"
+      },
+      {
+        "name": "libflac8",
+        "version": "1.3.3-2ubuntu0.2"
+      },
+      {
+        "name": "libflite1",
+        "version": "2.2-3"
+      },
+      {
+        "name": "libfont-afm-perl",
+        "version": "1.20-3"
+      },
+      {
+        "name": "libfontconfig-dev",
+        "version": "2.13.1-4.2ubuntu5"
+      },
+      {
+        "name": "libfontconfig1-dev",
+        "version": "2.13.1-4.2ubuntu5"
+      },
+      {
+        "name": "libfontconfig1",
+        "version": "2.13.1-4.2ubuntu5"
+      },
+      {
+        "name": "libfontenc1",
+        "version": "1:1.1.4-1build3"
+      },
+      {
+        "name": "libfreehand-0.1-1",
+        "version": "0.1.2-3build2"
+      },
+      {
+        "name": "libfreetype-dev",
+        "version": "2.11.1+dfsg-1ubuntu0.3"
+      },
+      {
+        "name": "libfreetype6-dev",
+        "version": "2.11.1+dfsg-1ubuntu0.3"
+      },
+      {
+        "name": "libfreetype6",
+        "version": "2.11.1+dfsg-1ubuntu0.3"
+      },
+      {
+        "name": "libfribidi0",
+        "version": "1.0.8-2ubuntu3.1"
+      },
+      {
+        "name": "libfuse3-3",
+        "version": "3.10.5-1build1"
+      },
+      {
+        "name": "libfuse3-dev",
+        "version": "3.10.5-1build1"
+      },
+      {
+        "name": "libgbm1",
+        "version": "23.2.1-1ubuntu3.1~22.04.3"
+      },
+      {
+        "name": "libgcc-11-dev",
+        "version": "11.4.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libgcc-s1",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libgcrypt20",
+        "version": "1.9.4-3ubuntu3"
+      },
+      {
+        "name": "libgd3",
+        "version": "2.3.0-2ubuntu2.3"
+      },
+      {
+        "name": "libgdbm-compat4",
+        "version": "1.23-1"
+      },
+      {
+        "name": "libgdbm6",
+        "version": "1.23-1"
+      },
+      {
+        "name": "libgdk-pixbuf-2.0-0",
+        "version": "2.42.8+dfsg-1ubuntu0.4"
+      },
+      {
+        "name": "libgdk-pixbuf2.0-bin",
+        "version": "2.42.8+dfsg-1ubuntu0.4"
+      },
+      {
+        "name": "libgdk-pixbuf2.0-common",
+        "version": "2.42.8+dfsg-1ubuntu0.4"
+      },
+      {
+        "name": "libgfortran5",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libgif7",
+        "version": "5.1.9-2ubuntu0.1"
+      },
+      {
+        "name": "libgirepository-1.0-1",
+        "version": "1.72.0-1"
+      },
+      {
+        "name": "libgl1-amber-dri",
+        "version": "21.3.9-0ubuntu1~22.04.1"
+      },
+      {
+        "name": "libgl1-mesa-dri",
+        "version": "23.2.1-1ubuntu3.1~22.04.3"
+      },
+      {
+        "name": "libgl1",
+        "version": "1.4.0-1"
+      },
+      {
+        "name": "libglapi-mesa",
+        "version": "23.2.1-1ubuntu3.1~22.04.3"
+      },
+      {
+        "name": "libglib2.0-0",
+        "version": "2.72.4-0ubuntu2.6"
+      },
+      {
+        "name": "libglib2.0-bin",
+        "version": "2.72.4-0ubuntu2.6"
+      },
+      {
+        "name": "libglib2.0-data",
+        "version": "2.72.4-0ubuntu2.6"
+      },
+      {
+        "name": "libglib2.0-dev-bin",
+        "version": "2.72.4-0ubuntu2.6"
+      },
+      {
+        "name": "libglib2.0-dev",
+        "version": "2.72.4-0ubuntu2.6"
+      },
+      {
+        "name": "libglvnd0",
+        "version": "1.4.0-1"
+      },
+      {
+        "name": "libglx-mesa0",
+        "version": "23.2.1-1ubuntu3.1~22.04.3"
+      },
+      {
+        "name": "libglx0",
+        "version": "1.4.0-1"
+      },
+      {
+        "name": "libgme0",
+        "version": "0.6.3-2"
+      },
+      {
+        "name": "libgmp10",
+        "version": "2:6.2.1+dfsg-3ubuntu1"
+      },
+      {
+        "name": "libgnutls30",
+        "version": "3.7.3-4ubuntu1.7"
+      },
+      {
+        "name": "libgomp1",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libgpg-error0",
+        "version": "1.43-3"
+      },
+      {
+        "name": "libgpgme11",
+        "version": "1.16.0-1.2ubuntu4.2"
+      },
+      {
+        "name": "libgpgmepp6",
+        "version": "1.16.0-1.2ubuntu4.2"
+      },
+      {
+        "name": "libgpm2",
+        "version": "1.20.7-10build1"
+      },
+      {
+        "name": "libgraphene-1.0-0",
+        "version": "1.10.8-1"
+      },
+      {
+        "name": "libgraphite2-3",
+        "version": "1.3.14-1build2"
+      },
+      {
+        "name": "libgsm1",
+        "version": "1.0.19-1"
+      },
+      {
+        "name": "libgssapi-krb5-2",
+        "version": "1.19.2-2ubuntu0.7"
+      },
+      {
+        "name": "libgstreamer-gl1.0-0",
+        "version": "1.20.1-1ubuntu0.5"
+      },
+      {
+        "name": "libgstreamer-plugins-base1.0-0",
+        "version": "1.20.1-1ubuntu0.5"
+      },
+      {
+        "name": "libgstreamer1.0-0",
+        "version": "1.20.3-0ubuntu1.1"
+      },
+      {
+        "name": "libgtk-3-0",
+        "version": "3.24.33-1ubuntu2.2"
+      },
+      {
+        "name": "libgtk-3-bin",
+        "version": "3.24.33-1ubuntu2.2"
+      },
+      {
+        "name": "libgtk-3-common",
+        "version": "3.24.33-1ubuntu2.2"
+      },
+      {
+        "name": "libgtkd-3-0",
+        "version": "3.10.0-1ubuntu1"
+      },
+      {
+        "name": "libgudev-1.0-0",
+        "version": "1:237-2build1"
+      },
+      {
+        "name": "libharfbuzz-icu0",
+        "version": "2.7.4-1ubuntu3.2"
+      },
+      {
+        "name": "libharfbuzz0b",
+        "version": "2.7.4-1ubuntu3.2"
+      },
+      {
+        "name": "libhogweed6",
+        "version": "3.7.3-1build2"
+      },
+      {
+        "name": "libhsqldb1.8.0-java",
+        "version": "1.8.0.10+dfsg-11"
+      },
+      {
+        "name": "libhtml-form-perl",
+        "version": "6.07-1"
+      },
+      {
+        "name": "libhtml-format-perl",
+        "version": "2.12-1.1"
+      },
+      {
+        "name": "libhtml-parser-perl",
+        "version": "3.76-1build2"
+      },
+      {
+        "name": "libhtml-tagset-perl",
+        "version": "3.20-4"
+      },
+      {
+        "name": "libhtml-tree-perl",
+        "version": "5.07-2"
+      },
+      {
+        "name": "libhttp-cookies-perl",
+        "version": "6.10-1"
+      },
+      {
+        "name": "libhttp-daemon-perl",
+        "version": "6.13-1ubuntu0.1"
+      },
+      {
+        "name": "libhttp-date-perl",
+        "version": "6.05-1"
+      },
+      {
+        "name": "libhttp-message-perl",
+        "version": "6.36-1"
+      },
+      {
+        "name": "libhttp-negotiate-perl",
+        "version": "6.01-1"
+      },
+      {
+        "name": "libhunspell-1.7-0",
+        "version": "1.7.0-4build1"
+      },
+      {
+        "name": "libhyphen0",
+        "version": "2.8.8-7build2"
+      },
+      {
+        "name": "libib-util",
+        "version": "3.0.8.33535.ds4-1ubuntu2"
+      },
+      {
+        "name": "libice-dev",
+        "version": "2:1.0.10-1build2"
+      },
+      {
+        "name": "libice6",
+        "version": "2:1.0.10-1build2"
+      },
+      {
+        "name": "libicu70",
+        "version": "70.1-2"
+      },
+      {
+        "name": "libidn2-0",
+        "version": "2.3.2-2build1"
+      },
+      {
+        "name": "libiec61883-0",
+        "version": "1.2.0-4build3"
+      },
+      {
+        "name": "libigdgmm12",
+        "version": "22.1.2+ds1-1"
+      },
+      {
+        "name": "libio-html-perl",
+        "version": "1.004-2"
+      },
+      {
+        "name": "libio-socket-ssl-perl",
+        "version": "2.074-2"
+      },
+      {
+        "name": "libio-stringy-perl",
+        "version": "2.111-3"
+      },
+      {
+        "name": "libip4tc2",
+        "version": "1.8.7-1ubuntu5.2"
+      },
+      {
+        "name": "libipc-system-simple-perl",
+        "version": "1.30-1"
+      },
+      {
+        "name": "libisl23",
+        "version": "0.24-2build1"
+      },
+      {
+        "name": "libitm1",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libjack-jackd2-0",
+        "version": "1.9.20~dfsg-1"
+      },
+      {
+        "name": "libjbig0",
+        "version": "2.1-3.1ubuntu0.22.04.1"
+      },
+      {
+        "name": "libjpeg-turbo8",
+        "version": "2.1.2-0ubuntu1"
+      },
+      {
+        "name": "libjpeg8",
+        "version": "8c-2ubuntu10"
+      },
+      {
+        "name": "libjq1",
+        "version": "1.6-2.1ubuntu3.1"
+      },
+      {
+        "name": "libjson-c5",
+        "version": "0.15-3~ubuntu1.22.04.2"
+      },
+      {
+        "name": "libjsp-api-java",
+        "version": "2.3.4-3"
+      },
+      {
+        "name": "libk5crypto3",
+        "version": "1.19.2-2ubuntu0.7"
+      },
+      {
+        "name": "libkeyutils1",
+        "version": "1.6.1-2ubuntu3"
+      },
+      {
+        "name": "libkmod2",
+        "version": "29-1ubuntu1"
+      },
+      {
+        "name": "libkrb5-3",
+        "version": "1.19.2-2ubuntu0.7"
+      },
+      {
+        "name": "libkrb5support0",
+        "version": "1.19.2-2ubuntu0.7"
+      },
+      {
+        "name": "libksba8",
+        "version": "1.6.0-2ubuntu0.2"
+      },
+      {
+        "name": "liblangtag-common",
+        "version": "0.6.3-2ubuntu1"
+      },
+      {
+        "name": "liblangtag1",
+        "version": "0.6.3-2ubuntu1"
+      },
+      {
+        "name": "liblapack3",
+        "version": "3.10.0-2ubuntu1"
+      },
+      {
+        "name": "liblcms2-2",
+        "version": "2.12~rc1-2build2"
+      },
+      {
+        "name": "libldap-2.5-0",
+        "version": "2.5.19+dfsg-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libldap-common",
+        "version": "2.5.19+dfsg-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "liblibreoffice-java",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "liblilv-0-0",
+        "version": "0.24.12-2"
+      },
+      {
+        "name": "libllvm11",
+        "version": "1:11.1.0-6"
+      },
+      {
+        "name": "libllvm15",
+        "version": "1:15.0.7-0ubuntu0.22.04.3"
+      },
+      {
+        "name": "liblocale-gettext-perl",
+        "version": "1.07-4build3"
+      },
+      {
+        "name": "liblsan0",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libltdl7",
+        "version": "2.4.6-15build2"
+      },
+      {
+        "name": "liblwp-mediatypes-perl",
+        "version": "6.04-1"
+      },
+      {
+        "name": "liblwp-protocol-https-perl",
+        "version": "6.10-1"
+      },
+      {
+        "name": "liblz4-1",
+        "version": "1.9.3-2build2"
+      },
+      {
+        "name": "liblzma5",
+        "version": "5.2.5-2ubuntu1"
+      },
+      {
+        "name": "liblzo2-2",
+        "version": "2.10-2build3"
+      },
+      {
+        "name": "libmailtools-perl",
+        "version": "2.21-1"
+      },
+      {
+        "name": "libmd0",
+        "version": "1.0.4-1build1"
+      },
+      {
+        "name": "libmfx1",
+        "version": "22.3.0-1"
+      },
+      {
+        "name": "libmhash2",
+        "version": "0.9.9.9-9build2"
+      },
+      {
+        "name": "libmount-dev",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "libmount1",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "libmp3lame0",
+        "version": "3.100-3build2"
+      },
+      {
+        "name": "libmpc3",
+        "version": "1.2.1-2build1"
+      },
+      {
+        "name": "libmpdec3",
+        "version": "2.5.1-2build2"
+      },
+      {
+        "name": "libmpfr6",
+        "version": "4.1.0-3build3"
+      },
+      {
+        "name": "libmpg123-0",
+        "version": "1.29.3-1ubuntu0.1"
+      },
+      {
+        "name": "libmspub-0.1-1",
+        "version": "0.1.4-3build3"
+      },
+      {
+        "name": "libmwaw-0.3-3",
+        "version": "0.3.21-1build1"
+      },
+      {
+        "name": "libmysofa1",
+        "version": "1.2.1~dfsg0-1"
+      },
+      {
+        "name": "libmysqlclient21",
+        "version": "8.0.43-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libmythes-1.2-0",
+        "version": "2:1.2.4-4build1"
+      },
+      {
+        "name": "libncurses6",
+        "version": "6.3-2ubuntu0.1"
+      },
+      {
+        "name": "libncursesw6",
+        "version": "6.3-2ubuntu0.1"
+      },
+      {
+        "name": "libnet-dbus-perl",
+        "version": "1.2.0-1build3"
+      },
+      {
+        "name": "libnet-http-perl",
+        "version": "6.22-1"
+      },
+      {
+        "name": "libnet-smtp-ssl-perl",
+        "version": "1.04-1"
+      },
+      {
+        "name": "libnet-ssleay-perl",
+        "version": "1.92-1build2"
+      },
+      {
+        "name": "libnettle8",
+        "version": "3.7.3-1build2"
+      },
+      {
+        "name": "libnghttp2-14",
+        "version": "1.43.0-1ubuntu0.2"
+      },
+      {
+        "name": "libnorm1",
+        "version": "1.5.9+dfsg-2"
+      },
+      {
+        "name": "libnpth0",
+        "version": "1.6-3build2"
+      },
+      {
+        "name": "libnsl-dev",
+        "version": "1.3.0-2build2"
+      },
+      {
+        "name": "libnsl2",
+        "version": "1.3.0-2build2"
+      },
+      {
+        "name": "libnspr4",
+        "version": "2:4.35-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libnss-systemd",
+        "version": "249.11-0ubuntu3.16"
+      },
+      {
+        "name": "libnss3",
+        "version": "2:3.98-0ubuntu0.22.04.2"
+      },
+      {
+        "name": "libnuma1",
+        "version": "2.0.14-3ubuntu2"
+      },
+      {
+        "name": "libodfgen-0.1-1",
+        "version": "0.1.8-2build2"
+      },
+      {
+        "name": "libogg0",
+        "version": "1.3.5-0ubuntu3"
+      },
+      {
+        "name": "libonig5",
+        "version": "6.9.7.1-2build1"
+      },
+      {
+        "name": "libopenal-data",
+        "version": "1:1.19.1-2build3"
+      },
+      {
+        "name": "libopenal1",
+        "version": "1:1.19.1-2build3"
+      },
+      {
+        "name": "libopenjp2-7",
+        "version": "2.4.0-6ubuntu0.3"
+      },
+      {
+        "name": "libopenmpt0",
+        "version": "0.6.1-1"
+      },
+      {
+        "name": "libopus0",
+        "version": "1.3.1-0.1build2"
+      },
+      {
+        "name": "liborc-0.4-0",
+        "version": "1:0.4.32-2ubuntu0.1"
+      },
+      {
+        "name": "liborcus-0.17-0",
+        "version": "0.17.2-2"
+      },
+      {
+        "name": "liborcus-parser-0.17-0",
+        "version": "0.17.2-2"
+      },
+      {
+        "name": "libp11-kit0",
+        "version": "0.24.0-6build1"
+      },
+      {
+        "name": "libpagemaker-0.0-0",
+        "version": "0.0.4-1build3"
+      },
+      {
+        "name": "libpam-cap",
+        "version": "1:2.44-1ubuntu0.22.04.2"
+      },
+      {
+        "name": "libpam-modules-bin",
+        "version": "1.4.0-11ubuntu2.6"
+      },
+      {
+        "name": "libpam-modules",
+        "version": "1.4.0-11ubuntu2.6"
+      },
+      {
+        "name": "libpam-runtime",
+        "version": "1.4.0-11ubuntu2.6"
+      },
+      {
+        "name": "libpam-systemd",
+        "version": "249.11-0ubuntu3.16"
+      },
+      {
+        "name": "libpam0g",
+        "version": "1.4.0-11ubuntu2.6"
+      },
+      {
+        "name": "libpango-1.0-0",
+        "version": "1.50.6+ds-2ubuntu1"
+      },
+      {
+        "name": "libpangocairo-1.0-0",
+        "version": "1.50.6+ds-2ubuntu1"
+      },
+      {
+        "name": "libpangoft2-1.0-0",
+        "version": "1.50.6+ds-2ubuntu1"
+      },
+      {
+        "name": "libpaper-utils",
+        "version": "1.1.28build2"
+      },
+      {
+        "name": "libpaper1",
+        "version": "1.1.28build2"
+      },
+      {
+        "name": "libpciaccess0",
+        "version": "0.16-3"
+      },
+      {
+        "name": "libpcre16-3",
+        "version": "2:8.39-13ubuntu0.22.04.1"
+      },
+      {
+        "name": "libpcre2-16-0",
+        "version": "10.39-3ubuntu0.1"
+      },
+      {
+        "name": "libpcre2-32-0",
+        "version": "10.39-3ubuntu0.1"
+      },
+      {
+        "name": "libpcre2-8-0",
+        "version": "10.39-3ubuntu0.1"
+      },
+      {
+        "name": "libpcre2-dev",
+        "version": "10.39-3ubuntu0.1"
+      },
+      {
+        "name": "libpcre2-posix3",
+        "version": "10.39-3ubuntu0.1"
+      },
+      {
+        "name": "libpcre3-dev",
+        "version": "2:8.39-13ubuntu0.22.04.1"
+      },
+      {
+        "name": "libpcre32-3",
+        "version": "2:8.39-13ubuntu0.22.04.1"
+      },
+      {
+        "name": "libpcre3",
+        "version": "2:8.39-13ubuntu0.22.04.1"
+      },
+      {
+        "name": "libpcrecpp0v5",
+        "version": "2:8.39-13ubuntu0.22.04.1"
+      },
+      {
+        "name": "libpcsclite1",
+        "version": "1.9.5-3ubuntu1"
+      },
+      {
+        "name": "libperl5.34",
+        "version": "5.34.0-3ubuntu1.5"
+      },
+      {
+        "name": "libpgm-5.3-0",
+        "version": "5.3.128~dfsg-2"
+      },
+      {
+        "name": "libphobos2-ldc-shared98",
+        "version": "1:1.28.0-1ubuntu1"
+      },
+      {
+        "name": "libpixman-1-0",
+        "version": "0.40.0-1ubuntu0.22.04.1"
+      },
+      {
+        "name": "libpixman-1-dev",
+        "version": "0.40.0-1ubuntu0.22.04.1"
+      },
+      {
+        "name": "libpng-dev",
+        "version": "1.6.37-3build5"
+      },
+      {
+        "name": "libpng-tools",
+        "version": "1.6.37-3build5"
+      },
+      {
+        "name": "libpng16-16",
+        "version": "1.6.37-3build5"
+      },
+      {
+        "name": "libpocketsphinx3",
+        "version": "0.8.0+real5prealpha+1-14ubuntu1"
+      },
+      {
+        "name": "libpoppler118",
+        "version": "22.02.0-2ubuntu0.10"
+      },
+      {
+        "name": "libpostproc55",
+        "version": "7:4.4.2-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libpq5",
+        "version": "14.19-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libprocps8",
+        "version": "2:3.3.17-6ubuntu2.1"
+      },
+      {
+        "name": "libpsl5",
+        "version": "0.21.0-1.2build2"
+      },
+      {
+        "name": "libpthread-stubs0-dev",
+        "version": "0.4-1build2"
+      },
+      {
+        "name": "libpulse0",
+        "version": "1:15.99.1+dfsg1-1ubuntu2.2"
+      },
+      {
+        "name": "libpython3-stdlib",
+        "version": "3.10.6-1~22.04.1"
+      },
+      {
+        "name": "libpython3.10-minimal",
+        "version": "3.10.12-1~22.04.11"
+      },
+      {
+        "name": "libpython3.10-stdlib",
+        "version": "3.10.12-1~22.04.11"
+      },
+      {
+        "name": "libpython3.10",
+        "version": "3.10.12-1~22.04.11"
+      },
+      {
+        "name": "libquadmath0",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "librabbitmq4",
+        "version": "0.10.0-1ubuntu2"
+      },
+      {
+        "name": "libraptor2-0",
+        "version": "2.0.15-0ubuntu4.1"
+      },
+      {
+        "name": "librasqal3",
+        "version": "0.9.33-0.2ubuntu1"
+      },
+      {
+        "name": "libraw1394-11",
+        "version": "2.1.2-2build2"
+      },
+      {
+        "name": "librdf0",
+        "version": "1.0.17-1.1ubuntu3"
+      },
+      {
+        "name": "libreadline8",
+        "version": "8.1.2-1"
+      },
+      {
+        "name": "libreoffice-base-core",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-base-drivers",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-base",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-calc",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-common",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-core",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-draw",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-gnome",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-gtk3",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-impress",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-java-common",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-math",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-nlpsolver",
+        "version": "0.9+LibO7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-report-builder-bin",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-report-builder",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-script-provider-bsh",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-script-provider-js",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-script-provider-python",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-sdbc-firebird",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-sdbc-hsqldb",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-sdbc-mysql",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-sdbc-postgresql",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-style-colibre",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-style-elementary",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-style-yaru",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-wiki-publisher",
+        "version": "1.2.0+LibO7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice-writer",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libreoffice",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "librevenge-0.0-0",
+        "version": "0.0.4-6ubuntu7"
+      },
+      {
+        "name": "librsvg2-2",
+        "version": "2.52.5+dfsg-3ubuntu0.2"
+      },
+      {
+        "name": "librsvg2-common",
+        "version": "2.52.5+dfsg-3ubuntu0.2"
+      },
+      {
+        "name": "librtmp1",
+        "version": "2.4+20151223.gitfa8646d.1-2build4"
+      },
+      {
+        "name": "librubberband2",
+        "version": "2.0.0-2"
+      },
+      {
+        "name": "libsamplerate0",
+        "version": "0.2.2-1build1"
+      },
+      {
+        "name": "libsasl2-2",
+        "version": "2.1.27+dfsg2-3ubuntu1.2"
+      },
+      {
+        "name": "libsasl2-modules-db",
+        "version": "2.1.27+dfsg2-3ubuntu1.2"
+      },
+      {
+        "name": "libsasl2-modules",
+        "version": "2.1.27+dfsg2-3ubuntu1.2"
+      },
+      {
+        "name": "libsdl2-2.0-0",
+        "version": "2.0.20+dfsg-2ubuntu1.22.04.1"
+      },
+      {
+        "name": "libseccomp2",
+        "version": "2.5.3-2ubuntu3~22.04.1"
+      },
+      {
+        "name": "libselinux1-dev",
+        "version": "3.3-1build2"
+      },
+      {
+        "name": "libselinux1",
+        "version": "3.3-1build2"
+      },
+      {
+        "name": "libsemanage-common",
+        "version": "3.3-1build2"
+      },
+      {
+        "name": "libsemanage2",
+        "version": "3.3-1build2"
+      },
+      {
+        "name": "libsensors-config",
+        "version": "1:3.6.0-7ubuntu1"
+      },
+      {
+        "name": "libsensors5",
+        "version": "1:3.6.0-7ubuntu1"
+      },
+      {
+        "name": "libsepol-dev",
+        "version": "3.3-1build1"
+      },
+      {
+        "name": "libsepol2",
+        "version": "3.3-1build1"
+      },
+      {
+        "name": "libserd-0-0",
+        "version": "0.30.10-2"
+      },
+      {
+        "name": "libservlet-api-java",
+        "version": "4.0.1-2"
+      },
+      {
+        "name": "libservlet3.1-java",
+        "version": "1:4.0.1-2"
+      },
+      {
+        "name": "libshine3",
+        "version": "3.1.1-2"
+      },
+      {
+        "name": "libsigsegv2",
+        "version": "2.13-1ubuntu3"
+      },
+      {
+        "name": "libslang2",
+        "version": "2.3.2-5build4"
+      },
+      {
+        "name": "libsm-dev",
+        "version": "2:1.2.3-1build2"
+      },
+      {
+        "name": "libsm6",
+        "version": "2:1.2.3-1build2"
+      },
+      {
+        "name": "libsmartcols1",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "libsnappy1v5",
+        "version": "1.1.8-1build3"
+      },
+      {
+        "name": "libsndfile1",
+        "version": "1.0.31-2ubuntu0.2"
+      },
+      {
+        "name": "libsndio7.0",
+        "version": "1.8.1-1.1"
+      },
+      {
+        "name": "libsodium23",
+        "version": "1.0.18-1build2"
+      },
+      {
+        "name": "libsord-0-0",
+        "version": "0.16.8-2"
+      },
+      {
+        "name": "libsoxr0",
+        "version": "0.1.3-4build2"
+      },
+      {
+        "name": "libspeex1",
+        "version": "1.2~rc1.2-1.1ubuntu3"
+      },
+      {
+        "name": "libsphinxbase3",
+        "version": "0.8+5prealpha+1-13build1"
+      },
+      {
+        "name": "libsqlite3-0",
+        "version": "3.37.2-2ubuntu0.5"
+      },
+      {
+        "name": "libsratom-0-0",
+        "version": "0.6.8-1"
+      },
+      {
+        "name": "libsrt1.4-gnutls",
+        "version": "1.4.4-4"
+      },
+      {
+        "name": "libss2",
+        "version": "1.46.5-2ubuntu1.2"
+      },
+      {
+        "name": "libssh-4",
+        "version": "0.9.6-2ubuntu0.22.04.4"
+      },
+      {
+        "name": "libssh-gcrypt-4",
+        "version": "0.9.6-2ubuntu0.22.04.4"
+      },
+      {
+        "name": "libssl3",
+        "version": "3.0.2-0ubuntu1.19"
+      },
+      {
+        "name": "libstdc++-11-dev",
+        "version": "11.4.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libstdc++6",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libsuitesparseconfig5",
+        "version": "1:5.10.1+dfsg-4build1"
+      },
+      {
+        "name": "libswresample3",
+        "version": "7:4.4.2-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libswscale5",
+        "version": "7:4.4.2-0ubuntu0.22.04.1"
+      },
+      {
+        "name": "libsystemd0",
+        "version": "249.11-0ubuntu3.16"
+      },
+      {
+        "name": "libtasn1-6",
+        "version": "4.18.0-4ubuntu0.1"
+      },
+      {
+        "name": "libtext-iconv-perl",
+        "version": "1.7-7build3"
+      },
+      {
+        "name": "libthai-data",
+        "version": "0.1.29-1build1"
+      },
+      {
+        "name": "libthai0",
+        "version": "0.1.29-1build1"
+      },
+      {
+        "name": "libtheora0",
+        "version": "1.1.1+dfsg.1-15ubuntu4"
+      },
+      {
+        "name": "libtie-ixhash-perl",
+        "version": "1.23-2.1"
+      },
+      {
+        "name": "libtiff5",
+        "version": "4.3.0-6ubuntu0.11"
+      },
+      {
+        "name": "libtimedate-perl",
+        "version": "2.3300-2"
+      },
+      {
+        "name": "libtinfo6",
+        "version": "6.3-2ubuntu0.1"
+      },
+      {
+        "name": "libtirpc-common",
+        "version": "1.3.2-2ubuntu0.1"
+      },
+      {
+        "name": "libtirpc-dev",
+        "version": "1.3.2-2ubuntu0.1"
+      },
+      {
+        "name": "libtirpc3",
+        "version": "1.3.2-2ubuntu0.1"
+      },
+      {
+        "name": "libtommath1",
+        "version": "1.2.0-6ubuntu0.22.04.1"
+      },
+      {
+        "name": "libtry-tiny-perl",
+        "version": "0.31-1"
+      },
+      {
+        "name": "libtsan0",
+        "version": "11.4.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libtwolame0",
+        "version": "0.4.0-2build2"
+      },
+      {
+        "name": "libubsan1",
+        "version": "12.3.0-1ubuntu1~22.04.2"
+      },
+      {
+        "name": "libudev1",
+        "version": "249.11-0ubuntu3.16"
+      },
+      {
+        "name": "libudfread0",
+        "version": "1.1.2-1"
+      },
+      {
+        "name": "libunistring2",
+        "version": "1.0-1"
+      },
+      {
+        "name": "libuno-cppu3",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libuno-cppuhelpergcc3-3",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libuno-purpenvhelpergcc3-3",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libuno-sal3",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libuno-salhelpergcc3-3",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libunoloader-java",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "libunwind8",
+        "version": "1.3.2-2build2.1"
+      },
+      {
+        "name": "liburi-perl",
+        "version": "5.10-1"
+      },
+      {
+        "name": "libusb-1.0-0",
+        "version": "2:1.0.25-1ubuntu2"
+      },
+      {
+        "name": "libuuid1",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "libva-drm2",
+        "version": "2.14.0-1"
+      },
+      {
+        "name": "libva-x11-2",
+        "version": "2.14.0-1"
+      },
+      {
+        "name": "libva2",
+        "version": "2.14.0-1"
+      },
+      {
+        "name": "libvdpau1",
+        "version": "1.4-3build2"
+      },
+      {
+        "name": "libvidstab1.1",
+        "version": "1.1.0-2"
+      },
+      {
+        "name": "libvisio-0.1-1",
+        "version": "0.1.7-1build5"
+      },
+      {
+        "name": "libvisual-0.4-0",
+        "version": "0.4.0-17build2"
+      },
+      {
+        "name": "libvorbis0a",
+        "version": "1.3.7-1build2"
+      },
+      {
+        "name": "libvorbisenc2",
+        "version": "1.3.7-1build2"
+      },
+      {
+        "name": "libvorbisfile3",
+        "version": "1.3.7-1build2"
+      },
+      {
+        "name": "libvpx7",
+        "version": "1.11.0-2ubuntu2.4"
+      },
+      {
+        "name": "libvte-2.91-0",
+        "version": "0.68.0-1ubuntu0.1"
+      },
+      {
+        "name": "libvte-2.91-common",
+        "version": "0.68.0-1ubuntu0.1"
+      },
+      {
+        "name": "libvted-3-0",
+        "version": "3.10.0-1ubuntu1"
+      },
+      {
+        "name": "libwayland-client0",
+        "version": "1.20.0-1ubuntu0.1"
+      },
+      {
+        "name": "libwayland-cursor0",
+        "version": "1.20.0-1ubuntu0.1"
+      },
+      {
+        "name": "libwayland-egl1",
+        "version": "1.20.0-1ubuntu0.1"
+      },
+      {
+        "name": "libwayland-server0",
+        "version": "1.20.0-1ubuntu0.1"
+      },
+      {
+        "name": "libwebp7",
+        "version": "1.2.2-2ubuntu0.22.04.2"
+      },
+      {
+        "name": "libwebpmux3",
+        "version": "1.2.2-2ubuntu0.22.04.2"
+      },
+      {
+        "name": "libwebsocket-api-java",
+        "version": "1.1-2"
+      },
+      {
+        "name": "libwpd-0.10-10",
+        "version": "0.10.3-2build1"
+      },
+      {
+        "name": "libwpg-0.3-3",
+        "version": "0.3.3-1build3"
+      },
+      {
+        "name": "libwps-0.4-4",
+        "version": "0.4.12-2build1"
+      },
+      {
+        "name": "libwww-perl",
+        "version": "6.61-1"
+      },
+      {
+        "name": "libwww-robotrules-perl",
+        "version": "6.02-1"
+      },
+      {
+        "name": "libx11-6",
+        "version": "2:1.7.5-1ubuntu0.3"
+      },
+      {
+        "name": "libx11-data",
+        "version": "2:1.7.5-1ubuntu0.3"
+      },
+      {
+        "name": "libx11-dev",
+        "version": "2:1.7.5-1ubuntu0.3"
+      },
+      {
+        "name": "libx11-protocol-perl",
+        "version": "0.56-7.1"
+      },
+      {
+        "name": "libx11-xcb1",
+        "version": "2:1.7.5-1ubuntu0.3"
+      },
+      {
+        "name": "libx264-163",
+        "version": "2:0.163.3060+git5db6aa6-2build1"
+      },
+      {
+        "name": "libx265-199",
+        "version": "3.5-2"
+      },
+      {
+        "name": "libxau-dev",
+        "version": "1:1.0.9-1build5"
+      },
+      {
+        "name": "libxau6",
+        "version": "1:1.0.9-1build5"
+      },
+      {
+        "name": "libxaw7",
+        "version": "2:1.0.14-1"
+      },
+      {
+        "name": "libxcb-dri2-0",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-dri3-0",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-glx0",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-present0",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-randr0",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-render0-dev",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-render0",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-shape0",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-shm0-dev",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-shm0",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-sync1",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb-xfixes0",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb1-dev",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcb1",
+        "version": "1.14-3ubuntu3"
+      },
+      {
+        "name": "libxcomposite1",
+        "version": "1:0.4.5-1build2"
+      },
+      {
+        "name": "libxcursor1",
+        "version": "1:1.2.0-2build4"
+      },
+      {
+        "name": "libxdamage1",
+        "version": "1:1.1.5-2build2"
+      },
+      {
+        "name": "libxdmcp-dev",
+        "version": "1:1.1.3-0ubuntu5"
+      },
+      {
+        "name": "libxdmcp6",
+        "version": "1:1.1.3-0ubuntu5"
+      },
+      {
+        "name": "libxext-dev",
+        "version": "2:1.3.4-1build1"
+      },
+      {
+        "name": "libxext6",
+        "version": "2:1.3.4-1build1"
+      },
+      {
+        "name": "libxfixes3",
+        "version": "1:6.0.0-1"
+      },
+      {
+        "name": "libxft2",
+        "version": "2.3.4-1"
+      },
+      {
+        "name": "libxi6",
+        "version": "2:1.8-1build1"
+      },
+      {
+        "name": "libxinerama1",
+        "version": "2:1.1.4-3"
+      },
+      {
+        "name": "libxkbcommon0",
+        "version": "1.4.0-1"
+      },
+      {
+        "name": "libxkbfile1",
+        "version": "1:1.1.0-1build3"
+      },
+      {
+        "name": "libxml-parser-perl",
+        "version": "2.46-3build1"
+      },
+      {
+        "name": "libxml-twig-perl",
+        "version": "1:3.52-1"
+      },
+      {
+        "name": "libxml-xpathengine-perl",
+        "version": "0.14-1"
+      },
+      {
+        "name": "libxml2",
+        "version": "2.9.13+dfsg-1ubuntu0.9"
+      },
+      {
+        "name": "libxmlsec1-nss",
+        "version": "1.2.33-1build2"
+      },
+      {
+        "name": "libxmlsec1",
+        "version": "1.2.33-1build2"
+      },
+      {
+        "name": "libxmu6",
+        "version": "2:1.1.3-3"
+      },
+      {
+        "name": "libxmuu1",
+        "version": "2:1.1.3-3"
+      },
+      {
+        "name": "libxpm4",
+        "version": "1:3.5.12-1ubuntu0.22.04.2"
+      },
+      {
+        "name": "libxrandr2",
+        "version": "2:1.5.2-1build1"
+      },
+      {
+        "name": "libxrender-dev",
+        "version": "1:0.9.10-1build4"
+      },
+      {
+        "name": "libxrender1",
+        "version": "1:0.9.10-1build4"
+      },
+      {
+        "name": "libxshmfence1",
+        "version": "1.3-1build4"
+      },
+      {
+        "name": "libxslt1.1",
+        "version": "1.1.34-4ubuntu0.22.04.4"
+      },
+      {
+        "name": "libxss1",
+        "version": "1:1.2.3-1build2"
+      },
+      {
+        "name": "libxt6",
+        "version": "1:1.2.1-1"
+      },
+      {
+        "name": "libxtst6",
+        "version": "2:1.2.3-1build4"
+      },
+      {
+        "name": "libxv1",
+        "version": "2:1.0.11-1build2"
+      },
+      {
+        "name": "libxvidcore4",
+        "version": "2:1.3.7-1"
+      },
+      {
+        "name": "libxxf86dga1",
+        "version": "2:1.1.5-0ubuntu3"
+      },
+      {
+        "name": "libxxf86vm1",
+        "version": "1:1.1.4-1build3"
+      },
+      {
+        "name": "libxxhash0",
+        "version": "0.8.1-1"
+      },
+      {
+        "name": "libyajl2",
+        "version": "2.1.0-3ubuntu0.22.04.1"
+      },
+      {
+        "name": "libzimg2",
+        "version": "3.0.3+ds1-1"
+      },
+      {
+        "name": "libzmq5",
+        "version": "4.3.4-2"
+      },
+      {
+        "name": "libzstd1",
+        "version": "1.4.8+dfsg-3build1"
+      },
+      {
+        "name": "libzvbi-common",
+        "version": "0.2.35-19"
+      },
+      {
+        "name": "libzvbi0",
+        "version": "0.2.35-19"
+      },
+      {
+        "name": "linux-libc-dev",
+        "version": "5.15.0-153.163"
+      },
+      {
+        "name": "login",
+        "version": "1:4.8.1-2ubuntu2.2"
+      },
+      {
+        "name": "logsave",
+        "version": "1.46.5-2ubuntu1.2"
+      },
+      {
+        "name": "lp-solve",
+        "version": "5.5.2.5-2build2"
+      },
+      {
+        "name": "lsb-base",
+        "version": "11.1.0ubuntu4"
+      },
+      {
+        "name": "lto-disabled-list",
+        "version": "24"
+      },
+      {
+        "name": "m4",
+        "version": "1.4.18-5ubuntu2"
+      },
+      {
+        "name": "make",
+        "version": "4.3-4.1build1"
+      },
+      {
+        "name": "manpages-dev",
+        "version": "5.10-1ubuntu1"
+      },
+      {
+        "name": "manpages",
+        "version": "5.10-1ubuntu1"
+      },
+      {
+        "name": "mawk",
+        "version": "1.3.4.20200120-3"
+      },
+      {
+        "name": "media-types",
+        "version": "7.0.0"
+      },
+      {
+        "name": "mesa-va-drivers",
+        "version": "23.2.1-1ubuntu3.1~22.04.3"
+      },
+      {
+        "name": "mesa-vdpau-drivers",
+        "version": "23.2.1-1ubuntu3.1~22.04.3"
+      },
+      {
+        "name": "mount",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "mysql-common",
+        "version": "5.8+1.0.8"
+      },
+      {
+        "name": "ncurses-base",
+        "version": "6.3-2ubuntu0.1"
+      },
+      {
+        "name": "ncurses-bin",
+        "version": "6.3-2ubuntu0.1"
+      },
+      {
+        "name": "net-tools",
+        "version": "1.60+git20181103.0eebece-1ubuntu5.4"
+      },
+      {
+        "name": "netbase",
+        "version": "6.3"
+      },
+      {
+        "name": "networkd-dispatcher",
+        "version": "2.1-2ubuntu0.22.04.2"
+      },
+      {
+        "name": "ocl-icd-libopencl1",
+        "version": "2.2.14-3"
+      },
+      {
+        "name": "openjdk-11-jre-headless",
+        "version": "11.0.28+6-1ubuntu1~22.04.1"
+      },
+      {
+        "name": "openjdk-11-jre",
+        "version": "11.0.28+6-1ubuntu1~22.04.1"
+      },
+      {
+        "name": "openssl",
+        "version": "3.0.2-0ubuntu1.19"
+      },
+      {
+        "name": "packages-microsoft-prod",
+        "version": "1.0-ubuntu22.04.1"
+      },
+      {
+        "name": "passwd",
+        "version": "1:4.8.1-2ubuntu2.2"
+      },
+      {
+        "name": "patch",
+        "version": "2.7.6-7build2"
+      },
+      {
+        "name": "perl-base",
+        "version": "5.34.0-3ubuntu1.5"
+      },
+      {
+        "name": "perl-modules-5.34",
+        "version": "5.34.0-3ubuntu1.5"
+      },
+      {
+        "name": "perl-openssl-defaults",
+        "version": "5build2"
+      },
+      {
+        "name": "perl",
+        "version": "5.34.0-3ubuntu1.5"
+      },
+      {
+        "name": "pinentry-curses",
+        "version": "1.1.1-1build2"
+      },
+      {
+        "name": "pkg-config",
+        "version": "0.29.2-1ubuntu3"
+      },
+      {
+        "name": "pocketsphinx-en-us",
+        "version": "0.8.0+real5prealpha+1-14ubuntu1"
+      },
+      {
+        "name": "poppler-data",
+        "version": "0.4.11-1"
+      },
+      {
+        "name": "procps",
+        "version": "2:3.3.17-6ubuntu2.1"
+      },
+      {
+        "name": "publicsuffix",
+        "version": "20211207.1025-1"
+      },
+      {
+        "name": "python3-dbus",
+        "version": "1.2.18-3build1"
+      },
+      {
+        "name": "python3-distutils",
+        "version": "3.10.8-1~22.04"
+      },
+      {
+        "name": "python3-gi",
+        "version": "3.42.1-0ubuntu1"
+      },
+      {
+        "name": "python3-lib2to3",
+        "version": "3.10.8-1~22.04"
+      },
+      {
+        "name": "python3-minimal",
+        "version": "3.10.6-1~22.04.1"
+      },
+      {
+        "name": "python3-uno",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "python3.10-minimal",
+        "version": "3.10.12-1~22.04.11"
+      },
+      {
+        "name": "python3.10",
+        "version": "3.10.12-1~22.04.11"
+      },
+      {
+        "name": "python3",
+        "version": "3.10.6-1~22.04.1"
+      },
+      {
+        "name": "readline-common",
+        "version": "8.1.2-1"
+      },
+      {
+        "name": "rpcsvc-proto",
+        "version": "1.4.2-0ubuntu6"
+      },
+      {
+        "name": "sed",
+        "version": "4.8-1ubuntu2"
+      },
+      {
+        "name": "sensible-utils",
+        "version": "0.0.17"
+      },
+      {
+        "name": "session-migration",
+        "version": "0.3.6"
+      },
+      {
+        "name": "shared-mime-info",
+        "version": "2.1-2"
+      },
+      {
+        "name": "systemd-sysv",
+        "version": "249.11-0ubuntu3.16"
+      },
+      {
+        "name": "systemd-timesyncd",
+        "version": "249.11-0ubuntu3.16"
+      },
+      {
+        "name": "systemd",
+        "version": "249.11-0ubuntu3.16"
+      },
+      {
+        "name": "sysvinit-utils",
+        "version": "3.01-1ubuntu1"
+      },
+      {
+        "name": "tar",
+        "version": "1.34+dfsg-1ubuntu0.1.22.04.2"
+      },
+      {
+        "name": "tilix-common",
+        "version": "1.9.4-2build1"
+      },
+      {
+        "name": "tilix",
+        "version": "1.9.4-2build1"
+      },
+      {
+        "name": "ubuntu-keyring",
+        "version": "2021.03.26"
+      },
+      {
+        "name": "ubuntu-mono",
+        "version": "20.10-0ubuntu2"
+      },
+      {
+        "name": "ucf",
+        "version": "3.0043"
+      },
+      {
+        "name": "uno-libs-private",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "ure-java",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "ure",
+        "version": "1:7.3.7-0ubuntu0.22.04.10"
+      },
+      {
+        "name": "usrmerge",
+        "version": "25ubuntu2"
+      },
+      {
+        "name": "util-linux",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "uuid-dev",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "uuid-runtime",
+        "version": "2.37.2-4ubuntu3.4"
+      },
+      {
+        "name": "va-driver-all",
+        "version": "2.14.0-1"
+      },
+      {
+        "name": "vdpau-driver-all",
+        "version": "1.4-3build2"
+      },
+      {
+        "name": "vim-common",
+        "version": "2:8.2.3995-1ubuntu2.24"
+      },
+      {
+        "name": "vim-runtime",
+        "version": "2:8.2.3995-1ubuntu2.24"
+      },
+      {
+        "name": "vim",
+        "version": "2:8.2.3995-1ubuntu2.24"
+      },
+      {
+        "name": "wget",
+        "version": "1.21.2-2ubuntu1.1"
+      },
+      {
+        "name": "x11-common",
+        "version": "1:7.7+23ubuntu2"
+      },
+      {
+        "name": "x11-utils",
+        "version": "7.7+5build2"
+      },
+      {
+        "name": "x11-xserver-utils",
+        "version": "7.7+9build1"
+      },
+      {
+        "name": "x11proto-dev",
+        "version": "2021.5-1"
+      },
+      {
+        "name": "xdg-user-dirs",
+        "version": "0.17-2ubuntu4"
+      },
+      {
+        "name": "xdg-utils",
+        "version": "1.1.3-4.1ubuntu3~22.04.1"
+      },
+      {
+        "name": "xkb-data",
+        "version": "2.33-1"
+      },
+      {
+        "name": "xorg-sgml-doctools",
+        "version": "1:1.11-1.1"
+      },
+      {
+        "name": "xtrans-dev",
+        "version": "1.4.0-1"
+      },
+      {
+        "name": "xxd",
+        "version": "2:8.2.3995-1ubuntu2.24"
+      },
+      {
+        "name": "xz-utils",
+        "version": "5.2.5-2ubuntu1"
+      },
+      {
+        "name": "zlib1g-dev",
+        "version": "1:1.2.11.dfsg-2ubuntu9.2"
+      },
+      {
+        "name": "zlib1g",
+        "version": "1:1.2.11.dfsg-2ubuntu9.2"
+      }
+    ]
+  }
+}

@@ -192,8 +192,8 @@ export function TerminalPocPage() {
 
     terminalRef.current?.clear();
     terminalRef.current?.writeln("Temporary ADE terminal proof of concept.");
-    terminalRef.current?.writeln("Waiting for the session bridge...");
-    setTerminalStatus("connecting", "Connecting to the terminal bridge...");
+    terminalRef.current?.writeln("Waiting for the session connection...");
+    setTerminalStatus("connecting", "Connecting to the terminal...");
 
     const socket = new WebSocket(
       buildTerminalWebSocketUrl(workspaceId, configVersionId),
@@ -281,11 +281,9 @@ export function TerminalPocPage() {
     <section className="panel terminal-poc">
       <div className="hero">
         <p className="eyebrow">Temporary terminal POC</p>
-        <h2 className="hero__title">
-          Interactive shell over the session bridge.
-        </h2>
+        <h2 className="hero__title">Interactive shell over the session.</h2>
         <p className="hero__summary">
-          This page exists only to validate the reverse WebSocket bridge on the
+          This page exists only to validate the reverse connection on the
           built-in session pool. Sessions hard-stop after about 220 seconds.
         </p>
       </div>

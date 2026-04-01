@@ -41,61 +41,42 @@ fn request_with_method(uri: &str, method: Method) -> Request<Body> {
 fn fixture_scope_session_service() -> Arc<ScopeSessionService> {
     let tempdir = tempdir().unwrap();
     let bundle_root = tempdir.path().join("session-bundle");
+    let config_root = tempdir.path().join("session-configs");
     fs::create_dir_all(bundle_root.join("bin")).unwrap();
     fs::create_dir_all(bundle_root.join("python")).unwrap();
     fs::create_dir_all(bundle_root.join("wheelhouse/base")).unwrap();
+    fs::create_dir_all(config_root.join("workspace-a/config-v1")).unwrap();
     let connector = bundle_root.join("bin/reverse-connect");
     let prepare = bundle_root.join("bin/prepare.sh");
+    let run_script = bundle_root.join("bin/run.py");
     let engine = bundle_root.join("wheelhouse/base/ade_engine-0.1.0-py3-none-any.whl");
-    let config = tempdir.path().join("ade_config-0.1.0-py3-none-any.whl");
-    let toolchain = bundle_root.join("python/python-3.14.0-linux-x86_64.tar.gz");
+    let config = config_root.join("workspace-a/config-v1/ade_config-0.1.0-py3-none-any.whl");
+    let toolchain = bundle_root.join("python/python-3.12.11-linux-x86_64.tar.gz");
     std::fs::write(&connector, b"connector").unwrap();
     std::fs::write(&prepare, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(&run_script, b"print('ok')\n").unwrap();
     std::fs::write(&engine, b"engine").unwrap();
     std::fs::write(&config, b"config").unwrap();
     std::fs::write(&toolchain, b"toolchain").unwrap();
-
-    let env = [
-        (
-            "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
-            "http://127.0.0.1:9".to_string(),
-        ),
-        (
-            "ADE_SESSION_BUNDLE_ROOT".to_string(),
-            bundle_root.display().to_string(),
-        ),
-        (
-            "ADE_SESSION_SECRET".to_string(),
-            "test-session-secret".to_string(),
-        ),
-        (
-            "ADE_CONFIG_TARGETS".to_string(),
-            serde_json::json!([
-                {
-                    "workspaceId": "workspace-a",
-                    "configVersionId": "config-v1",
-                    "wheelPath": config.display().to_string(),
-                }
-            ])
-            .to_string(),
-        ),
-        (
-            "ADE_APP_URL".to_string(),
-            "http://127.0.0.1:8000".to_string(),
-        ),
-    ]
-    .into_iter()
-    .collect();
     std::mem::forget(tempdir);
 
-    Arc::new(ScopeSessionService::from_env(&env).unwrap())
+    Arc::new(
+        ScopeSessionService::from_paths(
+            "http://127.0.0.1:8000",
+            "http://127.0.0.1:9",
+            "test-session-secret",
+            bundle_root,
+            config_root,
+        )
+        .unwrap(),
+    )
 }
 
 fn fixture_terminal_service(
     scope_session_service: Arc<ScopeSessionService>,
 ) -> Arc<TerminalService> {
     let env = [(
-        "ADE_APP_URL".to_string(),
+        "ADE_PUBLIC_API_URL".to_string(),
         "http://127.0.0.1:8000".to_string(),
     )]
     .into_iter()
@@ -108,7 +89,7 @@ fn app_state(readiness: ReadinessController) -> AppState {
     let scope_session_service = fixture_scope_session_service();
     let env = [
         (
-            "ADE_APP_URL".to_string(),
+            "ADE_PUBLIC_API_URL".to_string(),
             "http://127.0.0.1:8000".to_string(),
         ),
         (

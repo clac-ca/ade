@@ -15,8 +15,9 @@ use crate::{
     runs::RunTimings,
 };
 
-const DEFAULT_AZURE_SESSION_API_VERSION: &str = "2025-10-02-preview";
+pub(crate) const AZURE_SHELL_API_VERSION: &str = "2025-10-02-preview";
 const DEFAULT_AZURE_SESSION_AUDIENCE: &str = "https://dynamicsessions.io";
+const DEFAULT_LOCAL_SESSION_POOL_BEARER_TOKEN: &str = "ade-local-session-token";
 const SESSION_POOL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_POOL_DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const SESSION_POOL_EXECUTION_TIMEOUT_BUFFER_SECONDS: u64 = 30;
@@ -114,8 +115,6 @@ impl SessionPoolClient {
             .await?
             .timeout(session_pool_execution_timeout(timeout_in_seconds))
             .json(&ShellExecutionRequest {
-                code_input_type: "Inline",
-                execution_type: "Synchronous",
                 shell_command,
                 timeout_in_seconds,
             });
@@ -140,21 +139,18 @@ impl SessionPoolClient {
     pub(crate) async fn upload_file(
         &self,
         identifier: &str,
-        filename: String,
-        content_type: Option<String>,
+        path: Option<&str>,
+        filename: &str,
+        content_type: Option<&str>,
         content: Vec<u8>,
     ) -> Result<SessionOperationResult<SessionFile>, AppError> {
-        let (directory, name) = match filename.rsplit_once('/') {
-            Some((directory, name)) if !directory.is_empty() => (Some(directory), name),
-            _ => (None, filename.as_str()),
-        };
-        let mut part = Part::bytes(content).file_name(name.to_string());
+        let mut part = Part::bytes(content).file_name(filename.to_string());
         if let Some(content_type) = content_type {
-            part = part.mime_str(&content_type).map_err(|error| {
+            part = part.mime_str(content_type).map_err(|error| {
                 AppError::request(format!("Invalid uploaded file content type: {error}"))
             })?;
         }
-        let query_pairs = directory.map(|path| [("path", path)]);
+        let query_pairs = path.map(|value| [("path", value)]);
 
         let request = self
             .data_plane_request(
@@ -195,10 +191,12 @@ impl SessionPoolClient {
             query_pairs,
         );
         let request = self.client.request(method, url);
-        if self.uses_azure_auth {
-            return Ok(request.bearer_auth(data_plane_token().await?));
-        }
-        Ok(request)
+        let bearer_token = match self.uses_azure_auth {
+            true => data_plane_token().await?,
+            false => DEFAULT_LOCAL_SESSION_POOL_BEARER_TOKEN.to_string(),
+        };
+
+        Ok(request.bearer_auth(bearer_token))
     }
 }
 
@@ -241,8 +239,6 @@ struct AzureFileRecord {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ShellExecutionRequest {
-    code_input_type: &'static str,
-    execution_type: &'static str,
     shell_command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_in_seconds: Option<u64>,
@@ -294,7 +290,7 @@ fn session_pool_url(
     {
         let mut query = url.query_pairs_mut();
         query.append_pair("identifier", identifier);
-        query.append_pair("api-version", DEFAULT_AZURE_SESSION_API_VERSION);
+        query.append_pair("api-version", AZURE_SHELL_API_VERSION);
         for (name, value) in query_pairs {
             query.append_pair(name, value);
         }
@@ -318,6 +314,14 @@ where
     if !status.is_success() {
         #[derive(Deserialize)]
         struct ErrorBody {
+            error: Option<ErrorDetail>,
+            message: Option<String>,
+            title: Option<String>,
+            errors: Option<std::collections::BTreeMap<String, Vec<String>>>,
+        }
+
+        #[derive(Deserialize)]
+        struct ErrorDetail {
             message: Option<String>,
         }
 
@@ -327,10 +331,22 @@ where
                 error,
             )
         })?;
-        let message = if let Ok(body) = serde_json::from_slice::<ErrorBody>(&bytes)
-            && let Some(message) = body.message
-        {
-            message
+        let message = if let Ok(body) = serde_json::from_slice::<ErrorBody>(&bytes) {
+            if let Some(message) = body
+                .error
+                .and_then(|error| error.message)
+                .or(body.message)
+                .or(body.title)
+            {
+                message
+            } else if let Some(message) = body
+                .errors
+                .and_then(|errors| errors.into_values().flatten().next())
+            {
+                message
+            } else {
+                "The session pool did not return an error message.".to_string()
+            }
         } else {
             let fallback = String::from_utf8_lossy(&bytes).trim().to_string();
             if fallback.is_empty() {
