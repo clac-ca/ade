@@ -181,10 +181,11 @@ async fn stub_execute(
         state.execution_codes.push(code.clone());
     }
 
-    if code.contains("reverse-connect connect") {
-        let connector_url = extract_connector_url(&code);
-        let bearer_token = extract_bearer_token(&code);
-        if let (Some(connector_url), Some(bearer_token)) = (connector_url, bearer_token) {
+    let connector_url = extract_connector_url(&code);
+    let bearer_token = extract_bearer_token(&code);
+    if code.contains("reverse-connect")
+        && let (Some(connector_url), Some(bearer_token)) = (connector_url, bearer_token)
+    {
             let run_execution_count = {
                 let mut state = stub.state.lock().unwrap();
                 state.run_execution_count += 1;
@@ -246,7 +247,6 @@ async fn stub_execute(
                 }
             }))
             .into_response();
-        }
     }
 
     Json(json!({
@@ -631,10 +631,12 @@ fn create_wheels() -> (
 }
 
 fn extract_launch_arg(code: &str, flag: &str) -> Option<String> {
-    code.split_whitespace()
-        .collect::<Vec<_>>()
-        .windows(2)
-        .find_map(|window| (window[0] == flag).then(|| window[1].to_string()))
+    let (_, rest) = code.split_once(&format!("{flag} "))?;
+    if let Some(rest) = rest.strip_prefix('\'') {
+        let end = rest.find('\'')?;
+        return Some(rest[..end].to_string());
+    }
+    Some(rest.split_whitespace().next()?.to_string())
 }
 
 fn extract_bearer_token(code: &str) -> Option<String> {
@@ -1854,7 +1856,8 @@ async fn scope_session_launches_reverse_connect_with_url_and_bearer_token() {
 
     let execution_codes = state.lock().unwrap().execution_codes.clone();
     assert_eq!(execution_codes.len(), 1);
-    assert!(execution_codes[0].contains("reverse-connect connect"));
+    assert!(execution_codes[0].contains("reverse-connect"));
+    assert!(execution_codes[0].contains(" connect --url "));
     assert!(execution_codes[0].contains("/app/ade/bin/reverse-connect"));
     assert!(extract_connector_url(&execution_codes[0]).is_some());
     assert!(extract_bearer_token(&execution_codes[0]).is_some());

@@ -662,6 +662,9 @@ fn render_launch_command(
     bearer_token: &str,
     idle_timeout_seconds: u64,
 ) -> String {
+    let connector_path = shell_single_quote(connector_path);
+    let url = shell_single_quote(url);
+    let bearer_token = shell_single_quote(bearer_token);
     format!(
         "set -eu\nchmod 755 {connector_path}\nexec {connector_path} connect --url {url} --bearer-token {bearer_token} --idle-timeout-seconds {idle_timeout_seconds}"
     )
@@ -1005,4 +1008,36 @@ async fn handle_connector_request(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_launch_command, shell_single_quote};
+
+    #[test]
+    fn shell_single_quote_escapes_single_quotes() {
+        assert_eq!(shell_single_quote("a'b"), "'a'\"'\"'b'");
+    }
+
+    #[test]
+    fn render_launch_command_quotes_shell_arguments() {
+        let command = render_launch_command(
+            "/app/ade/bin/reverse-connect",
+            "wss://example.test/api/internal/reverse-connect/channel?id=1&x=2",
+            "1712016000000.abc123def456",
+            30,
+        );
+
+        assert_eq!(
+            command,
+            concat!(
+                "set -eu\n",
+                "chmod 755 '/app/ade/bin/reverse-connect'\n",
+                "exec '/app/ade/bin/reverse-connect' connect ",
+                "--url 'wss://example.test/api/internal/reverse-connect/channel?id=1&x=2' ",
+                "--bearer-token '1712016000000.abc123def456' ",
+                "--idle-timeout-seconds 30"
+            )
+        );
+    }
 }
