@@ -1,8 +1,7 @@
 import json
-import shutil
+import subprocess
 import sys
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 from ade_engine import load_config
 from ade_engine.runner import process
@@ -12,22 +11,34 @@ def access_request(name: str, payload: dict) -> dict:
     return payload[name]
 
 
+def curl_command(blob: dict) -> list[str]:
+    command = [
+        "curl",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--request",
+        blob["method"],
+    ]
+    for name, value in blob["headers"].items():
+        command.extend(["--header", f"{name}: {value}"])
+    return command
+
+
 def download(blob: dict, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    request = Request(blob["url"], headers=blob["headers"], method=blob["method"])
-    with urlopen(request) as response, destination.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
+    subprocess.run(
+        [*curl_command(blob), "--output", str(destination), blob["url"]],
+        check=True,
+    )
 
 
 def upload(blob: dict, source: Path) -> None:
-    request = Request(
-        blob["url"],
-        data=source.read_bytes(),
-        headers=blob["headers"],
-        method=blob["method"],
+    subprocess.run(
+        [*curl_command(blob), "--upload-file", str(source), blob["url"]],
+        check=True,
     )
-    with urlopen(request) as response:
-        response.read()
 
 
 def main() -> int:
