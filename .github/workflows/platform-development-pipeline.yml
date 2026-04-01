@@ -7,11 +7,14 @@ on:
     paths:
       - .github/workflows/platform-development-pipeline.yml
       - .node-version
+      - Cargo.lock
+      - Cargo.toml
       - Dockerfile
       - apps/ade-api/**
       - apps/ade-web/**
       - infra/**
       - package.json
+      - packages/reverse-connect/**
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - scripts/**/*.ts
@@ -23,11 +26,14 @@ on:
     paths:
       - .github/workflows/platform-development-pipeline.yml
       - .node-version
+      - Cargo.lock
+      - Cargo.toml
       - Dockerfile
       - apps/ade-api/**
       - apps/ade-web/**
       - infra/**
       - package.json
+      - packages/reverse-connect/**
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - scripts/**/*.ts
