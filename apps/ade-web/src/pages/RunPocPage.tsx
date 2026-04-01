@@ -1425,7 +1425,7 @@ export function RunPocPage() {
         </p>
 
         <p className="status-note">
-          Need the bidirectional shell bridge? Open the{" "}
+          Need the bidirectional shell session? Open the{" "}
           <Link className="inline-link" to="/terminal-poc">
             terminal POC
           </Link>

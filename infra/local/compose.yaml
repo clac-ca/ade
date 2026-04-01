@@ -30,20 +30,26 @@ services:
 
   sessionpool:
     build:
-      context: ./sessionpool
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: infra/local/sessionpool/Dockerfile
+    platform: linux/amd64
     healthcheck:
       test:
         [
           "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/healthz', timeout=5)",
+          "session-pool-emulator",
+          "healthcheck",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "9000",
         ]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 5s
+    cpus: 4
+    mem_limit: 4g
     ports:
       - "8014:9000"
 

@@ -62,7 +62,7 @@ export function HomePage() {
           </p>
 
           <p className="status-note">
-            Need to validate the interactive terminal bridge manually? Open the{" "}
+            Need to validate the interactive terminal manually? Open the{" "}
             <Link className="inline-link" to="/terminal-poc">
               temporary terminal POC
             </Link>

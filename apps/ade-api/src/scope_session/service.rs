@@ -1,6 +1,6 @@
 use std::{
-    collections::BTreeMap,
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -40,7 +40,7 @@ use ::reverse_connect::protocol::{
     SESSION_ERROR_METHOD, SessionErrorParams, SignalName,
 };
 
-const APP_URL_ENV_NAME: &str = "ADE_APP_URL";
+const PUBLIC_API_URL_ENV_NAME: &str = "ADE_PUBLIC_API_URL";
 const CONNECTOR_READY_TIMEOUT: Duration = Duration::from_secs(45);
 const CONNECTOR_IDLE_SHUTDOWN_SECONDS: u64 = 15;
 const CONNECTOR_RENDEZVOUS_TOKEN_TTL_MS: u64 = 60_000;
@@ -53,6 +53,7 @@ pub struct ScopeSession {
     prepare_lock: Arc<tokio::sync::Mutex<()>>,
     prepared_revision: Arc<tokio::sync::Mutex<Option<String>>>,
     python_executable_path: String,
+    run_script_path: String,
     session_root: String,
 }
 
@@ -116,6 +117,10 @@ impl ScopeSession {
 
     pub fn python_executable_path(&self) -> &str {
         &self.python_executable_path
+    }
+
+    pub fn run_script_path(&self) -> &str {
+        &self.run_script_path
     }
 
     pub fn session_root(&self) -> &str {
@@ -227,34 +232,77 @@ enum OutboundRpc {
 
 impl ScopeSessionService {
     pub fn from_env(env: &EnvBag) -> Result<Self, AppError> {
-        let app_url = read_optional_trimmed_string(env, APP_URL_ENV_NAME).ok_or_else(|| {
+        let app_url = read_optional_trimmed_string(env, PUBLIC_API_URL_ENV_NAME).ok_or_else(|| {
             AppError::config(format!(
-                "Missing required environment variable: {APP_URL_ENV_NAME}"
+                "Missing required environment variable: {PUBLIC_API_URL_ENV_NAME}"
             ))
         })?;
         let app_url = Url::parse(&app_url).map_err(|error| {
-            AppError::config_with_source("ADE_APP_URL is not a valid URL.".to_string(), error)
+            AppError::config_with_source(
+                "ADE_PUBLIC_API_URL is not a valid URL.".to_string(),
+                error,
+            )
         })?;
         match app_url.scheme() {
             "http" | "https" => {}
             _ => {
                 return Err(AppError::config(
-                    "ADE_APP_URL must use http or https.".to_string(),
+                    "ADE_PUBLIC_API_URL must use http or https.".to_string(),
                 ));
             }
         }
 
         let bundle_source = SessionBundleSource::from_env(env)?;
+        Self::new(app_url, bundle_source, SessionPoolClient::from_env(env)?)
+    }
+
+    pub(crate) fn new(
+        app_url: Url,
+        bundle_source: SessionBundleSource,
+        pool_client: SessionPoolClient,
+    ) -> Result<Self, AppError> {
         let session_secret = bundle_source.session_secret().to_string();
 
         Ok(Self {
             app_url,
             bundle_source,
             manager: PendingConnectorManager::default(),
-            pool_client: SessionPoolClient::from_env(env)?,
+            pool_client,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             session_secret,
         })
+    }
+
+    pub fn from_paths(
+        app_url: &str,
+        endpoint: &str,
+        session_secret: &str,
+        bundle_root: PathBuf,
+        config_root: PathBuf,
+    ) -> Result<Self, AppError> {
+        let app_url = Url::parse(app_url).map_err(|error| {
+            AppError::config_with_source(
+                "ADE_PUBLIC_API_URL is not a valid URL.".to_string(),
+                error,
+            )
+        })?;
+        let bundle_env = [(
+            "ADE_SCOPE_SESSION_SECRET".to_string(),
+            session_secret.to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let pool_env = [(
+            "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
+            endpoint.to_string(),
+        )]
+        .into_iter()
+        .collect();
+        Self::new(
+            app_url,
+            SessionBundleSource::from_paths(bundle_root, config_root, &bundle_env)?,
+            SessionPoolClient::from_env(&pool_env)?,
+        )
     }
 
     pub(crate) fn claim_rendezvous(
@@ -378,7 +426,7 @@ impl ScopeSessionService {
                 channel_id: channel_id.clone(),
                 command: format!("sh {}", shell_single_quote(&bundle.prepare_script_path)),
                 cwd: Some(bundle.session_root.clone()),
-                env: prepare_env(bundle),
+                env: Default::default(),
                 kind: ::reverse_connect::protocol::ChannelKind::Exec,
                 pty: None,
             })
@@ -459,22 +507,22 @@ impl ScopeSessionService {
             &channel_id,
             unix_time_ms() + CONNECTOR_RENDEZVOUS_TOKEN_TTL_MS,
         );
-        let bridge_rx = self.manager.create(channel_id.clone());
-        let mut bridge_url = self.app_url.clone();
-        let scheme = if bridge_url.scheme() == "http" {
+        let socket_rx = self.manager.create(channel_id.clone());
+        let mut rendezvous_url = self.app_url.clone();
+        let scheme = if rendezvous_url.scheme() == "http" {
             "ws"
         } else {
             "wss"
         };
-        bridge_url
+        rendezvous_url
             .set_scheme(scheme)
-            .expect("ADE_APP_URL scheme was validated at startup");
-        bridge_url.set_path(&format!("/api/internal/reverse-connect/{channel_id}"));
-        bridge_url.set_query(None);
+            .expect("ADE_PUBLIC_API_URL scheme was validated at startup");
+        rendezvous_url.set_path(&format!("/api/internal/reverse-connect/{channel_id}"));
+        rendezvous_url.set_query(None);
 
         let command = render_launch_command(
             &bundle.connector_path,
-            bridge_url.as_ref(),
+            rendezvous_url.as_ref(),
             &token,
             CONNECTOR_IDLE_SHUTDOWN_SECONDS,
         );
@@ -492,8 +540,8 @@ impl ScopeSessionService {
                 .map(|result| result.value)
         });
 
-        let bridge_socket = self
-            .wait_for_bridge_socket(&channel_id, bridge_rx, &mut execution_task)
+        let connector_socket = self
+            .wait_for_connector_socket(&channel_id, socket_rx, &mut execution_task)
             .await?;
 
         let (events_tx, _) = broadcast::channel(256);
@@ -504,11 +552,12 @@ impl ScopeSessionService {
             prepare_lock: Arc::new(tokio::sync::Mutex::new(())),
             prepared_revision: Arc::new(tokio::sync::Mutex::new(None)),
             python_executable_path: bundle.python_executable_path.clone(),
+            run_script_path: bundle.run_script_path.clone(),
             session_root: bundle.session_root.clone(),
         };
         let mut ready_rx = events_tx.subscribe();
         tokio::spawn(run_scope_session_task(
-            bridge_socket,
+            connector_socket,
             command_rx,
             events_tx,
             execution_task,
@@ -517,18 +566,18 @@ impl ScopeSessionService {
         Ok(handle)
     }
 
-    async fn wait_for_bridge_socket(
+    async fn wait_for_connector_socket(
         &self,
         channel_id: &str,
-        bridge_rx: oneshot::Receiver<WebSocket>,
+        socket_rx: oneshot::Receiver<WebSocket>,
         execution_task: &mut JoinHandle<Result<SessionExecution, AppError>>,
     ) -> Result<WebSocket, AppError> {
         let startup_timeout = tokio::time::sleep(CONNECTOR_READY_TIMEOUT);
         tokio::pin!(startup_timeout);
-        tokio::pin!(bridge_rx);
+        tokio::pin!(socket_rx);
 
         let result = tokio::select! {
-            result = &mut bridge_rx => {
+            result = &mut socket_rx => {
                 result.map_err(|_| AppError::status(
                     axum::http::StatusCode::BAD_GATEWAY,
                     "Scope session connector cancelled before the control channel connected.",
@@ -571,39 +620,40 @@ impl ScopeSessionService {
                     error,
                 )
             })?;
+            let (path, filename) = split_upload_target(&file.session_path);
             self.pool_client
                 .upload_file(
                     scope_session_id.as_str(),
-                    file.session_path.clone(),
-                    Some(file.content_type.to_string()),
+                    path,
+                    filename,
+                    Some(file.content_type),
                     content,
                 )
                 .await?;
         }
         Ok(())
     }
-}
 
-fn prepare_env(bundle: &SessionBundle) -> BTreeMap<String, String> {
-    BTreeMap::from([
-        (
-            "ADE_CONFIG_WHEEL_PATH".to_string(),
-            bundle.config_wheel_path.clone(),
-        ),
-        (
-            "ADE_PYTHON_BIN".to_string(),
-            bundle.python_executable_path.clone(),
-        ),
-        (
-            "ADE_PYTHON_HOME".to_string(),
-            bundle.python_home_path.clone(),
-        ),
-        (
-            "ADE_PYTHON_TOOLCHAIN_PATH".to_string(),
-            bundle.python_toolchain_path.clone(),
-        ),
-        ("ADE_WHEELHOUSE".to_string(), bundle.wheelhouse_path.clone()),
-    ])
+    pub(crate) async fn upload_scope_file(
+        &self,
+        scope: &Scope,
+        session_path: String,
+        content_type: &str,
+        content: Vec<u8>,
+    ) -> Result<(), AppError> {
+        let scope_session_id = self.bundle_source.scope_session_id(scope);
+        let (path, filename) = split_upload_target(&session_path);
+        self.pool_client
+            .upload_file(
+                scope_session_id.as_str(),
+                path,
+                filename,
+                Some(content_type),
+                content,
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 fn render_launch_command(
@@ -619,6 +669,13 @@ fn render_launch_command(
 
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r#"'"'"'"#))
+}
+
+fn split_upload_target(path: &str) -> (Option<&str>, &str) {
+    match path.rsplit_once('/') {
+        Some((directory, filename)) if !directory.is_empty() => (Some(directory), filename),
+        _ => (None, path),
+    }
 }
 
 fn prepare_failure_message(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {

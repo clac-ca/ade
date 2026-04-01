@@ -1,3 +1,7 @@
 [workspace]
-members = ["apps/ade-api", "packages/reverse-connect"]
+members = [
+    "apps/ade-api",
+    "infra/local/sessionpool",
+    "packages/reverse-connect",
+]
 resolver = "2"

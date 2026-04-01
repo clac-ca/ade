@@ -22,16 +22,16 @@ pub(crate) struct PendingConnectorManager {
 
 impl PendingConnectorManager {
     pub(crate) fn create(&self, channel_id: String) -> oneshot::Receiver<WebSocket> {
-        let (bridge_tx, bridge_rx) = oneshot::channel();
+        let (socket_tx, socket_rx) = oneshot::channel();
         self.inner
             .lock()
             .expect("reverse-connect rendezvous lock poisoned")
-            .insert(channel_id, bridge_tx);
-        bridge_rx
+            .insert(channel_id, socket_tx);
+        socket_rx
     }
 
     pub(crate) fn claim(&self, channel_id: &str) -> Result<oneshot::Sender<WebSocket>, AppError> {
-        let Some(bridge_tx) = self
+        let Some(socket_tx) = self
             .inner
             .lock()
             .expect("reverse-connect rendezvous lock poisoned")
@@ -40,7 +40,7 @@ impl PendingConnectorManager {
             return Err(AppError::not_found("Reverse-connect rendezvous not found."));
         };
 
-        Ok(bridge_tx)
+        Ok(socket_tx)
     }
 
     pub(crate) fn cancel(&self, channel_id: &str) {

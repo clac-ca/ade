@@ -1,15 +1,25 @@
 #!/bin/sh
 set -eu
 
-mkdir -p "$(dirname "$ADE_PYTHON_HOME")"
-if [ ! -x "$ADE_PYTHON_BIN" ]; then
-  rm -rf "$ADE_PYTHON_HOME"
-  mkdir -p "$ADE_PYTHON_HOME"
-  tar -xzf "$ADE_PYTHON_TOOLCHAIN_PATH" -C "$ADE_PYTHON_HOME"
+app_root=/app/ade
+python_home=/mnt/data/ade/python/current
+python_bin="$python_home/bin/python3"
+
+mkdir -p "$(dirname "$python_home")"
+if [ ! -x "$python_bin" ]; then
+  set -- "$app_root"/python/*.tar.gz
+  if [ ! -f "$1" ]; then
+    echo "Python toolchain bundle was not found under $app_root/python." >&2
+    exit 1
+  fi
+
+  rm -rf "$python_home"
+  mkdir -p "$python_home"
+  tar -xzf "$1" -C "$python_home"
 fi
 
-exec "$ADE_PYTHON_BIN" -m pip install \
+exec "$python_bin" -m pip install \
   --upgrade \
   --no-index \
-  --find-links "$ADE_WHEELHOUSE" \
-  "$ADE_CONFIG_WHEEL_PATH"
+  --find-links "$app_root/wheelhouse/base" \
+  "$app_root"/config/*.whl

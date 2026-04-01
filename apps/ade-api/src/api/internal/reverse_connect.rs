@@ -25,12 +25,12 @@ async fn connect(
 ) -> Result<Response, AppError> {
     let ws = ws.map_err(|error| AppError::request(error.to_string()))?;
     let token = bearer_token(&headers)?;
-    let bridge_tx = scope_session_service.claim_rendezvous(&channel_id, token)?;
+    let socket_tx = scope_session_service.claim_rendezvous(&channel_id, token)?;
     Ok(ws
         .protocols([::reverse_connect::protocol::WEBSOCKET_SUBPROTOCOL])
         .max_message_size(1024 * 1024)
         .on_upgrade(move |socket| async move {
-            let _ = bridge_tx.send(socket);
+            let _ = socket_tx.send(socket);
         }))
 }
 

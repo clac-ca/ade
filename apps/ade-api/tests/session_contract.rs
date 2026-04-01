@@ -32,6 +32,9 @@ use tokio_tungstenite::{
 };
 use tower::util::ServiceExt;
 
+const AZURE_SHELL_API_VERSION: &str = "2025-10-02-preview";
+const LOCAL_SESSION_POOL_BEARER_TOKEN: &str = "ade-local-session-token";
+
 #[derive(Default)]
 struct PoolStubState {
     blobs: HashMap<String, StubBlobObject>,
@@ -55,24 +58,24 @@ struct PoolStub {
 
 #[derive(Clone, Copy)]
 struct PoolStubOptions {
-    auto_connect_run_bridge: bool,
-    auto_connect_terminal_bridge: bool,
-    run_bridge_delay_ms: u64,
-    run_bridge_disconnect_before_ready_attempts: usize,
+    auto_connect_run_connector: bool,
+    auto_connect_terminal_connector: bool,
+    run_connector_delay_ms: u64,
+    run_connector_disconnect_before_ready_attempts: usize,
     run_execution_delay_ms: u64,
-    terminal_bridge_delay_ms: u64,
+    terminal_connector_delay_ms: u64,
     terminal_execution_delay_ms: u64,
 }
 
 impl Default for PoolStubOptions {
     fn default() -> Self {
         Self {
-            auto_connect_run_bridge: true,
-            auto_connect_terminal_bridge: true,
-            run_bridge_delay_ms: 0,
-            run_bridge_disconnect_before_ready_attempts: 0,
+            auto_connect_run_connector: true,
+            auto_connect_terminal_connector: true,
+            run_connector_delay_ms: 0,
+            run_connector_disconnect_before_ready_attempts: 0,
             run_execution_delay_ms: 0,
-            terminal_bridge_delay_ms: 0,
+            terminal_connector_delay_ms: 0,
             terminal_execution_delay_ms: 0,
         }
     }
@@ -100,46 +103,72 @@ fn ready_state() -> ReadinessController {
 
 async fn stub_upload_file(
     State(stub): State<PoolStub>,
+    headers: HeaderMap,
     Query(query): Query<IdentifierQuery>,
     mut multipart: Multipart,
-) -> impl IntoResponse {
-    let field = multipart
-        .next_field()
-        .await
-        .unwrap()
-        .expect("multipart file");
-    let filename = field.file_name().unwrap().to_string();
-    let bytes = field.bytes().await.unwrap();
-    let stored_name = match query.path.as_deref() {
-        Some(path) if !path.is_empty() && path != "." => format!("{path}/{filename}"),
-        _ => filename.clone(),
-    };
-    let mut state = stub.state.lock().unwrap();
-    state.identifiers.push(query.identifier.clone());
-    state.session_files.insert(
-        session_file_storage_key(&query.identifier, &stored_name),
-        bytes.to_vec(),
-    );
+) -> Response {
+    let result = async {
+        validate_stub_request(&headers, query.api_version.as_deref())?;
+        let field = multipart
+            .next_field()
+            .await
+            .unwrap()
+            .expect("multipart file");
+        let filename = validate_stub_filename(field.file_name().expect("multipart filename"))?;
+        let bytes = field.bytes().await.unwrap();
+        let stored_name = match normalize_stub_directory(query.path.as_deref())? {
+            Some(path) => format!("{path}/{filename}"),
+            None => filename.clone(),
+        };
+        let mut state = stub.state.lock().unwrap();
+        state.identifiers.push(query.identifier.clone());
+        state.session_files.insert(
+            session_file_storage_key(&query.identifier, &stored_name),
+            bytes.to_vec(),
+        );
 
-    Json(json!({
-        "directory": stored_name
-            .rsplit_once('/')
-            .map(|(directory, _)| directory)
-            .unwrap_or("."),
-        "name": stored_name
-            .rsplit_once('/')
-            .map(|(_, name)| name)
-            .unwrap_or(stored_name.as_str()),
-        "sizeInBytes": bytes.len(),
-        "type": "file",
-    }))
+        Ok::<_, String>(Json(json!({
+            "directory": stored_name
+                .rsplit_once('/')
+                .map(|(directory, _)| directory)
+                .unwrap_or("."),
+            "name": stored_name
+                .rsplit_once('/')
+                .map(|(_, name)| name)
+                .unwrap_or(stored_name.as_str()),
+            "sizeInBytes": bytes.len(),
+            "type": "file",
+        })))
+    }
+    .await;
+
+    match result {
+        Ok(payload) => payload.into_response(),
+        Err(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "message": message,
+            })),
+        )
+            .into_response(),
+    }
 }
 
 async fn stub_execute(
     State(stub): State<PoolStub>,
+    headers: HeaderMap,
     Query(query): Query<IdentifierQuery>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
+    if let Err(message) = validate_stub_request(&headers, query.api_version.as_deref()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "message": message,
+            })),
+        )
+            .into_response();
+    }
     let code = body
         .get("shellCommand")
         .and_then(Value::as_str)
@@ -153,9 +182,9 @@ async fn stub_execute(
     }
 
     if code.contains("reverse-connect connect") {
-        let bridge_url = extract_bridge_url(&code);
+        let connector_url = extract_connector_url(&code);
         let bearer_token = extract_bearer_token(&code);
-        if let (Some(bridge_url), Some(bearer_token)) = (bridge_url, bearer_token) {
+        if let (Some(connector_url), Some(bearer_token)) = (connector_url, bearer_token) {
             let run_execution_count = {
                 let mut state = stub.state.lock().unwrap();
                 state.run_execution_count += 1;
@@ -163,58 +192,72 @@ async fn stub_execute(
             };
             let connect_delay_ms = stub
                 .options
-                .run_bridge_delay_ms
-                .max(stub.options.terminal_bridge_delay_ms);
+                .run_connector_delay_ms
+                .max(stub.options.terminal_connector_delay_ms);
             let execution_delay_ms = stub
                 .options
                 .run_execution_delay_ms
                 .max(stub.options.terminal_execution_delay_ms);
 
-            if run_execution_count <= stub.options.run_bridge_disconnect_before_ready_attempts {
+            if run_execution_count
+                <= stub.options.run_connector_disconnect_before_ready_attempts
+            {
                 if let Ok((mut socket, _response)) =
-                    connect_async(bridge_request(&bridge_url, &bearer_token)).await
+                    connect_async(connector_request(&connector_url, &bearer_token)).await
                 {
                     let _ = socket.close(None).await;
                 }
                 return Json(json!({
-                    "status": "Succeeded",
+                    "status": "0",
                     "result": {
                         "stdout": "",
                         "stderr": "",
                         "executionTimeInMilliseconds": 4,
                     }
-                }));
+                }))
+                .into_response();
             }
 
             if connect_delay_ms > 0 {
                 tokio::time::sleep(Duration::from_millis(connect_delay_ms)).await;
             }
 
-            if stub.options.auto_connect_run_bridge && stub.options.auto_connect_terminal_bridge {
-                drive_reverse_connect_stub(&bridge_url, &bearer_token, execution_delay_ms).await;
+            if stub.options.auto_connect_run_connector
+                && stub.options.auto_connect_terminal_connector
+            {
+                drive_reverse_connect_stub(
+                    stub.clone(),
+                    &identifier,
+                    &connector_url,
+                    &bearer_token,
+                    execution_delay_ms,
+                )
+                .await;
             } else if execution_delay_ms > 0 {
                 tokio::time::sleep(Duration::from_millis(execution_delay_ms)).await;
             }
 
             return Json(json!({
-                "status": "Succeeded",
+                "status": "0",
                 "result": {
                     "stdout": "",
                     "stderr": "",
                     "executionTimeInMilliseconds": 4,
                 }
-            }));
+            }))
+            .into_response();
         }
     }
 
     Json(json!({
-        "status": "Succeeded",
+        "status": "0",
         "result": {
             "stdout": "ok\n",
             "stderr": "",
             "executionTimeInMilliseconds": 4,
         }
     }))
+    .into_response()
 }
 
 async fn request_artifact(
@@ -251,11 +294,86 @@ fn session_file_storage_key(identifier: &str, path: &str) -> String {
     format!("{identifier}:{}", path.trim_start_matches('/'))
 }
 
-fn bridge_request(
-    bridge_url: &str,
+fn normalize_stub_directory(path: Option<&str>) -> Result<Option<String>, String> {
+    let Some(path) = path
+        .map(str::trim)
+        .filter(|path| !path.is_empty() && *path != ".")
+    else {
+        return Ok(None);
+    };
+    let normalized = path.trim_matches('/');
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    for segment in normalized.split('/') {
+        if segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || segment.contains('.')
+            || segment
+                .chars()
+                .any(|character| !is_allowed_stub_path_character(character))
+        {
+            return Err(format!(
+                "File Path '/{normalized}' is invalid because 'path cannot contain any reserved file path characters'."
+            ));
+        }
+    }
+    Ok(Some(normalized.to_string()))
+}
+
+fn validate_stub_request(headers: &HeaderMap, api_version: Option<&str>) -> Result<(), String> {
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "Missing Authorization header.".to_string())?;
+    if authorization != format!("Bearer {LOCAL_SESSION_POOL_BEARER_TOKEN}") {
+        return Err("Unexpected Authorization header.".to_string());
+    }
+    if api_version != Some(AZURE_SHELL_API_VERSION) {
+        return Err(format!(
+            "Unexpected api-version. Expected '{AZURE_SHELL_API_VERSION}'."
+        ));
+    }
+    Ok(())
+}
+
+fn validate_stub_filename(filename: &str) -> Result<String, String> {
+    let trimmed = filename.trim().trim_matches('/');
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed
+            .chars()
+            .any(|character| !is_allowed_stub_file_character(character))
+    {
+        return Err(format!(
+            "File Name '{trimmed}' is invalid because 'filename cannot contain any reserved file path characters'."
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn is_allowed_stub_file_character(character: char) -> bool {
+    character.is_alphanumeric()
+        || character == ' '
+        || matches!(
+            character,
+            '-' | '_' | '.' | '@' | '$' | '&' | '=' | ';' | ',' | '#' | '%' | '^' | '(' | ')'
+        )
+}
+
+fn is_allowed_stub_path_character(character: char) -> bool {
+    is_allowed_stub_file_character(character) && character != '.'
+}
+
+fn connector_request(
+    connector_url: &str,
     bearer_token: &str,
 ) -> tokio_tungstenite::tungstenite::http::Request<()> {
-    let mut request = bridge_url.into_client_request().unwrap();
+    let mut request = connector_url.into_client_request().unwrap();
     request.headers_mut().insert(
         "authorization",
         HeaderValue::from_str(&format!("Bearer {bearer_token}")).unwrap(),
@@ -406,51 +524,40 @@ fn app_with_session_and_url_and_run_limit(
 ) -> axum::Router {
     let runtime_dir = tempdir().unwrap();
     let bundle_root = runtime_dir.path().join("session-bundle");
+    let config_root = runtime_dir.path().join("session-configs");
     let connector_binary_path = bundle_root.join("bin/reverse-connect");
     let prepare_script_path = bundle_root.join("bin/prepare.sh");
+    let run_script_path = bundle_root.join("bin/run.py");
     let wheelhouse_path = bundle_root.join("wheelhouse/base");
     let python_dir = bundle_root.join("python");
-    let python_toolchain_path = python_dir.join("python-3.14.0-linux-x86_64.tar.gz");
+    let python_toolchain_path = python_dir.join("python-3.12.11-linux-x86_64.tar.gz");
     std::fs::create_dir_all(connector_binary_path.parent().unwrap()).unwrap();
     std::fs::create_dir_all(&wheelhouse_path).unwrap();
     std::fs::create_dir_all(&python_dir).unwrap();
     std::fs::write(&connector_binary_path, b"connector-binary").unwrap();
     std::fs::write(&prepare_script_path, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(&run_script_path, b"print('ok')\n").unwrap();
     std::fs::write(&python_toolchain_path, b"python-toolchain").unwrap();
     std::fs::copy(
         base_wheel_path,
         wheelhouse_path.join(base_wheel_path.file_name().unwrap()),
     )
     .unwrap();
-
-    let config_targets = config_targets
-        .iter()
-        .map(|(workspace_id, config_version_id, wheel_path)| {
-            json!({
-                "workspaceId": workspace_id,
-                "configVersionId": config_version_id,
-                "wheelPath": wheel_path.display().to_string(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let env = [
+    for (workspace_id, config_version_id, wheel_path) in config_targets {
+        let scope_dir = config_root.join(workspace_id).join(config_version_id);
+        std::fs::create_dir_all(&scope_dir).unwrap();
+        std::fs::copy(wheel_path, scope_dir.join(wheel_path.file_name().unwrap())).unwrap();
+    }
+    let env: std::collections::BTreeMap<String, String> = [
         (
             "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
             endpoint.to_string(),
         ),
         (
-            "ADE_CONFIG_TARGETS".to_string(),
-            serde_json::to_string(&config_targets).unwrap(),
-        ),
-        (
-            "ADE_SESSION_BUNDLE_ROOT".to_string(),
-            bundle_root.display().to_string(),
-        ),
-        (
-            "ADE_SESSION_SECRET".to_string(),
+            "ADE_SCOPE_SESSION_SECRET".to_string(),
             "test-session-secret".to_string(),
         ),
-        ("ADE_APP_URL".to_string(), app_url.to_string()),
+        ("ADE_PUBLIC_API_URL".to_string(), app_url.to_string()),
         (
             "ADE_BLOB_ACCOUNT_URL".to_string(),
             format!("{endpoint}/devstoreaccount1"),
@@ -470,7 +577,16 @@ fn app_with_session_and_url_and_run_limit(
 
     std::mem::forget(runtime_dir);
 
-    let scope_session_service = Arc::new(ScopeSessionService::from_env(&env).unwrap());
+    let scope_session_service = Arc::new(
+        ScopeSessionService::from_paths(
+            app_url,
+            endpoint,
+            "test-session-secret",
+            bundle_root,
+            config_root,
+        )
+        .unwrap(),
+    );
     let mut run_env = env.clone();
     if let Some(run_max_concurrent) = run_max_concurrent {
         run_env.insert(
@@ -525,15 +641,22 @@ fn extract_bearer_token(code: &str) -> Option<String> {
     extract_launch_arg(code, "--bearer-token")
 }
 
-fn extract_bridge_url(code: &str) -> Option<String> {
+fn extract_connector_url(code: &str) -> Option<String> {
     extract_launch_arg(code, "--url")
 }
 
-async fn drive_reverse_connect_stub(bridge_url: &str, bearer_token: &str, execution_delay_ms: u64) {
+async fn drive_reverse_connect_stub(
+    stub: PoolStub,
+    identifier: &str,
+    connector_url: &str,
+    bearer_token: &str,
+    execution_delay_ms: u64,
+) {
     let client = Client::new();
     if let Ok((mut socket, _response)) =
-        connect_async(bridge_request(bridge_url, bearer_token)).await
+        connect_async(connector_request(connector_url, bearer_token)).await
     {
+        let mut runtime_files = HashMap::<String, Vec<u8>>::new();
         let hello = json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -594,11 +717,11 @@ async fn drive_reverse_connect_stub(bridge_url: &str, bearer_token: &str, execut
                         });
                         let _ = socket.send(Message::Text(output.to_string().into())).await;
                         let _ = socket.send(Message::Text(exit.to_string().into())).await;
-                        break;
+                        continue;
                     }
 
-                    let env = params["env"].as_object().unwrap();
-                    if !env.contains_key("ADE_INPUT_ACCESS_JSON") {
+                    let command = params["command"].as_str().unwrap_or_default();
+                    if command.starts_with("sh ") {
                         let exit = json!({
                             "jsonrpc": "2.0",
                             "method": "channel.exit",
@@ -610,14 +733,59 @@ async fn drive_reverse_connect_stub(bridge_url: &str, bearer_token: &str, execut
                         let _ = socket.send(Message::Text(exit.to_string().into())).await;
                         continue;
                     }
-                    let input_download = serde_json::from_str::<Value>(
-                        env["ADE_INPUT_ACCESS_JSON"].as_str().unwrap(),
-                    )
-                    .unwrap();
-                    let output_upload = serde_json::from_str::<Value>(
-                        env["ADE_OUTPUT_ACCESS_JSON"].as_str().unwrap(),
-                    )
-                    .unwrap();
+                    if command.starts_with("cat ") {
+                        let Some(path) = single_quoted_args(command).first().cloned() else {
+                            continue;
+                        };
+                        let Some(result_bytes) = runtime_files.get(&path).cloned() else {
+                            continue;
+                        };
+                        let output = json!({
+                            "jsonrpc": "2.0",
+                            "method": "channel.data",
+                            "params": {
+                                "channelId": channel_id,
+                                "stream": "stdout",
+                                "data": base64::engine::general_purpose::STANDARD.encode(result_bytes),
+                            }
+                        });
+                        let exit = json!({
+                            "jsonrpc": "2.0",
+                            "method": "channel.exit",
+                            "params": {
+                                "channelId": channel_id,
+                                "code": 0,
+                            }
+                        });
+                        let _ = socket.send(Message::Text(output.to_string().into())).await;
+                        let _ = socket.send(Message::Text(exit.to_string().into())).await;
+                        continue;
+                    }
+
+                    let command_args = single_quoted_args(command);
+                    let request_path = command_args
+                        .get(2)
+                        .expect("run command request path")
+                        .to_string();
+                    let result_path = command_args
+                        .get(3)
+                        .expect("run command result path")
+                        .to_string();
+                    let request_storage_key = session_file_storage_key(
+                        identifier,
+                        request_path.trim_start_matches("/app/"),
+                    );
+                    let request_body = {
+                        let state = stub.state.lock().unwrap();
+                        state
+                            .session_files
+                            .get(&request_storage_key)
+                            .cloned()
+                            .expect("request manifest should be uploaded")
+                    };
+                    let request_manifest = serde_json::from_slice::<Value>(&request_body).unwrap();
+                    let input_download = request_manifest["inputAccess"].clone();
+                    let output_upload = request_manifest["outputAccess"].clone();
                     request_artifact(
                         &client,
                         input_download.as_object().expect("input download"),
@@ -651,31 +819,16 @@ async fn drive_reverse_connect_stub(bridge_url: &str, bearer_token: &str, execut
                     if execution_delay_ms > 0 {
                         tokio::time::sleep(Duration::from_millis(execution_delay_ms)).await;
                     }
-                    let process_result = format!(
-                        "{}{}\n",
-                        "__ADE_PROCESS_RESULT__=",
-                        json!({
-                            "outputPath": env["ADE_OUTPUT_PATH"].as_str().unwrap(),
+                    runtime_files.insert(
+                        result_path,
+                        serde_json::to_vec(&json!({
+                            "outputPath": request_manifest["outputPath"].as_str().unwrap(),
                             "validationIssues": [],
-                        })
+                        }))
+                        .unwrap(),
                     );
-                    let _ = socket
-                        .send(Message::Text(
-                            json!({
-                                "jsonrpc": "2.0",
-                                "method": "channel.data",
-                                "params": {
-                                    "channelId": channel_id,
-                                    "stream": "stdout",
-                                    "data": base64::engine::general_purpose::STANDARD.encode(process_result),
-                                }
-                            })
-                            .to_string()
-                            .into(),
-                        ))
-                        .await;
                     let _ = socket.send(Message::Text(exit.to_string().into())).await;
-                    break;
+                    continue;
                 }
                 Some("channel.close") | Some("session.shutdown") => break,
                 _ => {}
@@ -692,6 +845,20 @@ fn resolve_url(base_url: &str, url: &str) -> String {
     }
 
     Url::parse(base_url).unwrap().join(url).unwrap().to_string()
+}
+
+fn single_quoted_args(command: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut remainder = command;
+    while let Some(start) = remainder.find('\'') {
+        let after_start = &remainder[start + 1..];
+        let Some(end) = after_start.find('\'') else {
+            break;
+        };
+        values.push(after_start[..end].to_string());
+        remainder = &after_start[end + 1..];
+    }
+    values
 }
 
 async fn upload_input(
@@ -1196,7 +1363,7 @@ async fn run_downloads_return_conflict_until_artifacts_are_ready() {
 #[tokio::test]
 async fn cancelling_a_run_marks_it_cancelled_and_emits_final_sse_event() {
     let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
-        auto_connect_run_bridge: false,
+        auto_connect_run_connector: false,
         ..PoolStubOptions::default()
     })
     .await;
@@ -1254,9 +1421,9 @@ async fn cancelling_a_run_marks_it_cancelled_and_emits_final_sse_event() {
 }
 
 #[tokio::test]
-async fn cancelling_before_bridge_ready_stops_the_session_attempt() {
+async fn cancelling_before_connector_ready_stops_the_session_attempt() {
     let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
-        run_bridge_delay_ms: 150,
+        run_connector_delay_ms: 150,
         ..PoolStubOptions::default()
     })
     .await;
@@ -1384,9 +1551,9 @@ async fn run_detail_keeps_output_hidden_until_success_and_cancellation_clears_st
 }
 
 #[tokio::test]
-async fn transient_run_bridge_startup_failures_retry_once_and_then_succeed() {
+async fn transient_run_connector_startup_failures_retry_once_and_then_succeed() {
     let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
-        run_bridge_disconnect_before_ready_attempts: 1,
+        run_connector_disconnect_before_ready_attempts: 1,
         ..PoolStubOptions::default()
     })
     .await;
@@ -1525,7 +1692,7 @@ async fn queued_runs_stay_pending_until_a_scheduler_slot_is_available() {
     )
     .await;
 
-    assert_eq!(state.lock().unwrap().run_execution_count, 2);
+    assert_eq!(state.lock().unwrap().run_execution_count, 1);
 
     app_handle.abort();
     stub_handle.abort();
@@ -1688,8 +1855,27 @@ async fn scope_session_launches_reverse_connect_with_url_and_bearer_token() {
     let execution_codes = state.lock().unwrap().execution_codes.clone();
     assert_eq!(execution_codes.len(), 1);
     assert!(execution_codes[0].contains("reverse-connect connect"));
-    assert!(extract_bridge_url(&execution_codes[0]).is_some());
+    assert!(execution_codes[0].contains("/app/ade/bin/reverse-connect"));
+    assert!(extract_connector_url(&execution_codes[0]).is_some());
     assert!(extract_bearer_token(&execution_codes[0]).is_some());
+
+    let uploaded_paths = state
+        .lock()
+        .unwrap()
+        .session_files
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        uploaded_paths
+            .iter()
+            .any(|path| path.ends_with(":ade/bin/reverse-connect"))
+    );
+    assert!(
+        uploaded_paths
+            .iter()
+            .any(|path| path.ends_with(":ade/bin/prepare.sh"))
+    );
 
     let _ = socket.close(None).await;
     app_handle.abort();
@@ -1741,7 +1927,7 @@ async fn terminal_route_streams_terminal_output_over_reverse_connect() {
 #[tokio::test]
 async fn reverse_connect_rendezvous_allows_only_one_connector() {
     let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
-        auto_connect_terminal_bridge: false,
+        auto_connect_terminal_connector: false,
         terminal_execution_delay_ms: 300,
         ..PoolStubOptions::default()
     })
@@ -1765,18 +1951,19 @@ async fn reverse_connect_rendezvous_allows_only_one_connector() {
     let (mut browser_socket, _response) = connect_async(&terminal_url).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let (bridge_url, bearer_token) = {
+    let (connector_url, bearer_token) = {
         let state = state.lock().unwrap();
         (
-            extract_bridge_url(&state.execution_codes[0]).unwrap(),
+            extract_connector_url(&state.execution_codes[0]).unwrap(),
             extract_bearer_token(&state.execution_codes[0]).unwrap(),
         )
     };
 
-    let (mut bridge_socket, _response) = connect_async(bridge_request(&bridge_url, &bearer_token))
-        .await
-        .unwrap();
-    bridge_socket
+    let (mut connector_socket, _response) =
+        connect_async(connector_request(&connector_url, &bearer_token))
+            .await
+            .unwrap();
+    connector_socket
         .send(Message::Text(
             json!({
                 "jsonrpc": "2.0",
@@ -1796,7 +1983,7 @@ async fn reverse_connect_rendezvous_allows_only_one_connector() {
         ))
         .await
         .unwrap();
-    let hello_response = bridge_socket
+    let hello_response = connector_socket
         .next()
         .await
         .unwrap()
@@ -1805,7 +1992,7 @@ async fn reverse_connect_rendezvous_allows_only_one_connector() {
         .unwrap();
     let hello_response = serde_json::from_str::<Value>(&hello_response).unwrap();
     assert_eq!(hello_response["id"], 1);
-    let channel_open = bridge_socket
+    let channel_open = connector_socket
         .next()
         .await
         .unwrap()
@@ -1816,21 +2003,21 @@ async fn reverse_connect_rendezvous_allows_only_one_connector() {
     assert_eq!(channel_open["method"], "channel.open");
 
     assert!(
-        connect_async(bridge_request(&bridge_url, &bearer_token))
+        connect_async(connector_request(&connector_url, &bearer_token))
             .await
             .is_err()
     );
 
-    let _ = bridge_socket.close(None).await;
+    let _ = connector_socket.close(None).await;
     let _ = browser_socket.close(None).await;
     app_handle.abort();
     stub_handle.abort();
 }
 
 #[tokio::test]
-async fn browser_disconnect_before_bridge_ready_eventually_clears_pending_state() {
+async fn browser_disconnect_before_connector_ready_eventually_clears_pending_state() {
     let (endpoint, state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
-        auto_connect_terminal_bridge: false,
+        auto_connect_terminal_connector: false,
         terminal_execution_delay_ms: 300,
         ..PoolStubOptions::default()
     })
@@ -1853,14 +2040,14 @@ async fn browser_disconnect_before_bridge_ready_eventually_clears_pending_state(
         format!("ws://{address}/api/workspaces/workspace-a/configs/config-v1/terminal");
     let (mut browser_socket, _response) = connect_async(&terminal_url).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let bridge_url = {
+    let connector_url = {
         let state = state.lock().unwrap();
-        extract_bridge_url(&state.execution_codes[0]).unwrap()
+        extract_connector_url(&state.execution_codes[0]).unwrap()
     };
 
     browser_socket.close(None).await.unwrap();
     tokio::time::sleep(Duration::from_millis(350)).await;
-    assert!(connect_async(&bridge_url).await.is_err());
+    assert!(connect_async(&connector_url).await.is_err());
 
     app_handle.abort();
     stub_handle.abort();
@@ -1869,7 +2056,7 @@ async fn browser_disconnect_before_bridge_ready_eventually_clears_pending_state(
 #[tokio::test]
 async fn reconnect_while_previous_terminal_is_shutting_down_returns_clear_error() {
     let (endpoint, _state, stub_handle) = start_stub_server_with_options(PoolStubOptions {
-        auto_connect_terminal_bridge: false,
+        auto_connect_terminal_connector: false,
         terminal_execution_delay_ms: 300,
         ..PoolStubOptions::default()
     })

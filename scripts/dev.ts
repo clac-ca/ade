@@ -21,6 +21,7 @@ import {
 } from "./lib/shell";
 import { downLocalDependencies, upLocalDependencies } from "./local-deps";
 
+const cargoCommand = process.platform === "win32" ? "cargo.exe" : "cargo";
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
@@ -89,23 +90,39 @@ async function main(logger = createConsoleLogger()): Promise<void> {
 
   try {
     await upLocalDependencies();
-    await runCommand(pnpmCommand, ["--filter", "@ade/api", "migrate"], {
-      cwd: rootDir,
-      env: apiEnv,
-    });
+    await runCommand(
+      cargoCommand,
+      [
+        "run",
+        "--locked",
+        "--manifest-path",
+        "apps/ade-api/Cargo.toml",
+        "--bin",
+        "ade-migrate",
+      ],
+      {
+        cwd: rootDir,
+        env: apiEnv,
+      },
+    );
 
     const api = spawnCommand(
-      pnpmCommand,
+      cargoCommand,
       [
-        "--filter",
-        "@ade/api",
-        "dev",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "apps/ade-api/Cargo.toml",
+        "--bin",
+        "ade-api",
+        "--",
         "--host",
         localApiHost,
         "--port",
         String(localApiPort),
       ],
       {
+        cwd: rootDir,
         detached,
         env: apiEnv,
       },

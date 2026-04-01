@@ -61,20 +61,6 @@ param sessionPoolName string = '${prefix}-sessions'
 @secure()
 param runtimeSessionSecret string
 
-@description('JSON array mapping workspace/config pairs to config wheel paths inside the app container.')
-param configTargets string = string([
-  {
-    workspaceId: 'workspace-a'
-    configVersionId: 'config-v1'
-    wheelPath: '/app/python/ade_config.whl'
-  }
-  {
-    workspaceId: 'workspace-b'
-    configVersionId: 'config-v2'
-    wheelPath: '/app/python/ade_config.whl'
-  }
-])
-
 @description('CPU allocation for the ADE container app.')
 param appCpu string = '0.25'
 
@@ -204,19 +190,15 @@ module app 'modules/container-app.bicep' = {
         value: appSqlConnectionString
       }
       {
-        name: 'ADE_SESSION_SECRET'
+        name: 'ADE_SCOPE_SESSION_SECRET'
         secretRef: 'ade-runtime-session-secret'
-      }
-      {
-        name: 'ADE_CONFIG_TARGETS'
-        value: configTargets
       }
       {
         name: 'ADE_SESSION_POOL_MANAGEMENT_ENDPOINT'
         value: sessionPool.outputs.poolManagementEndpoint
       }
       {
-        name: 'ADE_APP_URL'
+        name: 'ADE_PUBLIC_API_URL'
         value: appPublicUrl
       }
       {

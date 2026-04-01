@@ -101,14 +101,14 @@ describe("TerminalPocPage", () => {
     }
 
     expect(
-      screen.getByText("Connecting to the terminal bridge..."),
+      screen.getByText("Connecting to the terminal..."),
     ).toBeInTheDocument();
 
     firstSocket.emit("error");
     firstSocket.emit("close");
 
     expect(
-      screen.getByText("Connecting to the terminal bridge..."),
+      screen.getByText("Connecting to the terminal..."),
     ).toBeInTheDocument();
 
     secondSocket.emit("message", { data: JSON.stringify({ type: "ready" }) });
