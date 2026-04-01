@@ -9,7 +9,7 @@ use reverse_connect::{
         CHANNEL_STDIN_METHOD, CONNECTOR_HELLO_METHOD, ChannelCloseParams, ChannelDataParams,
         ChannelExitParams, ChannelKind, ChannelOpenParams, ChannelStdinParams, ChannelStream,
         ConnectorHelloParams, EmptyResult, PtySize, RequestMessage, ResponseMessage, RpcMessage,
-        SESSION_ERROR_METHOD, SESSION_SHUTDOWN_METHOD, WEBSOCKET_SUBPROTOCOL,
+        SESSION_ERROR_METHOD, SESSION_SHUTDOWN_METHOD,
     },
 };
 use tokio::process::{Child, Command};
@@ -19,7 +19,7 @@ use tokio_tungstenite::{
     tungstenite::{
         Message,
         handshake::server::{Request, Response},
-        http::{HeaderValue, header},
+        http::header,
     },
 };
 
@@ -48,7 +48,7 @@ async fn start_server(
     let (socket_tx, socket_rx) = oneshot::channel();
     let handle = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
-        let result = accept_hdr_async(stream, move |request: &Request, mut response: Response| {
+        let result = accept_hdr_async(stream, move |request: &Request, response: Response| {
             let auth = request
                 .headers()
                 .get(header::AUTHORIZATION)
@@ -65,25 +65,6 @@ async fn start_server(
                     )),
                 );
             }
-            let offered = request
-                .headers()
-                .get(header::SEC_WEBSOCKET_PROTOCOL)
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or_default();
-            if !offered
-                .split(',')
-                .any(|value| value.trim() == WEBSOCKET_SUBPROTOCOL)
-            {
-                return Err(
-                    tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(Some(
-                        "missing websocket subprotocol".to_string(),
-                    )),
-                );
-            }
-            response.headers_mut().insert(
-                header::SEC_WEBSOCKET_PROTOCOL,
-                HeaderValue::from_static(WEBSOCKET_SUBPROTOCOL),
-            );
             Ok(response)
         })
         .await;
@@ -501,4 +482,14 @@ async fn cli_connects_over_websocket_and_runs_exec_channels() {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[tokio::test]
+async fn cli_reports_connection_errors_to_stderr() {
+    let connector = spawn_connector_cli("ws://127.0.0.1:9/".to_string(), "secret-token".to_string());
+    let output = tokio::time::timeout(Duration::from_secs(5), connector.wait_with_output())
+        .await
+        .expect("connector process did not stop");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("reverse-connect failed:"));
 }

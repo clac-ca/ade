@@ -9,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use http::{
     HeaderValue,
-    header::{AUTHORIZATION, SEC_WEBSOCKET_PROTOCOL},
+    header::AUTHORIZATION,
 };
 use portable_pty::{CommandBuilder, PtySize as PortablePtySize, native_pty_system};
 use thiserror::Error;
@@ -30,7 +30,6 @@ use crate::protocol::{
     ChannelOpenParams, ChannelResizeParams, ChannelSignalParams, ChannelStdinParams, ChannelStream,
     ConnectorHelloParams, EmptyResult, HostInfo, RequestMessage, ResponseMessage, RpcMessage,
     SESSION_ERROR_METHOD, SESSION_SHUTDOWN_METHOD, SessionErrorParams, SignalName,
-    WEBSOCKET_SUBPROTOCOL,
 };
 
 const CONNECTOR_HELLO_ID: u64 = 1;
@@ -88,20 +87,7 @@ pub async fn connect(options: ConnectOptions) -> Result<(), ConnectorError> {
         HeaderValue::from_str(&format!("Bearer {}", options.bearer_token))
             .map_err(|error| ConnectorError::Message(error.to_string()))?,
     );
-    request.headers_mut().insert(
-        SEC_WEBSOCKET_PROTOCOL,
-        HeaderValue::from_static(WEBSOCKET_SUBPROTOCOL),
-    );
-    let (socket, response) = connect_async(request).await?;
-    let negotiated = response
-        .headers()
-        .get(SEC_WEBSOCKET_PROTOCOL)
-        .and_then(|value| value.to_str().ok());
-    if negotiated != Some(WEBSOCKET_SUBPROTOCOL) {
-        return Err(ConnectorError::Message(
-            "WebSocket subprotocol negotiation failed.".to_string(),
-        ));
-    }
+    let (socket, _response) = connect_async(request).await?;
 
     let (mut writer, mut reader) = socket.split();
     let hello = RequestMessage::request(
