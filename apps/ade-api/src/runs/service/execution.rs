@@ -363,7 +363,11 @@ impl RunService {
             attempt.run_id,
             attempt.attempt
         );
-        let request_path = format!("/app/ade/runs/{}/attempt-{}/request.json", attempt.run_id, attempt.attempt);
+        let request_file_name = format!(
+            "{}-attempt-{}-request.json",
+            attempt.run_id, attempt.attempt
+        );
+        let request_path = format!("/app/ade/runs/{request_file_name}");
         let result_path = format!(
             "{}/ade/runs/{}/attempt-{}/result.json",
             handle.session_root(),
@@ -403,7 +407,7 @@ impl RunService {
         self.scope_session_service
             .upload_scope_file(
                 attempt.scope,
-                format!("ade/runs/{}/attempt-{}/request.json", attempt.run_id, attempt.attempt),
+                format!("ade/runs/{request_file_name}"),
                 "application/json",
                 request_body,
             )
