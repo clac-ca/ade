@@ -20,9 +20,9 @@ Operating model:
 - Pushes to `main` run all three stages when deployable platform paths change.
 - Release versions use the qualifying commit timestamp converted to `America/Vancouver` for the `YYYY.M.D` calendar date and `github.run_number` for the suffix. Reruns keep the same release version.
 - Workflow concurrency keeps one active platform release running on `main` and only the newest pending qualifying push behind it; intermediate pending platform releases are intentionally dropped.
-- The commit stage is split into two parallel jobs: `pnpm test` validates source, and `pnpm build` produces the candidate.
+- The commit stage is one matrix job with two parallel legs: `pnpm test` validates source, and `pnpm build` produces the candidate.
 - `pnpm build` is the only platform build path. It builds the sandbox-environment tarball, compiles the Bicep template and params, and builds the platform image.
-- On push, that same `pnpm build` path publishes the candidate image to `ghcr.io/<org>/ade-platform`, and the workflow records the pushed digest.
+- On push, that same `pnpm build` path publishes the candidate image to `ghcr.io/<org>/ade-platform`, and the build leg publishes the exact image ref/digest metadata for later stages.
 - Acceptance reuses that exact immutable digest. It runs `pnpm test:acceptance --image <release-candidate-image>`, and the command manages local SQL, runs the separate migration binary, starts the same release candidate, waits for readiness, runs the full upload -> run -> SSE -> output checks, and tears the environment down.
 - Release reuses that exact immutable digest, validates the Bicep deployment inputs first, passes the image to Bicep as an explicit `image=` parameter override, starts the separate migration job explicitly after deployment, tags the commit as `ade-platform-v...`, and creates the GitHub Release.
 - The app container never runs schema migrations on startup.

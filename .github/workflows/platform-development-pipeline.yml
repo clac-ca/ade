@@ -36,91 +36,23 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  commit_test:
-    name: Commit Stage / Test
+  commit_stage:
+    name: Commit Stage / ${{ matrix.task_name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
-
-      - name: Set up Node
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
-        with:
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-          node-version-file: .node-version
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
-
-      - name: Set up Rust
-        run: |
-          rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt
-          rustup default 1.94.0
-
-      - name: Restore Rust cache
-        id: rust_cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-            ~/.cargo/git/db
-            target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}
-          restore-keys: |
-            rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run commit-stage tests
-        run: pnpm test
-
-      - name: Save Rust cache
-        if: github.ref == 'refs/heads/main' && steps.rust_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-            ~/.cargo/git/db
-            target
-          key: ${{ steps.rust_cache.outputs.cache-primary-key }}
-
-  cancel_on_test_failure:
-    name: Commit Stage / Cancel on test failure
-    runs-on: ubuntu-latest
-    needs:
-      - commit_test
-    if: ${{ needs.commit_test.result == 'failure' }}
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Cancel workflow run
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/cancel"
-
-  commit_build:
-    name: Commit Stage / Build
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - task: test
+            task_name: Test
+            timeout_minutes: 25
+          - task: build
+            task_name: Build
+            timeout_minutes: 35
     permissions:
       contents: read
       packages: write
-    outputs:
-      release_candidate_image: ${{ steps.release_candidate_ref.outputs.release_candidate_image }}
-      release_tag: ${{ steps.version.outputs.release_tag }}
-      release_title: ${{ steps.version.outputs.release_title }}
-      release_version: ${{ steps.version.outputs.release_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -139,9 +71,11 @@ jobs:
         uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
 
       - name: Set up Docker Buildx
+        if: matrix.task == 'build'
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Compute platform release version
+        if: matrix.task == 'build'
         id: version
         run: |
           commit_timestamp="$(git show -s --format=%cI "${GITHUB_SHA}")"
@@ -162,10 +96,31 @@ jobs:
           echo "release_tag=ade-platform-v${release_version}" >> "${GITHUB_OUTPUT}"
           echo "release_title=ADE Platform ${release_version}" >> "${GITHUB_OUTPUT}"
 
+      - name: Set up Rust
+        if: matrix.task == 'test'
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt
+          rustup default 1.94.0
+
+      - name: Restore Rust cache
+        if: matrix.task == 'test'
+        id: rust_cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            ~/.cargo/git/db
+            target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}
+          restore-keys: |
+            rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Log in to GitHub Container Registry
+        if: matrix.task == 'build'
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
         with:
           registry: ghcr.io
@@ -173,6 +128,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Restore Buildx layer cache
+        if: matrix.task == 'build'
         id: buildx_layer_cache
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -182,9 +138,11 @@ jobs:
             buildx-layer-main-${{ runner.os }}-${{ hashFiles('Dockerfile', '.node-version', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/ade-api/package.json', 'apps/ade-web/package.json', 'apps/ade-api/sandbox-environment/**', 'apps/ade-web/**', 'packages/reverse-connect/**', 'scripts/**/*.ts', 'infra/main.bicep', 'infra/environments/main.prod.bicepparam') }}-
 
       - name: Ensure Buildx layer cache directory
+        if: matrix.task == 'build'
         run: mkdir -p "${{ runner.temp }}/buildx-layer-cache"
 
       - name: Restore BuildKit Cargo cache
+        if: matrix.task == 'build'
         id: buildkit_cargo_cache
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -200,6 +158,7 @@ jobs:
             buildkit-cargo-main-${{ runner.os }}-${{ hashFiles('Dockerfile', 'packages/reverse-connect/Dockerfile.build', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}-
 
       - name: Restore BuildKit Cargo cache mounts
+        if: matrix.task == 'build'
         uses: reproducible-containers/buildkit-cache-dance@5de31fc1534ed8789e63d41ea933c5df9944a261 # v3.1.0
         with:
           cache-map: |
@@ -231,7 +190,12 @@ jobs:
             }
           skip-extraction: ${{ steps.buildkit_cargo_cache.outputs.cache-hit == 'true' }}
 
+      - name: Run commit-stage tests
+        if: matrix.task == 'test'
+        run: pnpm test
+
       - name: Build release candidate
+        if: matrix.task == 'build'
         env:
           ADE_BUILD_CACHE_FROM: type=local,src=${{ runner.temp }}/buildx-layer-cache
           ADE_BUILD_CACHE_TO: type=local,dest=${{ runner.temp }}/buildx-layer-cache-new,mode=max
@@ -241,6 +205,7 @@ jobs:
         run: pnpm build
 
       - name: Finalize Buildx layer cache
+        if: matrix.task == 'build'
         run: |
           rm -rf "${{ runner.temp }}/buildx-layer-cache"
           if [ -d "${{ runner.temp }}/buildx-layer-cache-new" ]; then
@@ -248,14 +213,14 @@ jobs:
           fi
 
       - name: Save Buildx layer cache
-        if: steps.buildx_layer_cache.outputs.cache-hit != 'true'
+        if: matrix.task == 'build' && steps.buildx_layer_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ${{ runner.temp }}/buildx-layer-cache
           key: ${{ steps.buildx_layer_cache.outputs.cache-primary-key }}
 
       - name: Save BuildKit Cargo cache
-        if: steps.buildkit_cargo_cache.outputs.cache-hit != 'true'
+        if: matrix.task == 'build' && steps.buildkit_cargo_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
@@ -267,19 +232,42 @@ jobs:
             ${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-cargo-registry
           key: ${{ steps.buildkit_cargo_cache.outputs.cache-primary-key }}
 
-      - name: Export release candidate image ref
-        id: release_candidate_ref
+      - name: Save Rust cache
+        if: matrix.task == 'test' && steps.rust_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.rust_cache.outputs.cache-primary-key }}
+
+      - name: Export release candidate metadata
+        if: matrix.task == 'build'
         env:
           IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
         run: |
           digest="$(docker buildx imagetools inspect "${IMAGE_REF}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          echo "release_candidate_image=${IMAGE_REF}@${digest}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "RELEASE_CANDIDATE_IMAGE=${IMAGE_REF}@${digest}"
+            echo "RELEASE_TAG=${{ steps.version.outputs.release_tag }}"
+            echo "RELEASE_TITLE=${{ steps.version.outputs.release_title }}"
+            echo "RELEASE_VERSION=${{ steps.version.outputs.release_version }}"
+          } > "${RUNNER_TEMP}/release-candidate.env"
+
+      - name: Upload release candidate metadata
+        if: matrix.task == 'build'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate-metadata
+          path: ${{ runner.temp }}/release-candidate.env
+          if-no-files-found: error
 
   acceptance_stage:
     name: Acceptance Stage
     needs:
-      - commit_test
-      - commit_build
+      - commit_stage
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -312,16 +300,25 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Download release candidate metadata
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate-metadata
+          path: ${{ runner.temp }}/release-candidate
+
+      - name: Load release candidate metadata
+        run: cat "${{ runner.temp }}/release-candidate/release-candidate.env" >> "${GITHUB_ENV}"
+
       - name: Pull release candidate
-        run: docker pull "${{ needs.commit_build.outputs.release_candidate_image }}"
+        run: docker pull "${RELEASE_CANDIDATE_IMAGE}"
 
       - name: Run acceptance tests
-        run: pnpm test:acceptance --image "${{ needs.commit_build.outputs.release_candidate_image }}"
+        run: pnpm test:acceptance --image "${RELEASE_CANDIDATE_IMAGE}"
 
   release_stage:
     name: Release Stage
     needs:
-      - commit_build
+      - commit_stage
       - acceptance_stage
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -346,13 +343,22 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
 
+      - name: Download release candidate metadata
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate-metadata
+          path: ${{ runner.temp }}/release-candidate
+
+      - name: Load release candidate metadata
+        run: cat "${{ runner.temp }}/release-candidate/release-candidate.env" >> "${GITHUB_ENV}"
+
       - name: Validate release candidate deployment
         run: |
           az deployment group validate \
             --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-validate" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --parameters infra/environments/main.prod.bicepparam \
-            --parameters image="${{ needs.commit_build.outputs.release_candidate_image }}" \
+            --parameters image="${RELEASE_CANDIDATE_IMAGE}" \
             --parameters sandboxEnvironmentSecret="${{ secrets.ADE_SANDBOX_ENVIRONMENT_SECRET }}" \
             --validation-level Provider \
             --output none
@@ -365,7 +371,7 @@ jobs:
               --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
               --parameters infra/environments/main.prod.bicepparam \
-              --parameters image="${{ needs.commit_build.outputs.release_candidate_image }}" \
+              --parameters image="${RELEASE_CANDIDATE_IMAGE}" \
               --parameters sandboxEnvironmentSecret="${{ secrets.ADE_SANDBOX_ENVIRONMENT_SECRET }}" \
               --query properties.outputs.migrationJobName.value \
               --output tsv
@@ -390,7 +396,7 @@ jobs:
       - name: Detect existing platform release tag
         id: tag
         env:
-          RELEASE_TAG: ${{ needs.commit_build.outputs.release_tag }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "exists=true" >> "${GITHUB_OUTPUT}"
@@ -401,8 +407,8 @@ jobs:
       - name: Create and push platform release tag
         if: steps.tag.outputs.exists == 'false'
         env:
-          RELEASE_TAG: ${{ needs.commit_build.outputs.release_tag }}
-          RELEASE_VERSION: ${{ needs.commit_build.outputs.release_version }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -412,8 +418,8 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.commit_build.outputs.release_tag }}
-          RELEASE_TITLE: ${{ needs.commit_build.outputs.release_title }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_TITLE: ${{ env.RELEASE_TITLE }}
         run: |
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "GitHub release ${RELEASE_TAG} already exists."
