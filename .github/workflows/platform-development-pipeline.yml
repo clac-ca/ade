@@ -81,6 +81,9 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           node-version-file: .node-version
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+
       - name: Set up Rust
         run: |
           rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt
@@ -243,6 +246,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
           node-version-file: .node-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
