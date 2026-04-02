@@ -3,6 +3,6 @@ import { runMain } from "./lib/runtime";
 
 export { buildSandboxEnvironmentAssets };
 
-void runMain(async () => {
+void runMain(() => {
   buildSandboxEnvironmentAssets();
 });

@@ -28,11 +28,21 @@ Use `pnpm dev --port 8100` to change only the web port.
 
 ## Daily Repo Commands
 
-Use these for normal local development:
+The default developer workflow is:
 
 ```sh
 pnpm dev
-pnpm check
+pnpm test
+pnpm test:acceptance
+```
+
+`pnpm test` is the fast commit-stage suite. It runs TypeScript type checks, lint, backend tests, frontend tests, script tests, Python tests, frontend API schema drift checks, and Bicep validation without starting local infrastructure or building release artifacts.
+
+`pnpm test:acceptance` is the single black-box system test. It proves the real upload -> run -> SSE -> output flow against either a managed local runtime or an attached environment.
+
+Additional local development commands:
+
+```sh
 pnpm dev --port 8100
 pnpm dev --no-open
 pnpm --filter @ade/web gen:api
@@ -43,10 +53,6 @@ pnpm lint:python
 pnpm format
 pnpm format:python
 pnpm format:python:check
-pnpm test
-pnpm test:python
-pnpm test:unit
-pnpm test:session:local
 pnpm clean
 ```
 
@@ -64,8 +70,6 @@ pnpm deps:down
 ```
 
 `pnpm clean` removes local build output, Python virtualenvs and locks, ADE local containers, Compose state, and the `ade-platform:local` image.
-
-`pnpm test:session:local` runs one black-box smoke path against the local Blob, SQL, and session-pool infrastructure through the ADE API.
 
 ## Production-Like Local Runtime
 

@@ -1,8 +1,12 @@
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildSandboxEnvironmentAssets } from "../apps/ade-api/sandbox-environment/build";
 import { parseDevArgs } from "./lib/args";
+import {
+  adeApiBinaryPath,
+  buildAdeApiBinaries,
+  rootDir,
+} from "./lib/ade-api-binaries";
 import { createHostBlobEnv } from "./lib/blob-env";
 import { openBrowser } from "./lib/browser";
 import {
@@ -23,9 +27,7 @@ import {
 } from "./lib/shell";
 import { downLocalDependencies, upLocalDependencies } from "./local-deps";
 
-const cargoCommand = process.platform === "win32" ? "cargo.exe" : "cargo";
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
 
 function signalChild(child: ChildProcessWithAde, signal: NodeJS.Signals) {
@@ -90,38 +92,16 @@ async function main(logger = createConsoleLogger()): Promise<void> {
   });
 
   try {
+    await buildAdeApiBinaries();
     await upLocalDependencies();
-    await runCommand(
-      cargoCommand,
-      [
-        "run",
-        "--locked",
-        "--manifest-path",
-        "apps/ade-api/Cargo.toml",
-        "--bin",
-        "ade-migrate",
-      ],
-      {
-        cwd: rootDir,
-        env: apiEnv,
-      },
-    );
+    await runCommand(adeApiBinaryPath("ade-migrate"), [], {
+      cwd: rootDir,
+      env: apiEnv,
+    });
 
     const api = spawnCommand(
-      cargoCommand,
-      [
-        "run",
-        "--locked",
-        "--manifest-path",
-        "apps/ade-api/Cargo.toml",
-        "--bin",
-        "ade-api",
-        "--",
-        "--host",
-        localApiHost,
-        "--port",
-        String(localApiPort),
-      ],
+      adeApiBinaryPath("ade-api"),
+      ["--host", localApiHost, "--port", String(localApiPort)],
       {
         cwd: rootDir,
         detached,

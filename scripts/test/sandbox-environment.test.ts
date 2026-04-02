@@ -17,6 +17,9 @@ test("sandbox environment stays app-owned and does not become a package", () => 
     existsSync(join(sandboxEnvironmentDir, "rootfs/app/ade/bin/setup.sh")),
   );
   assert.ok(existsSync(join(sandboxEnvironmentDir, "build.ts")));
+  assert.ok(
+    existsSync(join(repoRoot, "packages/reverse-connect/Dockerfile.build")),
+  );
 
   assert.equal(existsSync(join(sandboxEnvironmentDir, "package.json")), false);
   assert.equal(existsSync(join(sandboxEnvironmentDir, "Cargo.toml")), false);
@@ -56,5 +59,10 @@ test("sandbox environment build stays focused on the shared runtime tarball", ()
 
   assert.doesNotMatch(buildSource, /ADE_CONFIG_FIXTURE_ROOT|configFixtureRoot/);
   assert.doesNotMatch(buildSource, /packages\/ade-config/);
+  assert.match(buildSource, /packages\/reverse-connect\/Dockerfile\.build/);
+  assert.match(buildSource, /buildx",\s*"build/);
+  assert.match(buildSource, /--target",\s*"artifact/);
+  assert.doesNotMatch(buildSource, /rust:1\.94\.1-alpine/);
+  assert.doesNotMatch(buildSource, /CARGO_TARGET_DIR=\/tmp\/target/);
   assert.match(buildSource, /sandbox-environment\.tar\.gz/);
 });

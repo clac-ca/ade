@@ -29,8 +29,10 @@ WORKDIR /build
 
 RUN apk add --no-cache build-base musl-dev pkgconfig ca-certificates perl
 
+COPY Cargo.toml ./Cargo.toml
 COPY Cargo.lock ./Cargo.lock
 COPY apps/ade-api ./apps/ade-api
+COPY infra/local/sessionpool ./infra/local/sessionpool
 COPY packages/reverse-connect ./packages/reverse-connect
 
 ARG SERVICE_VERSION=0.1.0

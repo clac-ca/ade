@@ -8,5 +8,5 @@
     "types": ["node"],
     "verbatimModuleSyntax": true
   },
-  "include": ["scripts/**/*.ts"]
+  "include": ["scripts/**/*.ts", "apps/ade-api/sandbox-environment/**/*.ts"]
 }
