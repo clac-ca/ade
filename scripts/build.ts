@@ -22,10 +22,12 @@ function readGitValue(args: readonly string[]): string | null {
 
 function readBuildMetadata(env: Record<string, string | undefined>) {
   const gitSha =
+    readOptionalTrimmedString(env, "ADE_GIT_SHA") ??
     readOptionalTrimmedString(env, "GITHUB_SHA") ??
     readGitValue(["rev-parse", "HEAD"]) ??
     "local";
   const builtAt =
+    readOptionalTrimmedString(env, "ADE_BUILT_AT") ??
     readGitValue(["show", "--no-patch", "--format=%cI", gitSha]) ??
     new Date().toISOString();
   const apiPackage = JSON.parse(
@@ -49,26 +51,103 @@ function readBuildMetadata(env: Record<string, string | undefined>) {
   return {
     builtAt,
     gitSha,
-    version: apiPackage.version,
+    version:
+      readOptionalTrimmedString(env, "ADE_SERVICE_VERSION") ??
+      apiPackage.version,
   };
 }
 
+function readBuildCacheSettings(
+  env: Record<string, string | undefined>,
+  name: string,
+): string[] {
+  const value = readOptionalTrimmedString(env, name);
+  if (value === undefined) {
+    return [];
+  }
+
+  return value
+    .split("\n")
+    .flatMap((entry) => entry.split(","))
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+}
+
+function readBuildImage(env: Record<string, string | undefined>): string {
+  return (
+    readOptionalTrimmedString(env, "ADE_BUILD_IMAGE") ?? "ade-platform:local"
+  );
+}
+
+function shouldPushBuild(env: Record<string, string | undefined>): boolean {
+  const value = readOptionalTrimmedString(env, "ADE_BUILD_PUSH");
+  if (value === undefined) {
+    return false;
+  }
+
+  return value.toLowerCase() === "true";
+}
+
 async function buildImage(
-  tag: string,
+  image: string,
   contextPath: string,
   buildArgs: Record<string, string>,
+  options: {
+    cacheFrom?: readonly string[];
+    cacheTo?: readonly string[];
+    push?: boolean;
+  } = {},
 ): Promise<void> {
-  const args = ["buildx", "build", "--load"];
+  const args = ["buildx", "build"];
+
+  if (options.push) {
+    args.push("--push");
+  } else {
+    args.push("--load");
+  }
 
   for (const [name, value] of Object.entries(buildArgs)) {
     args.push("--build-arg", `${name}=${value}`);
   }
 
-  args.push("-t", tag, contextPath);
+  for (const cacheFrom of options.cacheFrom ?? []) {
+    args.push("--cache-from", cacheFrom);
+  }
+
+  for (const cacheTo of options.cacheTo ?? []) {
+    args.push("--cache-to", cacheTo);
+  }
+
+  args.push("-t", image, contextPath);
 
   await runCommand(dockerCommand, args, {
     cwd: rootDir,
   });
+}
+
+async function buildInfrastructureArtifacts(): Promise<void> {
+  await runCommand(
+    "az",
+    ["bicep", "build", "--file", "infra/main.bicep", "--stdout"],
+    {
+      cwd: rootDir,
+      stdio: "ignore",
+    },
+  );
+  await runCommand(
+    "az",
+    [
+      "bicep",
+      "build-params",
+      "--file",
+      "infra/environments/main.prod.bicepparam",
+      "--stdout",
+    ],
+    {
+      cwd: rootDir,
+      stdio: "ignore",
+    },
+  );
 }
 
 async function main(): Promise<void> {
@@ -82,14 +161,28 @@ async function main(): Promise<void> {
   }
 
   const metadata = readBuildMetadata(process.env);
+  const image = readBuildImage(process.env);
+  const push = shouldPushBuild(process.env);
+  const cacheFrom = readBuildCacheSettings(process.env, "ADE_BUILD_CACHE_FROM");
+  const cacheTo = readBuildCacheSettings(process.env, "ADE_BUILD_CACHE_TO");
 
   await ensureDocker(dockerCommand, "`pnpm build`");
   buildSandboxEnvironmentAssets();
-  await buildImage("ade-platform:local", ".", {
-    BUILT_AT: metadata.builtAt,
-    GIT_SHA: metadata.gitSha,
-    SERVICE_VERSION: metadata.version,
-  });
+  await buildInfrastructureArtifacts();
+  await buildImage(
+    image,
+    ".",
+    {
+      BUILT_AT: metadata.builtAt,
+      GIT_SHA: metadata.gitSha,
+      SERVICE_VERSION: metadata.version,
+    },
+    {
+      cacheFrom,
+      cacheTo,
+      push,
+    },
+  );
 }
 
 void runMain(async () => {

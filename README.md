@@ -36,7 +36,8 @@ pnpm test
 pnpm test:acceptance
 ```
 
-`pnpm test` is the fast commit-stage suite. It runs TypeScript type checks, lint, backend tests, frontend tests, script tests, Python tests, frontend API schema drift checks, and Bicep validation without starting local infrastructure or building release artifacts.
+`pnpm test` is the fast commit-stage suite. It runs TypeScript type checks, schema drift checks, lint, backend tests, frontend tests, script tests, Python tests, and Bicep lint without starting local infrastructure or building release artifacts.
+`pnpm build` is the single candidate builder. It builds the shared sandbox-environment tarball, compiles the Bicep template and production params, and builds the local ADE Platform image `ade-platform:local`.
 
 `pnpm test:acceptance` is the single black-box system test. It proves the real upload -> run -> SSE -> output flow against either a managed local runtime or an attached environment.
 
@@ -47,16 +48,13 @@ pnpm dev --port 8100
 pnpm dev --no-open
 pnpm --filter @ade/web gen:api
 pnpm --filter @ade/web gen:api:check
-pnpm typecheck
-pnpm lint
-pnpm lint:python
 pnpm format
 pnpm format:python
 pnpm format:python:check
 pnpm clean
 ```
 
-`pnpm lint` and `pnpm test` require Azure CLI 2.53+ with Bicep support.
+`pnpm test` and `pnpm build` require Azure CLI 2.53+ with Bicep support.
 
 `pnpm --filter @ade/web gen:api` regenerates the committed frontend OpenAPI types from the backend contract when API shapes change.
 
@@ -85,7 +83,7 @@ pnpm test:acceptance --url http://127.0.0.1:4100
 pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 ```
 
-`pnpm build` builds the local ADE Platform image `ade-platform:local` and accepts no extra arguments.
+`pnpm build` builds the local ADE Platform image `ade-platform:local`, compiles the Bicep deployment artifacts, and accepts no extra arguments.
 
 `pnpm start` and managed `pnpm test:acceptance` use `ade-platform:local` by default, so build first unless you pass `--image`.
 
@@ -99,7 +97,7 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 - Python 3.12
 - uv
 - Docker
-- Azure CLI 2.53+ with Bicep support for `pnpm lint` and `pnpm test`
+- Azure CLI 2.53+ with Bicep support for `pnpm test` and `pnpm build`
 
 ## Repo Map
 

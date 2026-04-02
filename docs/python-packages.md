@@ -59,14 +59,13 @@ uv build --directory packages/ade-config
 Repo-level shortcuts:
 
 ```sh
-pnpm lint:python
-pnpm format:python
-pnpm format:python:check
 pnpm test
-pnpm build:python-artifacts
+pnpm build
 ```
 
 `pnpm test` includes the Python package suites alongside the rest of the fast repo-level checks.
+
+`pnpm build` builds the platform candidate. It is not a Python-package release command. Use `uv build --directory ...` directly when you need package artifacts.
 
 ## Release Model
 
