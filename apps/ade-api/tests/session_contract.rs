@@ -133,13 +133,13 @@ fn write_sandbox_environment_archive(archive_path: &FsPath, base_wheel_path: &Fs
     );
     append_bytes(
         &mut archive,
-        "mnt/data/ade/python/current/bin/python3",
+        "app/ade/python/current/bin/python3",
         b"python3",
         0o755,
     );
     append_bytes(
         &mut archive,
-        "mnt/data/ade/python/current/bin/ade",
+        "app/ade/python/current/bin/ade",
         b"ade",
         0o755,
     );
@@ -560,13 +560,13 @@ async fn start_stub_server_with_options(
 
 fn app_with_session(
     endpoint: &str,
-    config_targets: &[(&str, &str, &FsPath)],
+    _config_targets: &[(&str, &str, &FsPath)],
     base_wheel_path: &FsPath,
 ) -> axum::Router {
     app_with_session_and_url_and_run_limit(
         endpoint,
         "http://127.0.0.1:8000",
-        config_targets,
+        &[],
         base_wheel_path,
         None,
     )
@@ -575,28 +575,22 @@ fn app_with_session(
 fn app_with_session_and_url(
     endpoint: &str,
     app_url: &str,
-    config_targets: &[(&str, &str, &FsPath)],
+    _config_targets: &[(&str, &str, &FsPath)],
     base_wheel_path: &FsPath,
 ) -> axum::Router {
-    app_with_session_and_url_and_run_limit(endpoint, app_url, config_targets, base_wheel_path, None)
+    app_with_session_and_url_and_run_limit(endpoint, app_url, &[], base_wheel_path, None)
 }
 
 fn app_with_session_and_url_and_run_limit(
     endpoint: &str,
     app_url: &str,
-    config_targets: &[(&str, &str, &FsPath)],
+    _config_targets: &[(&str, &str, &FsPath)],
     base_wheel_path: &FsPath,
     run_max_concurrent: Option<usize>,
 ) -> axum::Router {
     let runtime_dir = tempdir().unwrap();
     let environment_archive = runtime_dir.path().join("sandbox-environment.tar.gz");
-    let config_root = runtime_dir.path().join("configs");
     write_sandbox_environment_archive(&environment_archive, base_wheel_path);
-    for (workspace_id, config_version_id, wheel_path) in config_targets {
-        let scope_dir = config_root.join(workspace_id).join(config_version_id);
-        std::fs::create_dir_all(&scope_dir).unwrap();
-        std::fs::copy(wheel_path, scope_dir.join(wheel_path.file_name().unwrap())).unwrap();
-    }
     let env: std::collections::BTreeMap<String, String> = [
         (
             "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
@@ -632,7 +626,6 @@ fn app_with_session_and_url_and_run_limit(
             endpoint,
             "test-session-secret",
             environment_archive,
-            config_root,
         )
         .unwrap(),
     );
@@ -818,12 +811,8 @@ async fn drive_reverse_connect_stub(
                     );
                     let output_storage_key = session_file_storage_key(
                         identifier,
-                        format!(
-                            "{}/{}",
-                            output_dir.trim_start_matches("/app/"),
-                            output_filename
-                        )
-                        .as_str(),
+                        format!("{}/{}", output_dir.trim_start_matches('/'), output_filename)
+                            .as_str(),
                     );
                     let stdout = json!({
                         "jsonrpc": "2.0",
@@ -1896,9 +1885,11 @@ async fn sandbox_environment_launches_reverse_connect_with_url_and_bearer_token(
             .iter()
             .any(|path| path.ends_with(":sandbox-environment.tar.gz"))
     );
-    assert!(uploaded_paths.iter().any(|path| {
-        path.ends_with(":mnt/data/ade/config/current/ade_config-0.1.0-py3-none-any.whl")
-    }));
+    assert!(
+        uploaded_paths
+            .iter()
+            .all(|path| !path.contains("ade/configs/"))
+    );
 
     let _ = socket.close(None).await;
     app_handle.abort();

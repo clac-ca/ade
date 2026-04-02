@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 use super::*;
 
@@ -31,6 +31,49 @@ pub(super) struct AttemptFailure {
 }
 
 impl RunService {
+    async fn emit_phase_status(
+        &self,
+        run: &mut StoredRun,
+        active: &ActiveRunHandle,
+        phase: RunPhase,
+        state: &'static str,
+    ) -> Result<(), AttemptFailure> {
+        self.handle_runtime_event(
+            run,
+            active,
+            RunEventPayload::Status {
+                phase,
+                state: state.to_string(),
+                session_guid: None,
+                operation_id: None,
+                timings: None,
+            },
+        )
+        .await
+        .map_err(store_failure)
+    }
+
+    async fn run_phase_step<T, Fut>(
+        &self,
+        run: &mut StoredRun,
+        active: &ActiveRunHandle,
+        phase: RunPhase,
+        retriable: bool,
+        future: Fut,
+    ) -> Result<T, AttemptFailure>
+    where
+        Fut: Future<Output = Result<T, AppError>>,
+    {
+        self.emit_phase_status(run, active, phase, "started")
+            .await?;
+        let value = future
+            .await
+            .map_err(|error| phase_failure(error, phase, retriable))?;
+        self.emit_phase_status(run, active, phase, "completed")
+            .await?;
+        Ok(value)
+    }
+
     pub(super) async fn execute_run(
         &self,
         scope: Scope,
@@ -250,157 +293,57 @@ impl RunService {
         run.validation_issues.clear();
         self.run_store.save_run(&run).await.map_err(store_failure)?;
 
-        self.handle_runtime_event(
-            &mut run,
-            active,
-            RunEventPayload::Status {
-                phase: RunPhase::Allocate,
-                state: "started".to_string(),
-                session_guid: None,
-                operation_id: None,
-                timings: None,
-            },
-        )
-        .await
-        .map_err(store_failure)?;
-
         let handle = self
-            .sandbox_environment_manager
-            .allocate(attempt.scope)
-            .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::Allocate),
-                retriable: true,
-                status: RunStatus::Failed,
-            })?;
+            .run_phase_step(
+                &mut run,
+                active,
+                RunPhase::Allocate,
+                true,
+                self.sandbox_environment_manager.allocate(attempt.scope),
+            )
+            .await?;
 
-        self.handle_runtime_event(
+        self.run_phase_step(
             &mut run,
             active,
-            RunEventPayload::Status {
-                phase: RunPhase::Allocate,
-                state: "completed".to_string(),
-                session_guid: None,
-                operation_id: None,
-                timings: None,
-            },
+            RunPhase::Prepare,
+            true,
+            self.sandbox_environment_manager
+                .prepare(attempt.scope, &handle),
         )
-        .await
-        .map_err(store_failure)?;
+        .await?;
 
-        self.handle_runtime_event(
+        self.run_phase_step(
             &mut run,
             active,
-            RunEventPayload::Status {
-                phase: RunPhase::Prepare,
-                state: "started".to_string(),
-                session_guid: None,
-                operation_id: None,
-                timings: None,
-            },
+            RunPhase::Install,
+            true,
+            self.sandbox_environment_manager
+                .install(attempt.scope, &handle),
         )
-        .await
-        .map_err(store_failure)?;
-
-        self.sandbox_environment_manager
-            .prepare(attempt.scope, &handle)
-            .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::Prepare),
-                retriable: true,
-                status: RunStatus::Failed,
-            })?;
-
-        self.handle_runtime_event(
-            &mut run,
-            active,
-            RunEventPayload::Status {
-                phase: RunPhase::Prepare,
-                state: "completed".to_string(),
-                session_guid: None,
-                operation_id: None,
-                timings: None,
-            },
-        )
-        .await
-        .map_err(store_failure)?;
-
-        self.handle_runtime_event(
-            &mut run,
-            active,
-            RunEventPayload::Status {
-                phase: RunPhase::Install,
-                state: "started".to_string(),
-                session_guid: None,
-                operation_id: None,
-                timings: None,
-            },
-        )
-        .await
-        .map_err(store_failure)?;
-
-        self.sandbox_environment_manager
-            .install(attempt.scope, &handle)
-            .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::Install),
-                retriable: true,
-                status: RunStatus::Failed,
-            })?;
-
-        self.handle_runtime_event(
-            &mut run,
-            active,
-            RunEventPayload::Status {
-                phase: RunPhase::Install,
-                state: "completed".to_string(),
-                session_guid: None,
-                operation_id: None,
-                timings: None,
-            },
-        )
-        .await
-        .map_err(store_failure)?;
+        .await?;
 
         if *active.cancel_rx.borrow() {
-            return Err(AttemptFailure {
-                emitted_error: true,
-                error: AppError::request("Run cancelled."),
-                phase: None,
-                retriable: false,
-                status: RunStatus::Cancelled,
-            });
+            return Err(cancelled_attempt_failure());
         }
 
         let input_filename = uploaded_basename(attempt.input_path);
         let local_input_directory = format!(
-            "ade/runs/{}/attempt-{}/input",
+            "mnt/data/ade/runs/{}/attempt-{}/input",
             attempt.run_id, attempt.attempt
         );
         let local_output_directory = format!(
-            "ade/runs/{}/attempt-{}/output",
+            "mnt/data/ade/runs/{}/attempt-{}/output",
             attempt.run_id, attempt.attempt
         );
-        let local_input_path = format!("/app/{local_input_directory}/{input_filename}");
-        let local_output_dir = format!("/app/{local_output_directory}");
+        let local_input_path = format!("/{local_input_directory}/{input_filename}");
+        let local_output_dir = format!("/{local_output_directory}");
         let expected_output_filename = normalized_output_filename(&input_filename);
         let input_bytes = self
             .artifact_store
             .download_bytes(attempt.input_path)
             .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::Execute),
-                retriable: false,
-                status: RunStatus::Failed,
-            })?;
+            .map_err(|error| phase_failure(error, RunPhase::Execute, false))?;
         self.sandbox_environment_manager
             .upload_sandbox_file(
                 attempt.scope,
@@ -409,13 +352,7 @@ impl RunService {
                 input_bytes,
             )
             .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::Execute),
-                retriable: true,
-                status: RunStatus::Failed,
-            })?;
+            .map_err(|error| phase_failure(error, RunPhase::Execute, true))?;
 
         let channel_id = ChannelId::new(format!(
             "run-{}-attempt-{}",
@@ -437,27 +374,10 @@ impl RunService {
                 pty: None,
             })
             .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::Execute),
-                retriable: true,
-                status: RunStatus::Failed,
-            })?;
+            .map_err(|error| phase_failure(error, RunPhase::Execute, true))?;
 
-        self.handle_runtime_event(
-            &mut run,
-            active,
-            RunEventPayload::Status {
-                phase: RunPhase::Execute,
-                state: "started".to_string(),
-                session_guid: None,
-                operation_id: None,
-                timings: None,
-            },
-        )
-        .await
-        .map_err(store_failure)?;
+        self.emit_phase_status(&mut run, active, RunPhase::Execute, "started")
+            .await?;
 
         let mut cancel_rx = active.cancel_rx.clone();
         let timeout = tokio::time::sleep(Duration::from_secs(run_timeout_in_seconds(
@@ -471,30 +391,22 @@ impl RunService {
                 _ = cancel_rx.changed() => {
                     let _ = handle.signal_channel(channel_id.clone(), SignalName::Kill).await;
                     let _ = handle.close_channel(channel_id.clone()).await;
-                    return Err(AttemptFailure {
-                        emitted_error: true,
-                        error: AppError::request("Run cancelled."),
-                        phase: None,
-                        retriable: false,
-                        status: RunStatus::Cancelled,
-                    });
+                    return Err(cancelled_attempt_failure());
                 }
                 _ = &mut timeout => {
                     let _ = handle.signal_channel(channel_id.clone(), SignalName::Kill).await;
                     let _ = handle.close_channel(channel_id.clone()).await;
-                    return Err(AttemptFailure {
-                        emitted_error: false,
-                        error: AppError::status(
+                    return Err(phase_failure(
+                        AppError::status(
                             StatusCode::BAD_GATEWAY,
                             format!(
                                 "Run timed out after {} seconds.",
                                 run_timeout_in_seconds(attempt.timeout_in_seconds)
                             ),
                         ),
-                        phase: Some(RunPhase::Execute),
-                        retriable: false,
-                        status: RunStatus::Failed,
-                    });
+                        RunPhase::Execute,
+                        false,
+                    ));
                 }
                 event = events.recv() => {
                     match event {
@@ -539,24 +451,12 @@ impl RunService {
                                     attempt.scope,
                                     local_output_directory.clone(),
                                     expected_output_filename.clone(),
-                                ).await.map_err(|error| AttemptFailure {
-                                    emitted_error: false,
-                                    error,
-                                    phase: Some(RunPhase::Execute),
-                                    retriable: false,
-                                    status: RunStatus::Failed,
-                                })?;
+                                ).await.map_err(|error| phase_failure(error, RunPhase::Execute, false))?;
                                 self.artifact_store.upload_bytes(
                                     attempt.output_path,
                                     None,
                                     output_bytes,
-                                ).await.map_err(|error| AttemptFailure {
-                                    emitted_error: false,
-                                    error,
-                                    phase: Some(RunPhase::Execute),
-                                    retriable: false,
-                                    status: RunStatus::Failed,
-                                })?;
+                                ).await.map_err(|error| phase_failure(error, RunPhase::Execute, false))?;
                                 let success = AttemptSuccess {
                                     output_path: attempt.output_path.to_string(),
                                     validation_issues: Vec::new(),
@@ -571,32 +471,19 @@ impl RunService {
                                 )
                                 .await
                                 .map_err(store_failure)?;
-                                self.handle_runtime_event(
-                                    &mut run,
-                                    active,
-                                    RunEventPayload::Status {
-                                        phase: RunPhase::Execute,
-                                        state: "completed".to_string(),
-                                        session_guid: None,
-                                        operation_id: None,
-                                        timings: None,
-                                    },
-                                )
-                                .await
-                                .map_err(store_failure)?;
+                                self.emit_phase_status(&mut run, active, RunPhase::Execute, "completed")
+                                    .await?;
                                 return Ok(success);
                             }
 
-                            return Err(AttemptFailure {
-                                emitted_error: false,
-                                error: AppError::status(
+                            return Err(phase_failure(
+                                AppError::status(
                                     StatusCode::BAD_GATEWAY,
                                     run_exit_message(code, &stdout_lines, &stderr_lines),
                                 ),
-                                phase: Some(RunPhase::Execute),
-                                retriable: false,
-                                status: RunStatus::Failed,
-                            });
+                                RunPhase::Execute,
+                                false,
+                            ));
                         }
                         Ok(SandboxEnvironmentEvent::Error { channel_id: Some(event_channel_id), message }) if event_channel_id == channel_id => {
                             self.handle_runtime_event(
@@ -612,44 +499,48 @@ impl RunService {
                             .map_err(store_failure)?;
                             return Err(AttemptFailure {
                                 emitted_error: true,
-                                error: AppError::status(StatusCode::BAD_GATEWAY, message),
-                                phase: Some(RunPhase::Execute),
-                                retriable: false,
-                                status: RunStatus::Failed,
+                                ..phase_failure(
+                                    AppError::status(StatusCode::BAD_GATEWAY, message),
+                                    RunPhase::Execute,
+                                    false,
+                                )
                             });
                         }
                         Ok(SandboxEnvironmentEvent::Error { channel_id: None, message }) => {
                             return Err(AttemptFailure {
-                                emitted_error: false,
-                                error: AppError::status(StatusCode::BAD_GATEWAY, message),
                                 phase: run.phase.or(Some(RunPhase::Execute)),
-                                retriable: true,
-                                status: RunStatus::Failed,
+                                ..phase_failure(
+                                    AppError::status(StatusCode::BAD_GATEWAY, message),
+                                    RunPhase::Execute,
+                                    true,
+                                )
                             });
                         }
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             return Err(AttemptFailure {
-                                emitted_error: false,
-                                error: AppError::status(
-                                    StatusCode::BAD_GATEWAY,
-                                    "Sandbox environment event stream overflowed while the run was active.",
-                                ),
                                 phase: run.phase.or(Some(RunPhase::Execute)),
-                                retriable: true,
-                                status: RunStatus::Failed,
+                                ..phase_failure(
+                                    AppError::status(
+                                        StatusCode::BAD_GATEWAY,
+                                        "Sandbox environment event stream overflowed while the run was active.",
+                                    ),
+                                    RunPhase::Execute,
+                                    true,
+                                )
                             });
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             return Err(AttemptFailure {
-                                emitted_error: false,
-                                error: AppError::status(
-                                    StatusCode::BAD_GATEWAY,
-                                    "Sandbox environment connector disconnected while the run was active.",
-                                ),
                                 phase: run.phase.or(Some(RunPhase::Execute)),
-                                retriable: true,
-                                status: RunStatus::Failed,
+                                ..phase_failure(
+                                    AppError::status(
+                                        StatusCode::BAD_GATEWAY,
+                                        "Sandbox environment connector disconnected while the run was active.",
+                                    ),
+                                    RunPhase::Execute,
+                                    true,
+                                )
                             });
                         }
                     }
@@ -750,6 +641,26 @@ pub(super) fn attempt_failure(error: AppError, phase: Option<RunPhase>) -> Attem
         error,
         phase,
         retriable: false,
+        status: RunStatus::Failed,
+    }
+}
+
+fn cancelled_attempt_failure() -> AttemptFailure {
+    AttemptFailure {
+        emitted_error: true,
+        error: AppError::request("Run cancelled."),
+        phase: None,
+        retriable: false,
+        status: RunStatus::Cancelled,
+    }
+}
+
+fn phase_failure(error: AppError, phase: RunPhase, retriable: bool) -> AttemptFailure {
+    AttemptFailure {
+        emitted_error: false,
+        error,
+        phase: Some(phase),
+        retriable,
         status: RunStatus::Failed,
     }
 }

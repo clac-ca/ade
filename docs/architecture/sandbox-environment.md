@@ -43,8 +43,10 @@ ADE packages that shared runtime as one tarball carried by the API image. During
 Config installation is separate from environment setup.
 
 - setup prepares the shared sandbox environment
-- config installation installs the selected `ade-config` wheel
+- config installation installs the selected `ade-config` wheel from its mounted path under `/mnt/data/ade/configs/<workspaceId>/<configVersionId>/`
 - runs execute only after both steps succeed
+
+The API does not upload config wheels during prepare. Local development stages config wheels separately only so the local session-pool emulator can mount them into that runtime path.
 
 This keeps shared environment concerns separate from run-specific concerns.
 

@@ -2,10 +2,10 @@
 set -eu
 
 app_root=/app/ade
-config_root=/mnt/data/ade/config/current
-python_home=/mnt/data/ade/python/current
+config_root=/mnt/data/ade/configs
+python_home=/app/ade/python/current
 python_bin="$python_home/bin/python3"
-run_root=/app/ade/runs
+run_root=/mnt/data/ade/runs
 
 if [ ! -x "$python_bin" ]; then
   echo "Pinned Python runtime was not found at $python_bin." >&2

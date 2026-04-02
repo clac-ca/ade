@@ -36,7 +36,6 @@ async function upLocalDependencies(): Promise<void> {
   await runCompose([
     "up",
     "-d",
-    "--build",
     "--wait",
     "azurite",
     "sqlserver",

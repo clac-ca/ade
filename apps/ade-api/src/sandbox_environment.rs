@@ -5,6 +5,7 @@
 //! inside that prepared environment.
 
 mod assets;
+mod connector;
 mod manager;
 mod provider;
 mod rendezvous;
@@ -12,4 +13,5 @@ mod rendezvous;
 pub use ::reverse_connect::protocol::{
     ChannelId, ChannelKind, ChannelOpenParams, ChannelStream, PtySize, SignalName,
 };
-pub use manager::{SandboxEnvironment, SandboxEnvironmentEvent, SandboxEnvironmentManager};
+pub use connector::SandboxEnvironmentEvent;
+pub use manager::{SandboxEnvironment, SandboxEnvironmentManager};

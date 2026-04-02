@@ -64,7 +64,7 @@ The ADE API requires that session-pool config to be present at startup. The sess
 ADE intentionally follows the observed Shell pool behavior rather than the broader code-interpreter documentation when they diverge:
 
 - uploads with no `path` land in the session root under `/mnt/data`
-- uploads with a non-empty `path` land under `/app/<path>`
+- uploads with an explicit `app/...` or `mnt/data/...` path land under that sandbox root
 - shell commands always start in `/mnt/data`
 
 The steady-state hosted runtime settings are:
@@ -74,14 +74,13 @@ The steady-state hosted runtime settings are:
 | `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` | Yes      | API     | Base URL for the session-pool data-plane routes.                                            |
 | `ADE_SANDBOX_ENVIRONMENT_SECRET`       | Yes      | API     | Secret used to derive deterministic sandbox identifiers from `workspaceId:configVersionId`. |
 
-ADE does not discover or build Python wheels at runtime. Instead it relies on two fixed runtime conventions relative to the app working directory:
+ADE does not discover or build Python wheels at runtime. It relies on one fixed shared runtime artifact relative to the app working directory:
 
 - `.package/sandbox-environment.tar.gz`
-- `.package/configs/<workspaceId>/<configVersionId>/`
 
-The sandbox-environment tarball contains the shared connector binary, `setup.sh`, the pinned Python runtime already laid out under `/mnt/data/ade/python/current`, and the base wheelhouse used to satisfy `ade-config` dependencies such as `ade-engine`. `setup.sh` does not fetch Python from the internet. The configs root contains one config wheel per workspace/config pair for local fixture installs.
+The sandbox-environment tarball contains the shared connector binary, `setup.sh`, the pinned Python runtime already laid out under `/app/ade/python/current`, and the base wheelhouse used to satisfy `ade-config` dependencies such as `ade-engine`. `setup.sh` does not fetch Python from the internet.
 
-ADE prepares the shared sandbox environment first, then installs the selected config as a separate runtime step. The API uploads the tarball, extracts it, starts `reverse-connect`, runs `setup.sh`, installs the mounted config wheel directly with `pip`, and executes `ade process` directly.
+ADE prepares the shared sandbox environment first, then installs the selected config as a separate runtime step. The API uploads the tarball, extracts it, starts `reverse-connect`, runs `setup.sh`, installs the mounted config wheel directly from `/mnt/data/ade/configs/<workspaceId>/<configVersionId>/`, and executes `ade process` directly.
 
 ADE does not support a migration-on-startup toggle. `ade-api` never runs migrations on startup, and `ade-migrate` is the only supported migration entrypoint.
 
@@ -115,8 +114,9 @@ ADE queues run execution inside the API and starts at most a small bounded numbe
 - local session-pool emulator on `http://127.0.0.1:8014`
 - local sandbox-environment assets under:
   - `.package/sandbox-environment.tar.gz`
-  - `.package/configs/workspace-a/config-v1`
-  - `.package/configs/workspace-b/config-v2`
+  - `.package/configs/`
+
+Local config wheels are staged under `.package/configs/<workspaceId>/<configVersionId>/` only so the local session-pool emulator can mount them into `/mnt/data/ade/configs/<workspaceId>/<configVersionId>/`. The API does not read that host directory directly.
 
 Managed local blob settings are injected as:
 

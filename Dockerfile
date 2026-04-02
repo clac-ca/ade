@@ -53,13 +53,11 @@ RUN apk add --no-cache ca-certificates \
 
 ENV NODE_ENV=production
 ENV ADE_SANDBOX_ENVIRONMENT_ARCHIVE_PATH=/app/runtime/sandbox-environment.tar.gz
-ENV ADE_CONFIG_FIXTURE_ROOT=/app/runtime/configs
 
 COPY --from=web-builder --chown=ade:ade /build/apps/ade-web/dist ./public
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-api ./bin/ade-api
 COPY --from=api-builder --chown=ade:ade /build/bin/ade-migrate ./bin/ade-migrate
 COPY --chown=ade:ade .package/sandbox-environment.tar.gz ./runtime/sandbox-environment.tar.gz
-COPY --chown=ade:ade .package/configs ./runtime/configs
 
 USER ade:ade
 

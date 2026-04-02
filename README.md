@@ -12,9 +12,9 @@ pnpm dev
 
 ADE opens at `http://127.0.0.1:5173`.
 
-`pnpm dev` builds the local sandbox-environment tarball when it is stale, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host.
+`pnpm dev` builds the local sandbox-environment tarball when it is stale, stages local config wheels for the emulator when needed, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host.
 
-The API owns and ships one sandbox-environment tarball. That tarball is built from `apps/ade-api/sandbox-environment/` and carried by the API image.
+The API owns and ships one sandbox-environment tarball. That tarball is built from `apps/ade-api/sandbox-environment/` and carried by the API image. Local config wheels are staged separately only so the local emulator can mount them under `/mnt/data/ade/configs/`.
 
 ## What Starts Locally
 

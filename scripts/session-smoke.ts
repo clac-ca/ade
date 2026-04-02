@@ -9,6 +9,7 @@ import {
 } from "./lib/dev-config";
 import { createHostBlobEnv } from "./lib/blob-env";
 import { createHostSessionPoolEnv } from "./lib/session-pool-env";
+import { stageLocalConfigMounts } from "./lib/local-config-mounts";
 import { createConsoleLogger, formatError, runMain } from "./lib/runtime";
 import { runCommand, spawnCommand, waitForReady } from "./lib/shell";
 import { downLocalDependencies, upLocalDependencies } from "./local-deps";
@@ -298,6 +299,7 @@ function parseSseIds(body: string): number[] {
 
 async function main(logger = createConsoleLogger()): Promise<void> {
   buildSandboxEnvironmentAssets(logger);
+  stageLocalConfigMounts(logger);
   const env = apiEnv();
   let apiProcess: ReturnType<typeof spawnCommand> | undefined;
 

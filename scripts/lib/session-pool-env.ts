@@ -18,13 +18,10 @@ function ensureLocalSessionArtifacts(): void {
   const sandboxEnvironmentArchive = fileURLToPath(
     new URL("../../.package/sandbox-environment.tar.gz", import.meta.url),
   );
-  const configRoot = fileURLToPath(
-    new URL("../../.package/configs", import.meta.url),
-  );
 
-  if (!existsSync(sandboxEnvironmentArchive) || !existsSync(configRoot)) {
+  if (!existsSync(sandboxEnvironmentArchive)) {
     throw new Error(
-      "Missing local sandbox environment assets under .package/. Run `pnpm build:sandbox-environment` first.",
+      "Missing local sandbox environment archive under .package/. Run `pnpm build:sandbox-environment` first.",
     );
   }
 }

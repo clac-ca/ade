@@ -52,6 +52,8 @@ services:
     mem_limit: 4g
     ports:
       - "8014:9000"
+    volumes:
+      - ../../.package/configs:/emulator-configs:ro
 
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest

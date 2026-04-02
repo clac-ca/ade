@@ -301,15 +301,11 @@ mod tests {
                 0o755,
             ),
             (
-                "mnt/data/ade/python/current/bin/python3",
+                "app/ade/python/current/bin/python3",
                 b"python3".as_slice(),
                 0o755,
             ),
-            (
-                "mnt/data/ade/python/current/bin/ade",
-                b"ade".as_slice(),
-                0o755,
-            ),
+            ("app/ade/python/current/bin/ade", b"ade".as_slice(), 0o755),
             (
                 "app/ade/wheelhouse/base/ade_engine-0.1.0-py3-none-any.whl",
                 b"engine".as_slice(),
@@ -332,11 +328,7 @@ mod tests {
     fn fixture_sandbox_environment_manager() -> Arc<SandboxEnvironmentManager> {
         let tempdir = tempdir().unwrap();
         let environment_archive = tempdir.path().join("sandbox-environment.tar.gz");
-        let config_root = tempdir.path().join("configs");
-        fs::create_dir_all(config_root.join("workspace-a/config-v1")).unwrap();
-        let config = config_root.join("workspace-a/config-v1/ade_config-0.1.0-py3-none-any.whl");
         write_sandbox_environment_archive(&environment_archive);
-        fs::write(&config, b"config").unwrap();
         std::mem::forget(tempdir);
 
         Arc::new(
@@ -345,7 +337,6 @@ mod tests {
                 "http://127.0.0.1:9",
                 "test-session-secret",
                 environment_archive,
-                config_root,
             )
             .unwrap(),
         )

@@ -19,6 +19,7 @@ import {
   readLocalDependencyLogs,
   upLocalDependencies,
 } from "../local-deps";
+import { stageLocalConfigMounts } from "./local-config-mounts";
 
 const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
 const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
@@ -104,6 +105,9 @@ async function startLocalRuntime(options: {
     options.logger?.info(
       `Starting managed local ${managedDependencies.join(", ")}.`,
     );
+    if (usesManagedLocalSessionPool) {
+      stageLocalConfigMounts(options.logger);
+    }
     await upLocalDependencies();
   }
 

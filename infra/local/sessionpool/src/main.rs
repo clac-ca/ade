@@ -77,6 +77,7 @@ struct SessionPoolEmulator {
     app_mount_path: PathBuf,
     baseline: BaselineFixture,
     bearer_token: String,
+    config_mount_source_path: PathBuf,
     cooldown_seconds: i64,
     execution_lock: AsyncMutex<()>,
     max_concurrent_sessions: usize,
@@ -338,6 +339,7 @@ impl SessionPoolEmulator {
             app_mount_path: PathBuf::from("/app"),
             baseline,
             bearer_token,
+            config_mount_source_path: PathBuf::from("/emulator-configs"),
             cooldown_seconds: DEFAULT_COOLDOWN_SECONDS,
             execution_lock: AsyncMutex::new(()),
             max_concurrent_sessions: DEFAULT_MAX_CONCURRENT_SESSIONS,
@@ -894,6 +896,29 @@ impl SessionPoolEmulator {
                     app_root.display()
                 ))
             })?;
+            let config_mount_path = mnt_data_root.join("ade/configs");
+            let config_mount_parent = config_mount_path.parent().ok_or_else(|| {
+                ApiError::internal(format!(
+                    "Failed to derive config mount parent from '{}'.",
+                    config_mount_path.display()
+                ))
+            })?;
+            fs::create_dir_all(config_mount_parent).map_err(|error| {
+                ApiError::internal(format!(
+                    "Failed to create config mount parent '{}': {error}",
+                    config_mount_parent.display()
+                ))
+            })?;
+            if self.config_mount_source_path.exists() {
+                copy_directory_contents(&self.config_mount_source_path, &config_mount_path)?;
+            } else {
+                fs::create_dir_all(&config_mount_path).map_err(|error| {
+                    ApiError::internal(format!(
+                        "Failed to create config mount directory '{}': {error}",
+                        config_mount_path.display()
+                    ))
+                })?;
+            }
             sessions.insert(
                 identifier.to_string(),
                 SessionState {
@@ -1442,6 +1467,53 @@ fn walk_directory(
             walk_directory(session, directory, &path, files)?;
         }
     }
+    Ok(())
+}
+
+fn copy_directory_contents(source: &Path, destination: &Path) -> Result<(), ApiError> {
+    fs::create_dir_all(destination).map_err(|error| {
+        ApiError::internal(format!(
+            "Failed to create directory '{}': {error}",
+            destination.display()
+        ))
+    })?;
+
+    for entry in fs::read_dir(source).map_err(|error| {
+        ApiError::internal(format!(
+            "Failed to read directory '{}': {error}",
+            source.display()
+        ))
+    })? {
+        let entry = entry.map_err(|error| {
+            ApiError::internal(format!(
+                "Failed to read a directory entry under '{}': {error}",
+                source.display()
+            ))
+        })?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if entry
+            .file_type()
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "Failed to inspect '{}': {error}",
+                    source_path.display()
+                ))
+            })?
+            .is_dir()
+        {
+            copy_directory_contents(&source_path, &destination_path)?;
+        } else {
+            fs::copy(&source_path, &destination_path).map_err(|error| {
+                ApiError::internal(format!(
+                    "Failed to copy '{}' to '{}': {error}",
+                    source_path.display(),
+                    destination_path.display()
+                ))
+            })?;
+        }
+    }
+
     Ok(())
 }
 

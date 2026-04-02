@@ -20,7 +20,9 @@ const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const tarCommand = process.platform === "win32" ? "tar.exe" : "tar";
 const rootDir = fileURLToPath(new URL("../../../", import.meta.url));
-const sandboxEnvironmentSourceDir = fileURLToPath(new URL("./", import.meta.url));
+const sandboxEnvironmentSourceDir = fileURLToPath(
+  new URL("./", import.meta.url),
+);
 const sandboxEnvironmentSourceRootfs = join(
   sandboxEnvironmentSourceDir,
   "rootfs",
@@ -34,20 +36,14 @@ const sandboxEnvironmentOutputStamp = fileURLToPath(
 const legacySandboxEnvironmentOutputDir = fileURLToPath(
   new URL("../../../.package/sandbox-environment", import.meta.url),
 );
-const configFixtureRoot = fileURLToPath(
-  new URL("../../../.package/configs", import.meta.url),
-);
 const pythonVersionPath = join(
   sandboxEnvironmentSourceDir,
   "python-version.txt",
 );
-const sandboxEnvironmentBuildScriptPath = fileURLToPath(new URL("./build.ts", import.meta.url));
+const sandboxEnvironmentBuildScriptPath = fileURLToPath(
+  new URL("./build.ts", import.meta.url),
+);
 const pythonToolchainImage = "python:3.12.11-slim-bullseye";
-const sampleScopes = [
-  ["workspace-a", "config-v1"],
-  ["workspace-b", "config-v2"],
-] as const;
-const configFixtureStamp = join(configFixtureRoot, ".stamp");
 
 function readPinnedPythonVersion(): string {
   const version = readFileSync(pythonVersionPath, "utf8").trim();
@@ -157,10 +153,7 @@ function buildPythonToolchain(
   );
 }
 
-function stagePythonToolchain(
-  outputDirectory: string,
-  version: string,
-): void {
+function stagePythonToolchain(outputDirectory: string, version: string): void {
   const tempRoot = mkdtempSync(join(tmpdir(), "ade-python-toolchain-"));
   const archiveName = pythonToolchainName(version);
   const archivePath = join(tempRoot, archiveName);
@@ -247,10 +240,6 @@ function sandboxEnvironmentInputs(): number {
   );
 }
 
-function localConfigFixtureInputs(): number {
-  return newestMtime(join(rootDir, "packages/ade-config"));
-}
-
 function needsSandboxEnvironmentBuild(): boolean {
   if (
     !existsSync(sandboxEnvironmentOutputArchive) ||
@@ -264,53 +253,13 @@ function needsSandboxEnvironmentBuild(): boolean {
   );
 }
 
-function needsLocalConfigFixtureBuild(): boolean {
-  if (!existsSync(configFixtureStamp)) {
-    return true;
-  }
-
-  return localConfigFixtureInputs() > statSync(configFixtureStamp).mtimeMs;
-}
-
-function stageLocalConfigFixtures(configWheelPath: string): void {
-  if (!needsLocalConfigFixtureBuild()) {
-    return;
-  }
-
-  rmSync(configFixtureRoot, {
-    force: true,
-    recursive: true,
-  });
-
-  for (const [workspaceId, configVersionId] of sampleScopes) {
-    const scopeDirectory = join(configFixtureRoot, workspaceId, configVersionId);
-    mkdirSync(scopeDirectory, { recursive: true });
-    cpSync(configWheelPath, join(scopeDirectory, basename(configWheelPath)));
-  }
-
-  writeFileSync(
-    configFixtureStamp,
-    JSON.stringify({
-      builtAt: new Date().toISOString(),
-      configWheel: basename(configWheelPath),
-    }),
-  );
-}
-
 function buildSandboxEnvironmentAssets(logger = createConsoleLogger()): void {
   ensureWheel(join(rootDir, "packages/ade-engine"));
-  ensureWheel(join(rootDir, "packages/ade-config"));
 
   const engineWheelPath = newestWheel(
     join(rootDir, "packages/ade-engine/dist"),
     "ade_engine-",
   );
-  const configWheelPath = newestWheel(
-    join(rootDir, "packages/ade-config/dist"),
-    "ade_config-",
-  );
-
-  stageLocalConfigFixtures(configWheelPath);
 
   if (!needsSandboxEnvironmentBuild()) {
     logger.info("Sandbox environment archive is current");
@@ -320,7 +269,7 @@ function buildSandboxEnvironmentAssets(logger = createConsoleLogger()): void {
   const pythonVersion = readPinnedPythonVersion();
   const tempRoot = mkdtempSync(join(tmpdir(), "ade-sandbox-environment-"));
   const outputBinDir = join(tempRoot, "app/ade/bin");
-  const outputPythonDir = join(tempRoot, "mnt/data/ade/python/current");
+  const outputPythonDir = join(tempRoot, "app/ade/python/current");
   const outputWheelhouseDir = join(tempRoot, "app/ade/wheelhouse/base");
 
   rmSync(legacySandboxEnvironmentOutputDir, {
@@ -360,7 +309,7 @@ function buildSandboxEnvironmentAssets(logger = createConsoleLogger()): void {
     stagePythonToolchain(outputPythonDir, pythonVersion);
     execFileSync(
       tarCommand,
-      ["-C", tempRoot, "-czf", sandboxEnvironmentOutputArchive, "app", "mnt"],
+      ["-C", tempRoot, "-czf", sandboxEnvironmentOutputArchive, "app"],
       {
         cwd: rootDir,
         stdio: "inherit",

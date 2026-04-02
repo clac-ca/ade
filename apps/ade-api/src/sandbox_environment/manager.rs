@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::WebSocket;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::Url;
 use serde_json::Value;
@@ -25,7 +25,11 @@ use crate::{
 };
 
 use super::{
-    assets::{ConfigPackage, SandboxAssets, SandboxId},
+    assets::{SandboxAssets, SandboxId},
+    connector::{
+        OutboundRpc, SandboxEnvironmentEvent, run_sandbox_environment_task,
+        wait_for_connector_ready,
+    },
     provider::SandboxProvider,
     rendezvous::{
         PendingConnectorManager, create_rendezvous_token, generate_channel_id,
@@ -33,12 +37,9 @@ use super::{
     },
 };
 use ::reverse_connect::protocol::{
-    CHANNEL_CLOSE_METHOD, CHANNEL_DATA_METHOD, CHANNEL_EXIT_METHOD, CHANNEL_OPEN_METHOD,
-    CHANNEL_RESIZE_METHOD, CHANNEL_SIGNAL_METHOD, CHANNEL_STDIN_METHOD, CONNECTOR_HELLO_METHOD,
-    ChannelCloseParams, ChannelDataParams, ChannelExitParams, ChannelId, ChannelOpenParams,
-    ChannelResizeParams, ChannelSignalParams, ChannelStdinParams, ChannelStream,
-    ConnectorHelloParams, EmptyResult, RequestMessage, ResponseMessage, RpcMessage,
-    SESSION_ERROR_METHOD, SessionErrorParams, SignalName,
+    CHANNEL_CLOSE_METHOD, CHANNEL_OPEN_METHOD, CHANNEL_RESIZE_METHOD, CHANNEL_SIGNAL_METHOD,
+    CHANNEL_STDIN_METHOD, ChannelCloseParams, ChannelId, ChannelOpenParams, ChannelResizeParams,
+    ChannelSignalParams, ChannelStdinParams, ChannelStream, SignalName,
 };
 
 const PUBLIC_API_URL_ENV_NAME: &str = "ADE_PUBLIC_API_URL";
@@ -59,7 +60,6 @@ pub struct SandboxEnvironment {
 
 #[derive(Default)]
 struct SandboxRuntimeState {
-    installed_config_revision: Option<String>,
     prepared_environment_revision: Option<String>,
 }
 
@@ -197,24 +197,6 @@ impl SandboxEnvironment {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum SandboxEnvironmentEvent {
-    Data {
-        channel_id: ChannelId,
-        data: Vec<u8>,
-        stream: ChannelStream,
-    },
-    Error {
-        channel_id: Option<ChannelId>,
-        message: String,
-    },
-    Exit {
-        channel_id: ChannelId,
-        code: Option<i32>,
-    },
-    Ready(ConnectorHelloParams),
-}
-
 #[derive(Clone)]
 pub struct SandboxEnvironmentManager {
     app_url: Url,
@@ -228,18 +210,6 @@ pub struct SandboxEnvironmentManager {
 enum SessionEntry {
     Ready(SandboxEnvironment),
     Starting(Vec<oneshot::Sender<Result<SandboxEnvironment, String>>>),
-}
-
-enum OutboundRpc {
-    Notification {
-        method: &'static str,
-        params: Value,
-    },
-    Request {
-        method: &'static str,
-        params: Value,
-        response: oneshot::Sender<Result<Value, String>>,
-    },
 }
 
 impl SandboxEnvironmentManager {
@@ -291,7 +261,6 @@ impl SandboxEnvironmentManager {
         endpoint: &str,
         sandbox_secret: &str,
         environment_archive: PathBuf,
-        config_root: PathBuf,
     ) -> Result<Self, AppError> {
         let app_url = Url::parse(app_url).map_err(|error| {
             AppError::config_with_source(
@@ -313,7 +282,7 @@ impl SandboxEnvironmentManager {
         .collect();
         Self::new(
             app_url,
-            SandboxAssets::from_paths(environment_archive, config_root, &sandbox_env)?,
+            SandboxAssets::from_paths(environment_archive, &sandbox_env)?,
             SandboxProvider::new(crate::session_pool::SessionPoolClient::from_env(&pool_env)?),
         )
     }
@@ -354,8 +323,7 @@ impl SandboxEnvironmentManager {
         scope: &Scope,
         handle: &SandboxEnvironment,
     ) -> Result<(), AppError> {
-        let config = self.assets.config_for_scope(scope)?;
-        self.install_config(scope, handle, &config).await
+        self.install_config(scope, handle).await
     }
 
     async fn connect_sandbox_environment(
@@ -450,22 +418,18 @@ impl SandboxEnvironmentManager {
                 handle,
                 "setup",
                 format!("sh {}", shell_single_quote(self.assets.setup_script_path())),
-                "Timed out waiting for the sandbox environment to finish setup.",
-                "Sandbox environment event stream overflowed during setup.",
-                "Sandbox environment disconnected during setup.",
             )
             .await?;
 
         if output.code != Some(0) {
             return Err(AppError::status(
                 axum::http::StatusCode::BAD_GATEWAY,
-                setup_failure_message(output.code, &output.stdout, &output.stderr),
+                captured_exec_failure_message("setup", output.code, &output.stdout, &output.stderr),
             ));
         }
 
         runtime_state.prepared_environment_revision =
             Some(self.assets.environment_revision().to_string());
-        runtime_state.installed_config_revision = None;
         Ok(())
     }
 
@@ -473,43 +437,33 @@ impl SandboxEnvironmentManager {
         &self,
         scope: &Scope,
         handle: &SandboxEnvironment,
-        config: &ConfigPackage,
     ) -> Result<(), AppError> {
-        let mut runtime_state = handle.runtime_state.lock().await;
-        if runtime_state
-            .installed_config_revision
-            .as_ref()
-            .is_some_and(|current| current == &config.install_revision)
-        {
-            return Ok(());
-        }
-
-        self.upload_config_package(scope, config).await?;
+        let config_directory = self.assets.config_mount_directory(scope);
 
         let output = self
             .run_exec_command(
                 handle,
                 "config",
-                format!(
-                    "{} -m pip install --upgrade --no-index --find-links {} {}",
-                    shell_single_quote(handle.python_executable_path()),
-                    shell_single_quote(self.assets.base_wheelhouse_path()),
-                    shell_single_quote(&config.mounted_path),
+                render_config_install_command(
+                    handle.python_executable_path(),
+                    self.assets.base_wheelhouse_path(),
+                    &config_directory,
                 ),
-                "Timed out waiting for config installation to finish.",
-                "Sandbox environment event stream overflowed during config installation.",
-                "Sandbox environment disconnected during config installation.",
             )
             .await?;
 
         if output.code != Some(0) {
             return Err(AppError::status(
                 axum::http::StatusCode::BAD_GATEWAY,
-                config_install_failure_message(output.code, &output.stdout, &output.stderr),
+                captured_exec_failure_message(
+                    "config installation",
+                    output.code,
+                    &output.stdout,
+                    &output.stderr,
+                ),
             ));
         }
 
-        runtime_state.installed_config_revision = Some(config.install_revision.clone());
         Ok(())
     }
 
@@ -518,9 +472,6 @@ impl SandboxEnvironmentManager {
         handle: &SandboxEnvironment,
         channel_prefix: &str,
         command: String,
-        timeout_message: &'static str,
-        overflow_message: &'static str,
-        disconnected_message: &'static str,
     ) -> Result<CapturedExec, AppError> {
         let channel_id = ChannelId::new(format!("{channel_prefix}-{}", Uuid::new_v4().simple()));
         let mut events = handle.subscribe();
@@ -565,13 +516,17 @@ impl SandboxEnvironmentManager {
                         Err(broadcast::error::RecvError::Lagged(_)) => {
                             return Err(AppError::status(
                                 axum::http::StatusCode::BAD_GATEWAY,
-                                overflow_message,
+                                format!(
+                                    "Sandbox environment event stream overflowed during {channel_prefix}."
+                                ),
                             ));
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             return Err(AppError::status(
                                 axum::http::StatusCode::BAD_GATEWAY,
-                                disconnected_message,
+                                format!(
+                                    "Sandbox environment disconnected during {channel_prefix}."
+                                ),
                             ));
                         }
                     }
@@ -580,7 +535,7 @@ impl SandboxEnvironmentManager {
                     let _ = handle.close_channel(channel_id.clone()).await;
                     return Err(AppError::status(
                         axum::http::StatusCode::BAD_GATEWAY,
-                        timeout_message,
+                        format!("Timed out waiting for {channel_prefix} to finish."),
                     ));
                 }
             }
@@ -722,32 +677,6 @@ impl SandboxEnvironmentManager {
         Ok(())
     }
 
-    async fn upload_config_package(
-        &self,
-        scope: &Scope,
-        config: &ConfigPackage,
-    ) -> Result<(), AppError> {
-        let content = fs::read(&config.local_path).await.map_err(|error| {
-            AppError::io_with_source(
-                format!(
-                    "Failed to read the config package '{}'.",
-                    config.local_path.display()
-                ),
-                error,
-            )
-        })?;
-        self.provider
-            .upload_file(
-                self.assets.sandbox_id(scope).as_str(),
-                Some(&config.mounted_directory_path),
-                &config.filename,
-                Some("application/octet-stream"),
-                content,
-            )
-            .await?;
-        Ok(())
-    }
-
     pub(crate) async fn upload_sandbox_file(
         &self,
         scope: &Scope,
@@ -804,6 +733,19 @@ fn render_launch_command(
     )
 }
 
+fn render_config_install_command(
+    python_executable_path: &str,
+    base_wheelhouse_path: &str,
+    config_directory: &str,
+) -> String {
+    let python_executable_path = shell_single_quote(python_executable_path);
+    let base_wheelhouse_path = shell_single_quote(base_wheelhouse_path);
+    let config_glob = format!("{}/*.whl", shell_single_quote(config_directory));
+    format!(
+        "set -eu\nset -- {config_glob}\nif [ ! -f \"$1\" ]; then\n  echo \"No config wheel was mounted for this scope.\" >&2\n  exit 1\nfi\nexec {python_executable_path} -m pip install --upgrade --no-index --find-links {base_wheelhouse_path} \"$@\""
+    )
+}
+
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r#"'"'"'"#))
 }
@@ -815,7 +757,12 @@ fn split_upload_target(path: &str) -> (Option<&str>, &str) {
     }
 }
 
-fn setup_failure_message(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
+fn captured_exec_failure_message(
+    operation: &str,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> String {
     let stderr = String::from_utf8_lossy(stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(stdout).trim().to_string();
     if !stderr.is_empty() {
@@ -825,22 +772,7 @@ fn setup_failure_message(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Str
         return stdout;
     }
     format!(
-        "Sandbox environment setup command exited with code {}.",
-        code.unwrap_or_default()
-    )
-}
-
-fn config_install_failure_message(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
-    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(stdout).trim().to_string();
-    if !stderr.is_empty() {
-        return stderr;
-    }
-    if !stdout.is_empty() {
-        return stdout;
-    }
-    format!(
-        "Sandbox config installation exited with code {}.",
+        "Sandbox environment {operation} exited with code {}.",
         code.unwrap_or_default()
     )
 }
@@ -885,293 +817,9 @@ fn startup_execution_error(
     }
 }
 
-async fn wait_for_connector_ready(
-    ready_rx: &mut broadcast::Receiver<SandboxEnvironmentEvent>,
-) -> Result<(), AppError> {
-    let timeout = tokio::time::sleep(CONNECTOR_READY_TIMEOUT);
-    tokio::pin!(timeout);
-
-    loop {
-        tokio::select! {
-            event = ready_rx.recv() => {
-                match event {
-                    Ok(SandboxEnvironmentEvent::Ready(_)) => return Ok(()),
-                    Ok(SandboxEnvironmentEvent::Error { message, .. }) => {
-                        return Err(AppError::status(axum::http::StatusCode::BAD_GATEWAY, message));
-                    }
-                    Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        return Err(AppError::status(
-                            axum::http::StatusCode::BAD_GATEWAY,
-                            "Sandbox environment event stream overflowed before startup completed.",
-                        ));
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        return Err(AppError::status(
-                            axum::http::StatusCode::BAD_GATEWAY,
-                            "Sandbox environment connector closed before becoming ready.",
-                        ));
-                    }
-                }
-            }
-            _ = &mut timeout => {
-                return Err(AppError::status(
-                    axum::http::StatusCode::BAD_GATEWAY,
-                    "Timed out waiting for the sandbox environment connector to become ready.",
-                ));
-            }
-        }
-    }
-}
-
-async fn run_sandbox_environment_task(
-    mut socket: WebSocket,
-    mut commands: mpsc::Receiver<OutboundRpc>,
-    events: broadcast::Sender<SandboxEnvironmentEvent>,
-    mut execution_task: JoinHandle<Result<SessionExecution, AppError>>,
-) {
-    let mut request_id = 10_u64;
-    let mut pending = HashMap::<u64, oneshot::Sender<Result<Value, String>>>::new();
-
-    loop {
-        tokio::select! {
-            maybe_command = commands.recv() => {
-                let Some(command) = maybe_command else {
-                    break;
-                };
-                let message = match command {
-                    OutboundRpc::Notification { method, params } => {
-                        RequestMessage::notification(method, params)
-                    }
-                    OutboundRpc::Request { method, params, response } => {
-                        let id = request_id;
-                        request_id += 1;
-                        pending.insert(id, response);
-                        RequestMessage::request(id, method, params)
-                    }
-                };
-                let payload = match message.and_then(|message| serde_json::to_string(&RpcMessage::Request(message))) {
-                    Ok(payload) => payload,
-                    Err(error) => {
-                        let _ = events.send(SandboxEnvironmentEvent::Error {
-                            channel_id: None,
-                            message: format!("Failed to encode a reverse-connect message: {error}"),
-                        });
-                        break;
-                    }
-                };
-                if socket.send(Message::Text(payload.into())).await.is_err() {
-                    let _ = events.send(SandboxEnvironmentEvent::Error {
-                        channel_id: None,
-                        message: "Sandbox environment connector disconnected.".to_string(),
-                    });
-                    break;
-                }
-            }
-            message = socket.recv() => {
-                match message {
-                    Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str::<RpcMessage>(text.as_str()) {
-                            Ok(RpcMessage::Request(request)) => {
-                                if handle_connector_request(&mut socket, &events, request).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Ok(RpcMessage::Response(response)) => {
-                                if let Some(waiter) = pending.remove(&response.id) {
-                                    let _ = waiter.send(match response.error {
-                                        Some(error) => Err(error.message),
-                                        None => Ok(response.result.unwrap_or(Value::Null)),
-                                    });
-                                }
-                            }
-                            Err(error) => {
-                                let _ = events.send(SandboxEnvironmentEvent::Error {
-                                    channel_id: None,
-                                    message: format!("Invalid reverse-connect message: {error}"),
-                                });
-                                break;
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None => {
-                        let _ = events.send(SandboxEnvironmentEvent::Error {
-                            channel_id: None,
-                            message: "Sandbox environment connector disconnected.".to_string(),
-                        });
-                        break;
-                    }
-                    Some(Ok(Message::Binary(_))) => {
-                        let _ = events.send(SandboxEnvironmentEvent::Error {
-                            channel_id: None,
-                            message: "Binary reverse-connect messages are not supported.".to_string(),
-                        });
-                        break;
-                    }
-                    Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
-                    Some(Err(error)) => {
-                        let _ = events.send(SandboxEnvironmentEvent::Error {
-                            channel_id: None,
-                            message: format!(
-                                "Sandbox environment websocket failed: {error}"
-                            ),
-                        });
-                        break;
-                    }
-                }
-            }
-            result = &mut execution_task => {
-                let message = match result {
-                    Ok(Ok(execution)) if matches!(execution.status.as_str(), "Success" | "Succeeded" | "0") => None,
-                    Ok(Ok(execution)) => {
-                        Some(if execution.stderr.trim().is_empty() {
-                            let stdout = execution.stdout.trim();
-                            if stdout.is_empty() {
-                                format!(
-                                    "Sandbox environment connector exited with status {}.",
-                                    execution.status
-                                )
-                            } else {
-                                stdout.to_string()
-                            }
-                        } else {
-                            execution.stderr.trim().to_string()
-                        })
-                    }
-                    Ok(Err(error)) => Some(error.to_string()),
-                    Err(error) => Some(format!(
-                        "Sandbox environment execution task failed: {error}"
-                    )),
-                };
-                if let Some(message) = message {
-                    let _ = events.send(SandboxEnvironmentEvent::Error {
-                        channel_id: None,
-                        message,
-                    });
-                }
-                break;
-            }
-        }
-    }
-
-    for (_, waiter) in pending {
-        let _ = waiter.send(Err(
-            "Sandbox environment connector disconnected.".to_string()
-        ));
-    }
-    let _ = socket.send(Message::Close(None)).await;
-    if !execution_task.is_finished() {
-        execution_task.abort();
-        let _ = execution_task.await;
-    }
-}
-
-async fn handle_connector_request(
-    socket: &mut WebSocket,
-    events: &broadcast::Sender<SandboxEnvironmentEvent>,
-    request: RequestMessage,
-) -> Result<(), ()> {
-    match request.method.as_str() {
-        CONNECTOR_HELLO_METHOD => {
-            let Some(id) = request.id else {
-                let _ = events.send(SandboxEnvironmentEvent::Error {
-                    channel_id: None,
-                    message: "connector.hello must be a request.".to_string(),
-                });
-                return Err(());
-            };
-            let response = match request.parse_params::<ConnectorHelloParams>() {
-                Ok(params) => {
-                    let _ = events.send(SandboxEnvironmentEvent::Ready(params));
-                    ResponseMessage::success(id, EmptyResult {}).expect("serializable hello ack")
-                }
-                Err(error) => ResponseMessage::invalid_params(id, error.to_string()),
-            };
-            let payload = serde_json::to_string(&RpcMessage::Response(response))
-                .expect("serializable response");
-            socket
-                .send(Message::Text(payload.into()))
-                .await
-                .map_err(|_| ())?;
-        }
-        CHANNEL_DATA_METHOD => match request.parse_params::<ChannelDataParams>() {
-            Ok(params) => {
-                let data = match STANDARD.decode(&params.data) {
-                    Ok(data) => data,
-                    Err(error) => {
-                        let _ = events.send(SandboxEnvironmentEvent::Error {
-                            channel_id: Some(params.channel_id),
-                            message: format!("Invalid base64 channel data: {error}"),
-                        });
-                        return Ok(());
-                    }
-                };
-                let _ = events.send(SandboxEnvironmentEvent::Data {
-                    channel_id: params.channel_id,
-                    data,
-                    stream: params.stream,
-                });
-            }
-            Err(error) => {
-                let _ = events.send(SandboxEnvironmentEvent::Error {
-                    channel_id: None,
-                    message: format!("Invalid channel.data payload: {error}"),
-                });
-            }
-        },
-        CHANNEL_EXIT_METHOD => match request.parse_params::<ChannelExitParams>() {
-            Ok(params) => {
-                let _ = events.send(SandboxEnvironmentEvent::Exit {
-                    channel_id: params.channel_id,
-                    code: params.code,
-                });
-            }
-            Err(error) => {
-                let _ = events.send(SandboxEnvironmentEvent::Error {
-                    channel_id: None,
-                    message: format!("Invalid channel.exit payload: {error}"),
-                });
-            }
-        },
-        SESSION_ERROR_METHOD => match request.parse_params::<SessionErrorParams>() {
-            Ok(params) => {
-                let _ = events.send(SandboxEnvironmentEvent::Error {
-                    channel_id: params.channel_id,
-                    message: params.message,
-                });
-            }
-            Err(error) => {
-                let _ = events.send(SandboxEnvironmentEvent::Error {
-                    channel_id: None,
-                    message: format!("Invalid session.error payload: {error}"),
-                });
-            }
-        },
-        method => {
-            if let Some(id) = request.id {
-                let response = ResponseMessage::method_not_found(id, method);
-                let payload = serde_json::to_string(&RpcMessage::Response(response))
-                    .expect("serializable response");
-                socket
-                    .send(Message::Text(payload.into()))
-                    .await
-                    .map_err(|_| ())?;
-            } else {
-                let _ = events.send(SandboxEnvironmentEvent::Error {
-                    channel_id: None,
-                    message: format!("Unsupported connector message '{method}'."),
-                });
-                return Err(());
-            }
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{render_launch_command, shell_single_quote};
+    use super::{render_config_install_command, render_launch_command, shell_single_quote};
 
     #[test]
     fn shell_single_quote_escapes_single_quotes() {
@@ -1198,6 +846,29 @@ mod tests {
                 "--url 'wss://example.test/api/internal/reverse-connect/channel?id=1&x=2' ",
                 "--bearer-token '1712016000000.abc123def456' ",
                 "--idle-timeout-seconds 30"
+            )
+        );
+    }
+
+    #[test]
+    fn render_config_install_command_uses_mounted_scope_directory() {
+        let command = render_config_install_command(
+            "/app/ade/python/current/bin/python3",
+            "/app/ade/wheelhouse/base",
+            "/mnt/data/ade/configs/workspace-a/config-v1",
+        );
+
+        assert_eq!(
+            command,
+            concat!(
+                "set -eu\n",
+                "set -- '/mnt/data/ade/configs/workspace-a/config-v1'/*.whl\n",
+                "if [ ! -f \"$1\" ]; then\n",
+                "  echo \"No config wheel was mounted for this scope.\" >&2\n",
+                "  exit 1\n",
+                "fi\n",
+                "exec '/app/ade/python/current/bin/python3' -m pip install --upgrade --no-index ",
+                "--find-links '/app/ade/wheelhouse/base' \"$@\""
             )
         );
     }

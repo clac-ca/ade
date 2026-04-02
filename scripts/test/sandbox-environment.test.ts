@@ -20,7 +20,10 @@ test("sandbox environment stays app-owned and does not become a package", () => 
 
   assert.equal(existsSync(join(sandboxEnvironmentDir, "package.json")), false);
   assert.equal(existsSync(join(sandboxEnvironmentDir, "Cargo.toml")), false);
-  assert.equal(existsSync(join(repoRoot, "packages/sandbox-environment")), false);
+  assert.equal(
+    existsSync(join(repoRoot, "packages/sandbox-environment")),
+    false,
+  );
 });
 
 test("root sandbox-environment command stays a thin wrapper", () => {
@@ -43,4 +46,15 @@ test("root sandbox-environment command stays a thin wrapper", () => {
     /\.\.\/apps\/ade-api\/sandbox-environment\/build/,
   );
   assert.doesNotMatch(wrapperSource, /dockerCommand|pythonToolchainImage/);
+});
+
+test("sandbox environment build stays focused on the shared runtime tarball", () => {
+  const buildSource = readFileSync(
+    join(sandboxEnvironmentDir, "build.ts"),
+    "utf8",
+  );
+
+  assert.doesNotMatch(buildSource, /ADE_CONFIG_FIXTURE_ROOT|configFixtureRoot/);
+  assert.doesNotMatch(buildSource, /packages\/ade-config/);
+  assert.match(buildSource, /sandbox-environment\.tar\.gz/);
 });

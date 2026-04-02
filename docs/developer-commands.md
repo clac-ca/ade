@@ -20,7 +20,7 @@ pnpm dev
 
 ADE opens at `http://127.0.0.1:5173`.
 
-`pnpm dev` rebuilds the shared sandbox-environment tarball only when it is stale, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host. Use `pnpm dev --port 8100` to change only the web port, and use `pnpm dev --no-open` to skip opening the browser.
+`pnpm dev` rebuilds the shared sandbox-environment tarball only when it is stale, stages local config wheels for the emulator when needed, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host. Use `pnpm dev --port 8100` to change only the web port, and use `pnpm dev --no-open` to skip opening the browser.
 
 ## Daily Commands
 
@@ -59,6 +59,8 @@ pnpm deps:up
 pnpm deps:down
 ```
 
+`pnpm deps:up` starts the local infrastructure stack without forcing a session-pool image rebuild when the existing image is already usable.
+
 `pnpm clean` removes local build output, Python virtualenvs and locks, ADE local containers, Compose state, and the `ade-platform:local` image.
 
 ## Production-Like Runtime Commands
@@ -84,7 +86,8 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 - `pnpm dev` is host-based and does not read `.env`.
 - `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local Azurite Blob Storage, local SQL, and the local session-pool emulator automatically.
 - `pnpm test:session:local` is the black-box smoke command for the local session-pool path.
-- ADE builds one shared sandbox-environment tarball at `.package/sandbox-environment.tar.gz` and one local config root under `.package/configs`.
+- `pnpm build:sandbox-environment` builds only the shared sandbox-environment tarball at `.package/sandbox-environment.tar.gz`.
+- Local host and managed-local runtime commands also stage emulator config mounts under `.package/configs`.
 - ADE uses Azure session pools only when the Azure session-pool settings are explicitly configured; otherwise it falls back to the local emulator.
 - See [runtime-config.md](runtime-config.md) for the full connection string and hosted runtime rules.
 

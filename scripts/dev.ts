@@ -11,6 +11,7 @@ import {
   localApiPort,
   localWebHost,
 } from "./lib/dev-config";
+import { stageLocalConfigMounts } from "./lib/local-config-mounts";
 import { createHostSessionPoolEnv } from "./lib/session-pool-env";
 import { createConsoleLogger, formatError, runMain } from "./lib/runtime";
 import {
@@ -69,6 +70,7 @@ async function terminateChildren(
 async function main(logger = createConsoleLogger()): Promise<void> {
   const { noOpen, port } = parseDevArgs(process.argv.slice(2));
   buildSandboxEnvironmentAssets(logger);
+  stageLocalConfigMounts(logger);
   const sessionEnv = createHostSessionPoolEnv();
   const { values: blobEnv } = createHostBlobEnv();
   const apiEnv = {
