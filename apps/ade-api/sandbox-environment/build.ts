@@ -43,6 +43,10 @@ const pythonVersionPath = join(
 const sandboxEnvironmentBuildScriptPath = fileURLToPath(
   new URL("./build.ts", import.meta.url),
 );
+const reverseConnectDockerfilePath = join(
+  rootDir,
+  "packages/reverse-connect/Dockerfile.build",
+);
 const pythonToolchainImage = "python:3.12.11-slim-bullseye";
 
 function readPinnedPythonVersion(): string {
@@ -201,31 +205,42 @@ function buildBaseWheelhouse(
 }
 
 function buildReverseConnectBinary(outputDirectory: string): void {
-  execFileSync(
-    dockerCommand,
-    [
-      "run",
-      "--rm",
-      "--platform",
-      "linux/amd64",
-      "--volume",
-      `${rootDir}:/workspace`,
-      "--volume",
-      `${outputDirectory}:/out`,
-      "--workdir",
-      "/workspace",
-      "--env",
-      "CARGO_TARGET_DIR=/tmp/target",
-      "rust:1.94.1-alpine",
-      "sh",
-      "-lc",
-      "apk add --no-cache build-base musl-dev pkgconfig perl >/dev/null && /usr/local/cargo/bin/cargo build --locked --package reverse-connect --bin reverse-connect --release && cp /tmp/target/release/reverse-connect /out/reverse-connect",
-    ],
-    {
-      cwd: rootDir,
-      stdio: "inherit",
-    },
-  );
+  const exportDir = mkdtempSync(join(tmpdir(), "ade-reverse-connect-"));
+
+  try {
+    // Build the Linux reverse-connect binary that the API copies into a
+    // vanilla shell session; this is a build helper, not a runtime image.
+    execFileSync(
+      dockerCommand,
+      [
+        "buildx",
+        "build",
+        "--platform",
+        "linux/amd64",
+        "--file",
+        reverseConnectDockerfilePath,
+        "--target",
+        "artifact",
+        "--output",
+        `type=local,dest=${exportDir}`,
+        rootDir,
+      ],
+      {
+        cwd: rootDir,
+        stdio: "inherit",
+      },
+    );
+
+    cpSync(
+      join(exportDir, "reverse-connect"),
+      join(outputDirectory, "reverse-connect"),
+    );
+  } finally {
+    rmSync(exportDir, {
+      force: true,
+      recursive: true,
+    });
+  }
 }
 
 function sandboxEnvironmentInputs(): number {
@@ -340,7 +355,7 @@ if (
   process.argv[1] &&
   pathToFileURL(process.argv[1]).href === import.meta.url
 ) {
-  void runMain(async () => {
+  void runMain(() => {
     buildSandboxEnvironmentAssets();
   });
 }

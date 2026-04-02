@@ -81,6 +81,9 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           node-version-file: .node-version
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+
       - name: Set up Rust
         run: |
           rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt
@@ -115,25 +118,16 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/registry/index
             ~/.cargo/git/db
-            apps/ade-api/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'apps/ade-api/Cargo.toml', 'apps/ade-api/Cargo.lock') }}
+            target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}
           restore-keys: |
             rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run TypeScript typecheck
-        run: pnpm typecheck
-
-      - name: Run lint
-        run: |
-          pnpm --filter @ade/api lint
-          pnpm exec eslint .
-          az bicep lint --file infra/main.bicep
-
-      - name: Run unit tests
-        run: pnpm test:unit
+      - name: Run commit-stage tests
+        run: pnpm test
 
       - name: Save Rust cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rust_cache.outputs.cache-hit != 'true'
@@ -143,7 +137,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/registry/index
             ~/.cargo/git/db
-            apps/ade-api/target
+            target
           key: ${{ steps.rust_cache.outputs.cache-primary-key }}
 
       - name: Log in to GitHub Container Registry
@@ -154,16 +148,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Validate Bicep compilation
-        run: |
-          az bicep build --file infra/main.bicep --stdout >/dev/null
-          az bicep build-params --file infra/environments/main.prod.bicepparam --stdout >/dev/null
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Build sandbox environment assets
         run: pnpm build:sandbox-environment
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Restore BuildKit Cargo cache
         if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
@@ -171,10 +160,10 @@ jobs:
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-target
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-target
             ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git
             ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-registry
-          key: ${{ github.event_name == 'push' && format('buildkit-cargo-main-{0}-{1}', runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'apps/ade-api/Cargo.lock', 'apps/ade-api/Cargo.toml')) || format('buildkit-cargo-pr-{0}-{1}-{2}', github.event.pull_request.number, runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'apps/ade-api/Cargo.lock', 'apps/ade-api/Cargo.toml')) }}
+          key: ${{ github.event_name == 'push' && format('buildkit-cargo-main-{0}-{1}', runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml')) || format('buildkit-cargo-pr-{0}-{1}-{2}', github.event.pull_request.number, runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml')) }}
           restore-keys: |
             ${{ github.event_name == 'pull_request' && format('buildkit-cargo-pr-{0}-{1}-', github.event.pull_request.number, runner.os) || '' }}
             buildkit-cargo-main-${{ runner.os }}-
@@ -185,9 +174,9 @@ jobs:
         with:
           cache-map: |
             {
-              "${{ runner.temp }}/buildkit-cargo-cache/ade-api-target": {
-                "target": "/build/apps/ade-api/target",
-                "id": "ade-api-target"
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-target": {
+                "target": "/build/target",
+                "id": "ade-target"
               },
               "${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git": {
                 "target": "/usr/local/cargo/git/db",
@@ -257,6 +246,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
           node-version-file: .node-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4

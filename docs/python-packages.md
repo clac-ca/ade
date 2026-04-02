@@ -62,9 +62,11 @@ Repo-level shortcuts:
 pnpm lint:python
 pnpm format:python
 pnpm format:python:check
-pnpm test:python
+pnpm test
 pnpm build:python-artifacts
 ```
+
+`pnpm test` includes the Python package suites alongside the rest of the fast repo-level checks.
 
 ## Release Model
 

@@ -75,7 +75,6 @@ struct AppState {
 
 struct SessionPoolEmulator {
     app_mount_path: PathBuf,
-    baseline: BaselineFixture,
     bearer_token: String,
     config_mount_source_path: PathBuf,
     cooldown_seconds: i64,
@@ -84,13 +83,6 @@ struct SessionPoolEmulator {
     mnt_data_mount_path: PathBuf,
     sessions: Mutex<BTreeMap<String, SessionState>>,
     sessions_root: PathBuf,
-}
-
-#[derive(Clone, Deserialize)]
-struct BaselineFixture {
-    #[serde(rename = "apiVersion")]
-    api_version: String,
-    metadata: Value,
 }
 
 #[derive(Clone)]
@@ -321,23 +313,8 @@ impl SessionPoolEmulator {
             ApiError::internal(format!("Failed to create /mnt for session mounts: {error}"))
         })?;
 
-        let baseline =
-            serde_json::from_str::<BaselineFixture>(include_str!("../azure-shell-baseline.json"))
-                .map_err(|error| {
-                ApiError::internal(format!(
-                    "Failed to load the embedded Azure Shell baseline fixture: {error}"
-                ))
-            })?;
-        if baseline.api_version != AZURE_SHELL_API_VERSION {
-            return Err(ApiError::internal(format!(
-                "Embedded baseline apiVersion '{}' does not match '{}'.",
-                baseline.api_version, AZURE_SHELL_API_VERSION
-            )));
-        }
-
         Ok(Self {
             app_mount_path: PathBuf::from("/app"),
-            baseline,
             bearer_token,
             config_mount_source_path: PathBuf::from("/emulator-configs"),
             cooldown_seconds: DEFAULT_COOLDOWN_SECONDS,
@@ -664,7 +641,17 @@ impl SessionPoolEmulator {
     }
 
     fn metadata(&self) -> Value {
-        self.baseline.metadata.clone()
+        json!({
+            "createdAt": "1970-01-01T00:00:00Z",
+            "lastUpdatedAt": "1970-01-01T00:00:00Z",
+            "runtimes": [
+                {
+                    "name": "Ubuntu",
+                    "version": "22.04.5 LTS (Jammy Jellyfish)"
+                }
+            ],
+            "preInstalledPackages": []
+        })
     }
 
     fn point_mount(&self, mount_path: &Path, target: &Path) -> Result<(), ApiError> {

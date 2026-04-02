@@ -32,7 +32,6 @@ async function runCompose(
 
 async function upLocalDependencies(): Promise<void> {
   await ensureDocker(dockerCommand, "`pnpm deps:up`");
-  await runCompose(["down", "-v", "--remove-orphans"]).catch(() => undefined);
   await runCompose([
     "up",
     "-d",

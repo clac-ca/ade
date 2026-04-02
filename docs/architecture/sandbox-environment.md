@@ -34,9 +34,9 @@ The sandbox environment definition owns the shared execution foundation:
 
 The shared environment revision is derived from those shared runtime assets, not from the selected config.
 
-ADE packages that shared runtime as one tarball carried by the API image. During prepare, the API uploads the tarball, extracts it into the sandbox root, starts `reverse-connect`, and runs `setup.sh` through that reverse connection. The tarball already contains the pinned Python runtime at its final path, so setup never downloads Python from the internet.
+ADE packages that shared runtime as one tarball carried by the API image. During prepare, the API uploads the tarball into a vanilla Azure shell session, extracts it into the sandbox root, starts `reverse-connect`, and runs `setup.sh` through that reverse connection. The tarball already contains the pinned Python runtime at its final path, so setup never downloads Python from the internet.
 
-`reverse-connect` still stays in `packages/reverse-connect` because it is reusable code with its own tests and binary output. The sandbox-environment build depends on that package, but it does not own its source.
+`reverse-connect` still stays in `packages/reverse-connect` because it is reusable code with its own tests and binary output. The sandbox-environment build depends on that package, but it does not own its source. Its Linux binary is exported from `packages/reverse-connect/Dockerfile.build` and injected into the tarball during `pnpm build:sandbox-environment`. That Dockerfile is a build helper only, not a runtime image for the sandbox session.
 
 ## Config Installation
 

@@ -1,8 +1,8 @@
 import process from "node:process";
 import { parseAcceptanceArgs } from "./lib/args";
+import { runAcceptanceChecks } from "./lib/acceptance-checks";
 import { loadOptionalEnvFile } from "./lib/env-files";
 import { writeGitHubOutput } from "./lib/github";
-import { runAcceptanceChecks } from "./lib/http-checks";
 import { startLocalRuntime } from "./lib/local-runtime";
 import {
   createConsoleLogger,
