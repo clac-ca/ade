@@ -20,7 +20,7 @@ pnpm dev
 
 ADE opens at `http://127.0.0.1:5173`.
 
-`pnpm dev` rebuilds the shared sandbox-environment tarball only when it is stale, stages local config wheels for the emulator when needed, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, builds the debug API binaries once, runs `ade-migrate`, then starts the Axum API and Vite web app on the host. Use `pnpm dev --port 8100` to change only the web port, and use `pnpm dev --no-open` to skip opening the browser.
+`pnpm dev` exports the shared sandbox-environment tarball from the same Docker build graph used by the platform image, stages local config wheels for the emulator when needed, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, builds the debug API binaries once, runs `ade-migrate`, then starts the Axum API and Vite web app on the host. Use `pnpm dev --port 8100` to change only the web port, and use `pnpm dev --no-open` to skip opening the browser.
 
 ## Daily Commands
 
@@ -33,7 +33,7 @@ pnpm test:acceptance
 ```
 
 `pnpm test` is the fast commit-stage suite. It runs TypeScript type checks, schema drift checks, lint, backend tests, frontend tests, script tests, Python tests, and Bicep lint without starting the app or local infrastructure.
-`pnpm build` is the single candidate builder. It builds the shared sandbox-environment tarball, compiles the Bicep template and production params, and builds the local ADE Platform image `ade-platform:local`.
+`pnpm build` is the single candidate builder. It compiles the Bicep template and production params and builds the local ADE Platform image `ade-platform:local` in one Docker build graph that also assembles the sandbox-environment tarball carried by the image.
 
 `pnpm test:acceptance` is the single black-box system proof. It checks the app shell, readiness endpoints, upload -> run -> SSE -> output behavior, and scoped output isolation for both sample workspace/config pairs.
 
@@ -88,7 +88,8 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 
 - `pnpm dev` is host-based and does not read `.env`.
 - `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local Azurite Blob Storage, local SQL, and the local session-pool emulator automatically.
-- `pnpm dev` and `pnpm build` are the public commands that refresh the shared sandbox-environment tarball at `.package/sandbox-environment.tar.gz`.
+- `pnpm dev` exports the local shared sandbox-environment tarball to `.package/sandbox-environment.tar.gz` for the host API.
+- `pnpm build` assembles the same sandbox-environment tarball inside the platform image instead of writing it to `.package/`.
 - Local host and managed-local runtime commands also stage emulator config mounts under `.package/configs`.
 - ADE uses Azure session pools only when the Azure session-pool settings are explicitly configured; otherwise it falls back to the local emulator.
 - See [runtime-config.md](runtime-config.md) for the full connection string and hosted runtime rules.

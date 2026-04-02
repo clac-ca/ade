@@ -21,7 +21,7 @@ function ensureLocalSessionArtifacts(): void {
 
   if (!existsSync(sandboxEnvironmentArchive)) {
     throw new Error(
-      "Missing local sandbox environment archive under .package/. Run `pnpm dev` or `pnpm build` first.",
+      "Missing local sandbox environment archive under .package/. Run `pnpm dev` first.",
     );
   }
 }

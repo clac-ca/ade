@@ -127,35 +127,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Restore Buildx layer cache
-        if: matrix.task == 'build'
-        id: buildx_layer_cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ${{ runner.temp }}/buildx-layer-cache
-          key: ${{ format('buildx-layer-main-{0}-{1}-{2}', runner.os, hashFiles('Dockerfile', '.node-version', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/ade-api/package.json', 'apps/ade-web/package.json', 'apps/ade-api/sandbox-environment/**', 'apps/ade-web/**', 'packages/reverse-connect/**', 'scripts/**/*.ts', 'infra/main.bicep', 'infra/environments/main.prod.bicepparam'), github.sha) }}
-          restore-keys: |
-            buildx-layer-main-${{ runner.os }}-${{ hashFiles('Dockerfile', '.node-version', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/ade-api/package.json', 'apps/ade-web/package.json', 'apps/ade-api/sandbox-environment/**', 'apps/ade-web/**', 'packages/reverse-connect/**', 'scripts/**/*.ts', 'infra/main.bicep', 'infra/environments/main.prod.bicepparam') }}-
-
-      - name: Ensure Buildx layer cache directory
-        if: matrix.task == 'build'
-        run: mkdir -p "${{ runner.temp }}/buildx-layer-cache"
-
       - name: Restore BuildKit Cargo cache
         if: matrix.task == 'build'
         id: buildkit_cargo_cache
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-target
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-registry
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-target
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-cargo-git
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-cargo-registry
-          key: ${{ format('buildkit-cargo-main-{0}-{1}-{2}', runner.os, hashFiles('Dockerfile', 'packages/reverse-connect/Dockerfile.build', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml'), github.sha) }}
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-target
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-cargo-git
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-cargo-registry
+          key: ${{ format('buildkit-cargo-main-{0}-{1}-{2}', runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml'), github.sha) }}
           restore-keys: |
-            buildkit-cargo-main-${{ runner.os }}-${{ hashFiles('Dockerfile', 'packages/reverse-connect/Dockerfile.build', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}-
+            buildkit-cargo-main-${{ runner.os }}-${{ hashFiles('Dockerfile', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}-
 
       - name: Restore BuildKit Cargo cache mounts
         if: matrix.task == 'build'
@@ -163,29 +146,17 @@ jobs:
         with:
           cache-map: |
             {
-              "${{ runner.temp }}/buildkit-cargo-cache/ade-target": {
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-rust-target": {
                 "target": "/build/target",
-                "id": "ade-target"
+                "id": "ade-rust-target"
               },
-              "${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git": {
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-rust-cargo-git": {
                 "target": "/usr/local/cargo/git/db",
-                "id": "ade-api-cargo-git"
+                "id": "ade-rust-cargo-git"
               },
-              "${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-registry": {
+              "${{ runner.temp }}/buildkit-cargo-cache/ade-rust-cargo-registry": {
                 "target": "/usr/local/cargo/registry",
-                "id": "ade-api-cargo-registry"
-              },
-              "${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-target": {
-                "target": "/cargo-target",
-                "id": "ade-reverse-connect-target"
-              },
-              "${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-cargo-git": {
-                "target": "/usr/local/cargo/git/db",
-                "id": "ade-reverse-connect-cargo-git"
-              },
-              "${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-cargo-registry": {
-                "target": "/usr/local/cargo/registry",
-                "id": "ade-reverse-connect-cargo-registry"
+                "id": "ade-rust-cargo-registry"
               }
             }
           skip-extraction: ${{ steps.buildkit_cargo_cache.outputs.cache-hit == 'true' }}
@@ -197,39 +168,22 @@ jobs:
       - name: Build release candidate
         if: matrix.task == 'build'
         env:
-          ADE_BUILD_CACHE_FROM: type=local,src=${{ runner.temp }}/buildx-layer-cache
-          ADE_BUILD_CACHE_TO: type=local,dest=${{ runner.temp }}/buildx-layer-cache-new,mode=max
+          ADE_BUILD_CACHE_FROM: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          ADE_BUILD_CACHE_TO: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
           ADE_BUILD_IMAGE: ${{ format('{0}/{1}:sha-{2}', env.REGISTRY, env.IMAGE_NAME, github.sha) }}
+          ADE_BUILD_PLATFORM: linux/amd64
           ADE_BUILD_PUSH: "true"
           ADE_SERVICE_VERSION: ${{ steps.version.outputs.release_version }}
         run: pnpm build
-
-      - name: Finalize Buildx layer cache
-        if: matrix.task == 'build'
-        run: |
-          rm -rf "${{ runner.temp }}/buildx-layer-cache"
-          if [ -d "${{ runner.temp }}/buildx-layer-cache-new" ]; then
-            mv "${{ runner.temp }}/buildx-layer-cache-new" "${{ runner.temp }}/buildx-layer-cache"
-          fi
-
-      - name: Save Buildx layer cache
-        if: matrix.task == 'build' && steps.buildx_layer_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ${{ runner.temp }}/buildx-layer-cache
-          key: ${{ steps.buildx_layer_cache.outputs.cache-primary-key }}
 
       - name: Save BuildKit Cargo cache
         if: matrix.task == 'build' && steps.buildkit_cargo_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-target
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-git
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-api-cargo-registry
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-target
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-cargo-git
-            ${{ runner.temp }}/buildkit-cargo-cache/ade-reverse-connect-cargo-registry
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-target
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-cargo-git
+            ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-cargo-registry
           key: ${{ steps.buildkit_cargo_cache.outputs.cache-primary-key }}
 
       - name: Save Rust cache

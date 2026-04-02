@@ -31,7 +31,7 @@ Options:
 
 ## Build Artifact
 
-`Dockerfile.build` is a build-only recipe for producing the Linux `amd64`
-`reverse-connect` binary that ADE packages into the sandbox-environment
-tarball. It is not a runtime image for Azure session containers; production
-still uses vanilla shell sessions and the API uploads the binary into them.
+ADE builds the Linux `amd64` `reverse-connect` binary inside the root
+platform Dockerfile and packages it into the sandbox-environment tarball.
+It is not a runtime image for Azure session containers; production still uses
+vanilla shell sessions and the API uploads the binary into them.

@@ -12,7 +12,7 @@ pnpm dev
 
 ADE opens at `http://127.0.0.1:5173`.
 
-`pnpm dev` builds the local sandbox-environment tarball when it is stale, stages local config wheels for the emulator when needed, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host.
+`pnpm dev` exports the local sandbox-environment tarball from the same Docker build graph used by the platform image, stages local config wheels for the emulator when needed, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host.
 
 The API owns and ships one sandbox-environment tarball. That tarball is built from `apps/ade-api/sandbox-environment/` and carried by the API image. Local config wheels are staged separately only so the local emulator can mount them under `/mnt/data/ade/configs/`.
 
@@ -37,7 +37,7 @@ pnpm test:acceptance
 ```
 
 `pnpm test` is the fast commit-stage suite. It runs TypeScript type checks, schema drift checks, lint, backend tests, frontend tests, script tests, Python tests, and Bicep lint without starting local infrastructure or building release artifacts.
-`pnpm build` is the single candidate builder. It builds the shared sandbox-environment tarball, compiles the Bicep template and production params, and builds the local ADE Platform image `ade-platform:local`.
+`pnpm build` is the single candidate builder. It compiles the Bicep template and production params and builds the local ADE Platform image `ade-platform:local` in one Docker build graph that also assembles the sandbox-environment tarball carried by the image.
 
 `pnpm test:acceptance` is the single black-box system test. It proves the real upload -> run -> SSE -> output flow against either a managed local runtime or an attached environment.
 

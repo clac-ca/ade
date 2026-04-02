@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { buildSandboxEnvironmentAssets } from "../apps/ade-api/sandbox-environment/build";
+import { readPinnedPythonVersion } from "../apps/ade-api/sandbox-environment/build";
 import { readOptionalTrimmedString, runMain } from "./lib/runtime";
 import { ensureDocker, runCommand } from "./lib/shell";
 
@@ -78,6 +78,12 @@ function readBuildImage(env: Record<string, string | undefined>): string {
   );
 }
 
+function readBuildPlatform(
+  env: Record<string, string | undefined>,
+): string | undefined {
+  return readOptionalTrimmedString(env, "ADE_BUILD_PLATFORM");
+}
+
 function shouldPushBuild(env: Record<string, string | undefined>): boolean {
   const value = readOptionalTrimmedString(env, "ADE_BUILD_PUSH");
   if (value === undefined) {
@@ -94,10 +100,15 @@ async function buildImage(
   options: {
     cacheFrom?: readonly string[];
     cacheTo?: readonly string[];
+    platform?: string;
     push?: boolean;
   } = {},
 ): Promise<void> {
   const args = ["buildx", "build"];
+
+  if (options.platform) {
+    args.push("--platform", options.platform);
+  }
 
   if (options.push) {
     args.push("--push");
@@ -164,9 +175,10 @@ async function main(): Promise<void> {
   const push = shouldPushBuild(process.env);
   const cacheFrom = readBuildCacheSettings(process.env, "ADE_BUILD_CACHE_FROM");
   const cacheTo = readBuildCacheSettings(process.env, "ADE_BUILD_CACHE_TO");
+  const platform = readBuildPlatform(process.env);
+  const sandboxPythonVersion = readPinnedPythonVersion();
 
   await ensureDocker(dockerCommand, "`pnpm build`");
-  buildSandboxEnvironmentAssets();
   await buildInfrastructureArtifacts();
   await buildImage(
     image,
@@ -174,12 +186,14 @@ async function main(): Promise<void> {
     {
       BUILT_AT: metadata.builtAt,
       GIT_SHA: metadata.gitSha,
+      SANDBOX_PYTHON_VERSION: sandboxPythonVersion,
       SERVICE_VERSION: metadata.version,
     },
     {
       cacheFrom,
       cacheTo,
       push,
+      ...(platform ? { platform } : {}),
     },
   );
 }

@@ -5,8 +5,7 @@ It is an `ade-api` component, not a standalone package.
 
 - `rootfs/` is the authored filesystem tree packaged into `sandbox-environment.tar.gz` during `pnpm build`.
 - `python-version.txt` pins the Python runtime staged directly into `/app/ade/python/current` inside that archive.
-- `build.ts` is the co-located build implementation that turns this component into one tarball carried by the API image.
-- `packages/reverse-connect/Dockerfile.build` is the build-only Linux artifact recipe used to inject the `reverse-connect` binary into that tarball at build time.
+- `build.ts` exports that tarball to `.package/` for host-based local development by calling the root Dockerfile target.
 
 The shared sandbox environment is separate from config installation.
 
@@ -18,6 +17,6 @@ The shared sandbox environment is separate from config installation.
 This directory contains only app-owned runtime assets.
 
 - `reverse-connect` source code stays in `packages/reverse-connect` because it is reusable code with its own tests and binary output.
-- Its Linux binary is exported from `packages/reverse-connect/Dockerfile.build` and then copied into the sandbox-environment tarball during the sandbox-environment build step inside `pnpm build`.
+- Its Linux binary is built inside the root Dockerfile and then copied into the sandbox-environment tarball during the same build graph that produces the platform image.
 - Config wheels do not belong here because they are installed separately after prepare.
 - Generated runtime additions such as `reverse-connect`, the pinned Python runtime, and the base wheelhouse are injected at build time and written only to the tarball output.

@@ -74,9 +74,10 @@ The steady-state hosted runtime settings are:
 | `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` | Yes      | API     | Base URL for the session-pool data-plane routes.                                            |
 | `ADE_SANDBOX_ENVIRONMENT_SECRET`       | Yes      | API     | Secret used to derive deterministic sandbox identifiers from `workspaceId:configVersionId`. |
 
-ADE does not discover or build Python wheels at runtime. It relies on one fixed shared runtime artifact relative to the app working directory:
+ADE does not discover or build Python wheels at runtime. It relies on one fixed shared runtime artifact:
 
-- `.package/sandbox-environment.tar.gz`
+- local host development: `.package/sandbox-environment.tar.gz`
+- container image runtime: `/app/runtime/sandbox-environment.tar.gz`
 
 The sandbox-environment tarball contains the shared connector binary, `setup.sh`, the pinned Python runtime already laid out under `/app/ade/python/current`, and the base wheelhouse used to satisfy `ade-config` dependencies such as `ade-engine`. `setup.sh` does not fetch Python from the internet.
 

@@ -17,9 +17,6 @@ test("sandbox environment stays app-owned and does not become a package", () => 
     existsSync(join(sandboxEnvironmentDir, "rootfs/app/ade/bin/setup.sh")),
   );
   assert.ok(existsSync(join(sandboxEnvironmentDir, "build.ts")));
-  assert.ok(
-    existsSync(join(repoRoot, "packages/reverse-connect/Dockerfile.build")),
-  );
 
   assert.equal(existsSync(join(sandboxEnvironmentDir, "package.json")), false);
   assert.equal(existsSync(join(sandboxEnvironmentDir, "Cargo.toml")), false);
@@ -41,7 +38,8 @@ test("sandbox-environment build stays internal to the main build flow", () => {
     "build:sandbox-environment" in (packageJson.scripts ?? {}),
     false,
   );
-  assert.match(buildSource, /buildSandboxEnvironmentAssets/);
+  assert.match(buildSource, /readPinnedPythonVersion/);
+  assert.doesNotMatch(buildSource, /buildSandboxEnvironmentAssets/);
 });
 
 test("sandbox environment build stays focused on the shared runtime tarball", () => {
@@ -49,13 +47,20 @@ test("sandbox environment build stays focused on the shared runtime tarball", ()
     join(sandboxEnvironmentDir, "build.ts"),
     "utf8",
   );
+  const dockerfileSource = readFileSync(join(repoRoot, "Dockerfile"), "utf8");
 
   assert.doesNotMatch(buildSource, /ADE_CONFIG_FIXTURE_ROOT|configFixtureRoot/);
   assert.doesNotMatch(buildSource, /packages\/ade-config/);
-  assert.match(buildSource, /packages\/reverse-connect\/Dockerfile\.build/);
   assert.match(buildSource, /buildx",\s*"build/);
-  assert.match(buildSource, /--target",\s*"artifact/);
-  assert.doesNotMatch(buildSource, /rust:1\.94\.1-alpine/);
-  assert.doesNotMatch(buildSource, /CARGO_TARGET_DIR=\/tmp\/target/);
+  assert.match(buildSource, /--platform",\s*readSandboxBuildPlatform/);
+  assert.match(buildSource, /--target",\s*"sandbox-environment-artifact/);
+  assert.match(dockerfileSource, /FROM scratch AS sandbox-environment-artifact/);
+  assert.match(
+    dockerfileSource,
+    /COPY --from=sandbox-environment-builder \/out\/sandbox-environment\.tar\.gz \/sandbox-environment\.tar\.gz/,
+  );
+  assert.match(dockerfileSource, /--mount=type=cache,id=ade-rust-target/);
+  assert.doesNotMatch(dockerfileSource, /packages\/reverse-connect\/Dockerfile\.build/);
+  assert.doesNotMatch(dockerfileSource, /COPY --chown=ade:ade \.package\/sandbox-environment\.tar\.gz/);
   assert.match(buildSource, /sandbox-environment\.tar\.gz/);
 });

@@ -1,53 +1,23 @@
 import { execFileSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createConsoleLogger, runMain } from "../../../scripts/lib/runtime";
 
 const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
-const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const tarCommand = process.platform === "win32" ? "tar.exe" : "tar";
 const rootDir = fileURLToPath(new URL("../../../", import.meta.url));
-const sandboxEnvironmentSourceDir = fileURLToPath(
-  new URL("./", import.meta.url),
-);
-const sandboxEnvironmentSourceRootfs = join(
-  sandboxEnvironmentSourceDir,
-  "rootfs",
-);
+const sandboxEnvironmentSourceDir = fileURLToPath(new URL("./", import.meta.url));
 const sandboxEnvironmentOutputArchive = fileURLToPath(
   new URL("../../../.package/sandbox-environment.tar.gz", import.meta.url),
 );
-const sandboxEnvironmentOutputStamp = fileURLToPath(
-  new URL("../../../.package/sandbox-environment.stamp", import.meta.url),
-);
-const legacySandboxEnvironmentOutputDir = fileURLToPath(
-  new URL("../../../.package/sandbox-environment", import.meta.url),
-);
+const defaultSandboxBuildPlatform = "linux/amd64";
 const pythonVersionPath = join(
   sandboxEnvironmentSourceDir,
   "python-version.txt",
 );
-const sandboxEnvironmentBuildScriptPath = fileURLToPath(
-  new URL("./build.ts", import.meta.url),
-);
-const reverseConnectDockerfilePath = join(
-  rootDir,
-  "packages/reverse-connect/Dockerfile.build",
-);
-const pythonToolchainImage = "python:3.12.11-slim-bullseye";
+const dockerfilePath = join(rootDir, "Dockerfile");
 
 function readPinnedPythonVersion(): string {
   const version = readFileSync(pythonVersionPath, "utf8").trim();
@@ -59,168 +29,27 @@ function readPinnedPythonVersion(): string {
   return version;
 }
 
-function pythonToolchainName(version: string): string {
-  return `python-${version}-linux-x86_64.tar.gz`;
+function readSandboxBuildPlatform(): string {
+  return defaultSandboxBuildPlatform;
 }
 
-function newestWheel(directoryPath: string, prefix: string): string {
-  const candidates = readdirSync(directoryPath)
-    .filter((name) => name.startsWith(prefix) && name.endsWith(".whl"))
-    .map((name) => ({
-      modifiedMs: statSync(join(directoryPath, name)).mtimeMs,
-      path: join(directoryPath, name),
-    }))
-    .sort((left, right) => right.modifiedMs - left.modifiedMs);
-
-  const latest = candidates[0];
-  if (latest === undefined) {
-    throw new Error(`No wheel found in ${directoryPath} with prefix ${prefix}`);
-  }
-
-  return latest.path;
-}
-
-function newestMtime(path: string): number {
-  const stats = statSync(path);
-  if (!stats.isDirectory()) {
-    return stats.mtimeMs;
-  }
-
-  let latest = stats.mtimeMs;
-  for (const entry of readdirSync(path, { withFileTypes: true })) {
-    if (
-      entry.name === "dist" ||
-      entry.name === "__pycache__" ||
-      entry.name === ".pytest_cache" ||
-      entry.name === ".venv"
-    ) {
-      continue;
-    }
-    latest = Math.max(latest, newestMtime(join(path, entry.name)));
-  }
-  return latest;
-}
-
-function wheelNeedsBuild(packageDir: string, wheelPrefix: string): boolean {
-  const distDir = join(packageDir, "dist");
-  if (!existsSync(distDir)) {
-    return true;
-  }
+function buildSandboxEnvironmentAssets(logger = createConsoleLogger()): void {
+  const exportDir = mkdtempSync(join(tmpdir(), "ade-sandbox-environment-"));
 
   try {
-    const wheelPath = newestWheel(distDir, wheelPrefix);
-    return newestMtime(packageDir) > statSync(wheelPath).mtimeMs;
-  } catch {
-    return true;
-  }
-}
-
-function ensureWheel(packageDir: string): void {
-  if (
-    !wheelNeedsBuild(packageDir, basename(packageDir).replace(/-/g, "_") + "-")
-  ) {
-    return;
-  }
-
-  execFileSync(
-    pnpmCommand,
-    ["exec", "uv", "build", "--directory", packageDir],
-    {
-      cwd: rootDir,
-      stdio: "inherit",
-    },
-  );
-}
-
-function buildPythonToolchain(
-  outputDirectory: string,
-  archiveName: string,
-): void {
-  execFileSync(
-    dockerCommand,
-    [
-      "run",
-      "--rm",
-      "--platform",
-      "linux/amd64",
-      "--volume",
-      `${outputDirectory}:/out`,
-      pythonToolchainImage,
-      "sh",
-      "-lc",
-      `tar -C /usr/local -czf /out/${archiveName} .`,
-    ],
-    {
-      cwd: rootDir,
-      stdio: "inherit",
-    },
-  );
-}
-
-function stagePythonToolchain(outputDirectory: string, version: string): void {
-  const tempRoot = mkdtempSync(join(tmpdir(), "ade-python-toolchain-"));
-  const archiveName = pythonToolchainName(version);
-  const archivePath = join(tempRoot, archiveName);
-
-  try {
-    buildPythonToolchain(tempRoot, archiveName);
-    mkdirSync(outputDirectory, {
-      recursive: true,
-    });
-    execFileSync(tarCommand, ["-xzf", archivePath, "-C", outputDirectory], {
-      cwd: rootDir,
-      stdio: "inherit",
-    });
-  } finally {
-    rmSync(tempRoot, {
-      force: true,
-      recursive: true,
-    });
-  }
-}
-
-function buildBaseWheelhouse(
-  engineWheelPath: string,
-  outputDirectory: string,
-): void {
-  execFileSync(
-    dockerCommand,
-    [
-      "run",
-      "--rm",
-      "--volume",
-      `${dirname(engineWheelPath)}:/wheel-src`,
-      "--volume",
-      `${outputDirectory}:/out`,
-      pythonToolchainImage,
-      "sh",
-      "-lc",
-      `python -m pip download --dest /out /wheel-src/${basename(engineWheelPath)}`,
-    ],
-    {
-      cwd: rootDir,
-      stdio: "inherit",
-    },
-  );
-}
-
-function buildReverseConnectBinary(outputDirectory: string): void {
-  const exportDir = mkdtempSync(join(tmpdir(), "ade-reverse-connect-"));
-
-  try {
-    // Build the Linux reverse-connect binary that the API copies into a
-    // vanilla shell session; this is a build helper, not a runtime image.
     execFileSync(
       dockerCommand,
       [
         "buildx",
         "build",
         "--platform",
-        "linux/amd64",
+        readSandboxBuildPlatform(),
+        "--build-arg",
+        `SANDBOX_PYTHON_VERSION=${readPinnedPythonVersion()}`,
         "--file",
-        reverseConnectDockerfilePath,
+        dockerfilePath,
         "--target",
-        "artifact",
+        "sandbox-environment-artifact",
         "--output",
         `type=local,dest=${exportDir}`,
         rootDir,
@@ -231,10 +60,14 @@ function buildReverseConnectBinary(outputDirectory: string): void {
       },
     );
 
+    mkdirSync(dirname(sandboxEnvironmentOutputArchive), {
+      recursive: true,
+    });
     cpSync(
-      join(exportDir, "reverse-connect"),
-      join(outputDirectory, "reverse-connect"),
+      join(exportDir, "sandbox-environment.tar.gz"),
+      sandboxEnvironmentOutputArchive,
     );
+    logger.info("Built sandbox environment archive");
   } finally {
     rmSync(exportDir, {
       force: true,
@@ -243,113 +76,11 @@ function buildReverseConnectBinary(outputDirectory: string): void {
   }
 }
 
-function sandboxEnvironmentInputs(): number {
-  return Math.max(
-    newestMtime(join(rootDir, "Cargo.toml")),
-    newestMtime(join(rootDir, "Cargo.lock")),
-    newestMtime(join(rootDir, "packages/reverse-connect")),
-    newestMtime(join(rootDir, "packages/ade-engine")),
-    newestMtime(sandboxEnvironmentSourceRootfs),
-    newestMtime(sandboxEnvironmentBuildScriptPath),
-    newestMtime(pythonVersionPath),
-  );
-}
-
-function needsSandboxEnvironmentBuild(): boolean {
-  if (
-    !existsSync(sandboxEnvironmentOutputArchive) ||
-    !existsSync(sandboxEnvironmentOutputStamp)
-  ) {
-    return true;
-  }
-
-  return (
-    sandboxEnvironmentInputs() > statSync(sandboxEnvironmentOutputStamp).mtimeMs
-  );
-}
-
-function buildSandboxEnvironmentAssets(logger = createConsoleLogger()): void {
-  ensureWheel(join(rootDir, "packages/ade-engine"));
-
-  const engineWheelPath = newestWheel(
-    join(rootDir, "packages/ade-engine/dist"),
-    "ade_engine-",
-  );
-
-  if (!needsSandboxEnvironmentBuild()) {
-    logger.info("Sandbox environment archive is current");
-    return;
-  }
-
-  const pythonVersion = readPinnedPythonVersion();
-  const tempRoot = mkdtempSync(join(tmpdir(), "ade-sandbox-environment-"));
-  const outputBinDir = join(tempRoot, "app/ade/bin");
-  const outputPythonDir = join(tempRoot, "app/ade/python/current");
-  const outputWheelhouseDir = join(tempRoot, "app/ade/wheelhouse/base");
-
-  rmSync(legacySandboxEnvironmentOutputDir, {
-    force: true,
-    recursive: true,
-  });
-  rmSync(sandboxEnvironmentOutputArchive, {
-    force: true,
-  });
-  mkdirSync(dirname(sandboxEnvironmentOutputArchive), {
-    recursive: true,
-  });
-  for (const entry of readdirSync(sandboxEnvironmentSourceRootfs, {
-    withFileTypes: true,
-  })) {
-    cpSync(
-      join(sandboxEnvironmentSourceRootfs, entry.name),
-      join(tempRoot, entry.name),
-      {
-        recursive: true,
-      },
-    );
-  }
-  mkdirSync(outputBinDir, {
-    recursive: true,
-  });
-  mkdirSync(outputPythonDir, {
-    recursive: true,
-  });
-  mkdirSync(outputWheelhouseDir, {
-    recursive: true,
-  });
-
-  try {
-    buildReverseConnectBinary(outputBinDir);
-    buildBaseWheelhouse(engineWheelPath, outputWheelhouseDir);
-    stagePythonToolchain(outputPythonDir, pythonVersion);
-    execFileSync(
-      tarCommand,
-      ["-C", tempRoot, "-czf", sandboxEnvironmentOutputArchive, "app"],
-      {
-        cwd: rootDir,
-        stdio: "inherit",
-      },
-    );
-  } finally {
-    rmSync(tempRoot, {
-      force: true,
-      recursive: true,
-    });
-  }
-
-  writeFileSync(
-    sandboxEnvironmentOutputStamp,
-    JSON.stringify({
-      archive: basename(sandboxEnvironmentOutputArchive),
-      builtAt: new Date().toISOString(),
-      engineWheel: basename(engineWheelPath),
-      pythonVersion,
-    }),
-  );
-  logger.info("Built sandbox environment archive");
-}
-
-export { buildSandboxEnvironmentAssets };
+export {
+  buildSandboxEnvironmentAssets,
+  readPinnedPythonVersion,
+  readSandboxBuildPlatform,
+};
 
 if (
   process.argv[1] &&
