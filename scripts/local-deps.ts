@@ -1,7 +1,11 @@
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { localComposeProjectName } from "./lib/dev-config";
-import { createConsoleLogger, runMain } from "./lib/runtime";
+import {
+  createConsoleLogger,
+  readOptionalTrimmedString,
+  runMain,
+} from "./lib/runtime";
 import { ensureDocker, runCommand, runCommandCapture } from "./lib/shell";
 
 const dockerCommand = process.platform === "win32" ? "docker.exe" : "docker";
@@ -9,18 +13,57 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const composeFile = fileURLToPath(
   new URL("../infra/local/compose.yaml", import.meta.url),
 );
+const sessionPoolBuildComposeFile = fileURLToPath(
+  new URL("../infra/local/compose.sessionpool.build.yaml", import.meta.url),
+);
+const sessionPoolImageComposeFile = fileURLToPath(
+  new URL("../infra/local/compose.sessionpool.image.yaml", import.meta.url),
+);
+
+function readComposeFiles(
+  env: Record<string, string | undefined>,
+): readonly string[] {
+  const sessionPoolImage = readOptionalTrimmedString(
+    env,
+    "ADE_SESSIONPOOL_IMAGE",
+  );
+
+  return [
+    composeFile,
+    sessionPoolImage
+      ? sessionPoolImageComposeFile
+      : sessionPoolBuildComposeFile,
+  ];
+}
 
 async function runCompose(
   args: readonly string[],
   options: {
+    env?: Record<string, string | undefined>;
     stdio?: "ignore" | "inherit";
   } = {},
 ): Promise<void> {
+  const composeFiles = readComposeFiles({
+    ...process.env,
+    ...(options.env ?? {}),
+  });
+
   await runCommand(
     dockerCommand,
-    ["compose", "-f", composeFile, "-p", localComposeProjectName, ...args],
+    [
+      "compose",
+      ...composeFiles.flatMap((file) => ["-f", file]),
+      "-p",
+      localComposeProjectName,
+      ...args,
+    ],
     {
       cwd: rootDir,
+      ...(options.env
+        ? {
+            env: options.env,
+          }
+        : {}),
       ...(options.stdio
         ? {
             stdio: options.stdio,
@@ -53,12 +96,12 @@ async function downLocalDependencies(
 async function readLocalDependencyLogs(
   services: readonly string[] = ["azurite", "sqlserver", "sessionpool"],
 ): Promise<string> {
+  const composeFiles = readComposeFiles(process.env);
   const { stdout } = await runCommandCapture(
     dockerCommand,
     [
       "compose",
-      "-f",
-      composeFile,
+      ...composeFiles.flatMap((file) => ["-f", file]),
       "-p",
       localComposeProjectName,
       "logs",

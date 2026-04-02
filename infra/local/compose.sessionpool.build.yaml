@@ -1,0 +1,27 @@
+services:
+  sessionpool:
+    build:
+      context: ../..
+      dockerfile: infra/local/sessionpool/Dockerfile
+    platform: linux/amd64
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "session-pool-emulator",
+          "healthcheck",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "9000",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    cpus: 4
+    mem_limit: 4g
+    ports:
+      - "8014:9000"
+    volumes:
+      - ../../.package/configs:/emulator-configs:ro

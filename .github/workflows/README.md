@@ -23,7 +23,8 @@ Operating model:
 - The commit stage is one matrix job with two parallel legs: `pnpm test` validates source, and `pnpm build` produces the candidate.
 - `pnpm build` is the only platform build path. It compiles the Bicep template and params and builds the platform image in one Docker build graph that also assembles the sandbox-environment tarball carried by that image.
 - On push, that same `pnpm build` path publishes the candidate image to `ghcr.io/<org>/ade-platform`, and the build leg publishes the exact image ref/digest metadata for later stages.
-- Acceptance reuses that exact immutable digest. It runs `pnpm test:acceptance --image <release-candidate-image>`, and the command manages local SQL, runs the separate migration binary, starts the same release candidate, waits for readiness, runs the full upload -> run -> SSE -> output checks, and tears the environment down.
+- Acceptance reuses that exact immutable digest. The build leg also publishes the prebuilt local session-pool emulator image and uploads the local config-mount fixtures that acceptance needs.
+- Acceptance pulls those already-built artifacts, runs `pnpm test:acceptance --image <release-candidate-image>`, starts the same release candidate, waits for readiness, runs the full upload -> run -> SSE -> output checks, and tears the environment down. It does not rebuild the platform image or compile the session-pool emulator.
 - Release reuses that exact immutable digest, validates the Bicep deployment inputs first, passes the image to Bicep as an explicit `image=` parameter override, starts the separate migration job explicitly after deployment, tags the commit as `ade-platform-v...`, and creates the GitHub Release.
 - The app container never runs schema migrations on startup.
 
