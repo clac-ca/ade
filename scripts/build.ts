@@ -68,7 +68,6 @@ function readBuildCacheSettings(
 
   return value
     .split("\n")
-    .flatMap((entry) => entry.split(","))
     .map((entry) => entry.trim())
     .filter((entry) => entry !== "");
 }

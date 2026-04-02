@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createContainerBlobEnv, createHostBlobEnv } from "../lib/blob-env";
 import { createContainerSessionPoolEnv } from "../lib/session-pool-env";
 import {
@@ -24,6 +27,8 @@ import {
   localWebPort,
 } from "../lib/dev-config";
 import { readOptionalTrimmedString } from "../lib/runtime";
+
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 test("local development defaults are fixed and predictable", () => {
   assert.equal(localApiHost, "127.0.0.1");
@@ -120,4 +125,11 @@ test("configured session pool env keeps the app url fallback boring and local", 
       },
     },
   );
+});
+
+test("build cache settings keep each buildx entry intact", () => {
+  const buildScript = readFileSync(join(repoRoot, "scripts/build.ts"), "utf8");
+
+  assert.match(buildScript, /\.split\("\\n"\)/);
+  assert.doesNotMatch(buildScript, /\.split\(","\)/);
 });

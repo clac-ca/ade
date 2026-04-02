@@ -94,6 +94,21 @@ jobs:
             target
           key: ${{ steps.rust_cache.outputs.cache-primary-key }}
 
+  cancel_on_test_failure:
+    name: Commit Stage / Cancel on test failure
+    runs-on: ubuntu-latest
+    needs:
+      - commit_test
+    if: ${{ needs.commit_test.result == 'failure' }}
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Cancel workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/cancel"
+
   commit_build:
     name: Commit Stage / Build
     runs-on: ubuntu-latest
