@@ -29,26 +29,19 @@ test("sandbox environment stays app-owned and does not become a package", () => 
   );
 });
 
-test("root sandbox-environment command stays a thin wrapper", () => {
+test("sandbox-environment build stays internal to the main build flow", () => {
   const packageJson = JSON.parse(
     readFileSync(join(repoRoot, "package.json"), "utf8"),
   ) as {
     scripts?: Record<string, string>;
   };
-  const wrapperSource = readFileSync(
-    join(repoRoot, "scripts/build-sandbox-environment.ts"),
-    "utf8",
-  );
+  const buildSource = readFileSync(join(repoRoot, "scripts/build.ts"), "utf8");
 
   assert.equal(
-    packageJson.scripts?.["build:sandbox-environment"],
-    "tsx scripts/build-sandbox-environment.ts",
+    "build:sandbox-environment" in (packageJson.scripts ?? {}),
+    false,
   );
-  assert.match(
-    wrapperSource,
-    /\.\.\/apps\/ade-api\/sandbox-environment\/build/,
-  );
-  assert.doesNotMatch(wrapperSource, /dockerCommand|pythonToolchainImage/);
+  assert.match(buildSource, /buildSandboxEnvironmentAssets/);
 });
 
 test("sandbox environment build stays focused on the shared runtime tarball", () => {

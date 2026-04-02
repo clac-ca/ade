@@ -18,6 +18,6 @@ The shared sandbox environment is separate from config installation.
 This directory contains only app-owned runtime assets.
 
 - `reverse-connect` source code stays in `packages/reverse-connect` because it is reusable code with its own tests and binary output.
-- Its Linux binary is exported from `packages/reverse-connect/Dockerfile.build` and then copied into the sandbox-environment tarball during `pnpm build:sandbox-environment`.
+- Its Linux binary is exported from `packages/reverse-connect/Dockerfile.build` and then copied into the sandbox-environment tarball during the sandbox-environment build step inside `pnpm build`.
 - Config wheels do not belong here because they are installed separately after prepare.
 - Generated runtime additions such as `reverse-connect`, the pinned Python runtime, and the base wheelhouse are injected at build time and written only to the tarball output.

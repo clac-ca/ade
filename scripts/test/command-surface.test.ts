@@ -18,15 +18,30 @@ test("root package keeps one fast test command and one acceptance command", () =
   assert.match(testScript, /pnpm --filter @ade\/api test/);
   assert.match(testScript, /pnpm --filter @ade\/web test/);
   assert.match(testScript, /tsx --test scripts\/test\/\*\.test\.ts/);
-  assert.match(testScript, /uv run --directory packages\/ade-engine --group test pytest/);
+  assert.match(
+    testScript,
+    /uv run --directory packages\/ade-engine --group test pytest/,
+  );
+  assert.match(testScript, /az bicep lint --file infra\/main\.bicep/);
+  assert.doesNotMatch(testScript, /az bicep build --file infra\/main\.bicep/);
+  assert.doesNotMatch(
+    testScript,
+    /az bicep build-params --file infra\/environments\/main\.prod\.bicepparam/,
+  );
   assert.doesNotMatch(testScript, /build:python-artifacts/);
 
   assert.equal(scripts["test:acceptance"], "tsx scripts/acceptance.ts");
+  assert.equal(scripts["build"], "tsx scripts/build.ts");
 
   assert.equal("check" in scripts, false);
+  assert.equal("lint" in scripts, false);
+  assert.equal("lint:python" in scripts, false);
   assert.equal("test:unit" in scripts, false);
   assert.equal("test:scripts" in scripts, false);
   assert.equal("test:python" in scripts, false);
   assert.equal("test:session:local" in scripts, false);
   assert.equal("test:session:parity" in scripts, false);
+  assert.equal("typecheck" in scripts, false);
+  assert.equal("build:python-artifacts" in scripts, false);
+  assert.equal("build:sandbox-environment" in scripts, false);
 });
