@@ -19,6 +19,7 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
   assert.match(workflow, /Prepare acceptance fixtures/);
   assert.match(workflow, /Upload acceptance fixtures/);
   assert.match(workflow, /Download acceptance fixtures/);
+  assert.match(workflow, /path: \.package\/configs/);
   assert.match(workflow, /Pull acceptance session-pool image/);
   assert.match(workflow, /ADE_SESSIONPOOL_IMAGE/);
   assert.doesNotMatch(workflow, /acceptance_stage:[\s\S]*pnpm build/);
@@ -26,8 +27,18 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
 
 test("local dependency launcher chooses session-pool compose mode from env", () => {
   const localDeps = readFileSync(join(repoRoot, "scripts/local-deps.ts"), "utf8");
+  const buildCompose = readFileSync(
+    join(repoRoot, "infra/local/compose.sessionpool.build.yaml"),
+    "utf8",
+  );
+  const imageCompose = readFileSync(
+    join(repoRoot, "infra/local/compose.sessionpool.image.yaml"),
+    "utf8",
+  );
 
   assert.match(localDeps, /compose\.sessionpool\.build\.yaml/);
   assert.match(localDeps, /compose\.sessionpool\.image\.yaml/);
   assert.match(localDeps, /ADE_SESSIONPOOL_IMAGE/);
+  assert.match(buildCompose, /host\.docker\.internal:host-gateway/);
+  assert.match(imageCompose, /host\.docker\.internal:host-gateway/);
 });

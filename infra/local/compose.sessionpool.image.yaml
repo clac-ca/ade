@@ -3,6 +3,8 @@ services:
     image: ${ADE_SESSIONPOOL_IMAGE:?ADE_SESSIONPOOL_IMAGE must be set}
     platform: linux/amd64
     pull_policy: never
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         [

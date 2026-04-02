@@ -4,6 +4,8 @@ services:
       context: ../..
       dockerfile: infra/local/sessionpool/Dockerfile
     platform: linux/amd64
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         [
