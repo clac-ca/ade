@@ -486,7 +486,8 @@ async fn cli_connects_over_websocket_and_runs_exec_channels() {
 
 #[tokio::test]
 async fn cli_reports_connection_errors_to_stderr() {
-    let connector = spawn_connector_cli("ws://127.0.0.1:9/".to_string(), "secret-token".to_string());
+    let connector =
+        spawn_connector_cli("ws://127.0.0.1:9/".to_string(), "secret-token".to_string());
     let output = tokio::time::timeout(Duration::from_secs(5), connector.wait_with_output())
         .await
         .expect("connector process did not stop");

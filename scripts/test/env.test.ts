@@ -82,8 +82,6 @@ test("managed local blob env keeps browser and runtime endpoints explicit", () =
       ADE_BLOB_CORS_ALLOWED_ORIGINS:
         "http://127.0.0.1:5173,http://localhost:5173",
       ADE_BLOB_PUBLIC_ACCOUNT_URL: "http://127.0.0.1:10000/devstoreaccount1",
-      ADE_BLOB_RUNTIME_ACCOUNT_URL:
-        "http://host.docker.internal:10000/devstoreaccount1",
     },
   });
 
@@ -98,8 +96,6 @@ test("managed local blob env keeps browser and runtime endpoints explicit", () =
       ADE_BLOB_CORS_ALLOWED_ORIGINS:
         "http://127.0.0.1:4100,http://localhost:4100",
       ADE_BLOB_PUBLIC_ACCOUNT_URL: "http://127.0.0.1:10000/devstoreaccount1",
-      ADE_BLOB_RUNTIME_ACCOUNT_URL:
-        "http://host.docker.internal:10000/devstoreaccount1",
     },
   });
 });
@@ -110,7 +106,7 @@ test("configured session pool env keeps the app url fallback boring and local", 
       {
         ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
           "https://example.dynamicsessions.io",
-        ADE_SCOPE_SESSION_SECRET: "secret",
+        ADE_SANDBOX_ENVIRONMENT_SECRET: "secret",
       },
       {},
     ),
@@ -120,7 +116,7 @@ test("configured session pool env keeps the app url fallback boring and local", 
         ADE_PUBLIC_API_URL: "http://host.docker.internal:8000",
         ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
           "https://example.dynamicsessions.io",
-        ADE_SCOPE_SESSION_SECRET: "secret",
+        ADE_SANDBOX_ENVIRONMENT_SECRET: "secret",
       },
     },
   );

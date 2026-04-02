@@ -10,7 +10,7 @@ use ade_api::{
     error::AppError,
     init_tracing,
     runs::{RunService, SqlRunStore},
-    scope_session::ScopeSessionService,
+    sandbox_environment::SandboxEnvironmentManager,
     server::{ServerInstance, ServerOptions},
     terminal::TerminalService,
 };
@@ -39,16 +39,16 @@ async fn main() {
         let args = ServerArgs::parse();
         let production = is_production(&env);
         let database = Arc::new(Database::connect(&config.sql_connection_string).await?);
-        let scope_session_service = Arc::new(ScopeSessionService::from_env(&env)?);
+        let sandbox_environment_manager = Arc::new(SandboxEnvironmentManager::from_env(&env)?);
         let run_store = Arc::new(SqlRunStore::new(Arc::clone(&database)));
         let run_service = Arc::new(RunService::from_env(
             &env,
-            Arc::clone(&scope_session_service),
+            Arc::clone(&sandbox_environment_manager),
             run_store,
         )?);
         let terminal_service = Arc::new(TerminalService::from_env(
             &env,
-            Arc::clone(&scope_session_service),
+            Arc::clone(&sandbox_environment_manager),
         )?);
         let web_root = {
             let web_root = default_web_root();
@@ -66,7 +66,7 @@ async fn main() {
             port: args.port.unwrap_or(DEFAULT_PORT),
             probe_interval_ms: args.probe_interval_ms.unwrap_or(DEFAULT_PROBE_INTERVAL_MS),
             run_service,
-            scope_session_service,
+            sandbox_environment_manager,
             terminal_service,
             stale_after_ms: args
                 .stale_after_ms

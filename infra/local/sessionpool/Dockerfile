@@ -16,7 +16,6 @@ RUN apt-get update \
         gzip \
         jq \
         perl \
-        python3 \
         tar \
         wget \
     && rm -rf /var/lib/apt/lists/* \

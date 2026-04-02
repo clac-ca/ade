@@ -11,4 +11,6 @@ Distilled from Dave Farley's teaching on Continuous Delivery and Modern Software
 - Treat acceptance tests as executable specifications of system behaviour.
 - Write acceptance tests in the language of the problem domain and focus on what the system does, not how it does it.
 - Design for testability and deployability because they are first-class properties of good software.
+- Name and structure the system around domain and runtime concepts, not transport, packaging, or emulator details.
+- Keep reusable code in `packages/`, and keep app-owned runtime assets with the app that ships them.
 - Make quality everybody's responsibility and ensure developers own the tests.

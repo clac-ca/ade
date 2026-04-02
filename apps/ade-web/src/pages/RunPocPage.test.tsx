@@ -102,20 +102,18 @@ describe("RunPocPage", () => {
 
     firstSource.emit("run.status", {
       data: JSON.stringify({
-        phase: "installPackages",
+        phase: "install",
         runId: "run-1",
         state: "started",
       }),
       lastEventId: "1",
     });
 
-    expect(
-      screen.queryByText("Run phase: installPackages."),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Run phase: install.")).not.toBeInTheDocument();
 
     secondSource.emit("run.status", {
       data: JSON.stringify({
-        phase: "executeRun",
+        phase: "execute",
         runId: "run-1",
         state: "started",
       }),
@@ -123,7 +121,7 @@ describe("RunPocPage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Run phase: executeRun.")).toBeInTheDocument();
+      expect(screen.getByText("Run phase: execute.")).toBeInTheDocument();
     });
     expect(screen.getByText("2")).toBeInTheDocument();
   });

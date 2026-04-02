@@ -4,7 +4,12 @@ ADE has two runtime concerns:
 
 - SQL connectivity
 - artifact storage for uploads and run outputs
-- the hosted ADE Python session-pool backend
+- the hosted ADE sandbox-environment backend
+
+For the canonical concept model and terminology, see:
+
+- [architecture/glossary.md](architecture/glossary.md)
+- [architecture/sandbox-environment.md](architecture/sandbox-environment.md)
 
 ## SQL Runtime Config
 
@@ -33,7 +38,6 @@ The runtime storage settings are:
 | `ADE_BLOB_ACCOUNT_URL`          | Yes      | API     | Blob service endpoint used by the API for container management and durable artifact reads and writes.                       |
 | `ADE_BLOB_CONTAINER`            | Yes      | API     | Private blob container that stores scoped uploads and run outputs.                                                          |
 | `ADE_BLOB_PUBLIC_ACCOUNT_URL`   | No       | API     | Optional browser-facing blob endpoint used when browser upload and download SAS URLs must differ from the API/runtime host. |
-| `ADE_BLOB_RUNTIME_ACCOUNT_URL`  | No       | API     | Optional session-facing blob endpoint used when the session runtime needs a different reachable host.                       |
 | `ADE_BLOB_CORS_ALLOWED_ORIGINS` | No       | API     | Comma-separated browser origins to allow on the blob service. Used for managed local Azurite setup.                         |
 | `ADE_BLOB_ACCOUNT_KEY`          | Local    | API     | Shared key used only for local Azurite management and local exact-blob SAS minting.                                         |
 
@@ -43,14 +47,12 @@ Deployed environments use Azure Blob Storage with user delegation SAS:
 
 - browser upload grants are exact-blob `PUT` URLs
 - browser download grants are exact-blob `GET` URLs
-- session download grants are exact-blob read-only URLs
-- session output grants are exact-blob create/write URLs
 - the browser and session never receive container-wide credentials
-- the API does not proxy upload, download, or output bytes
+- the API proxies sandbox input and output bytes during run execution
 
 Local development uses Azurite instead of Azure Blob Storage. Azurite does not support user delegation SAS, so ADE uses the Azurite shared key only for the local emulator path. The browser and session still receive exact-blob SAS URLs, and the API still owns path selection and container setup.
 
-## Hosted Session Config
+## Sandbox Environment Config
 
 ADE uses one shared Azure Container Apps Shell session-pool resource per environment. Local development uses a Dockerized session-pool emulator that exposes the same internal execution and file routes.
 
@@ -67,17 +69,19 @@ ADE intentionally follows the observed Shell pool behavior rather than the broad
 
 The steady-state hosted runtime settings are:
 
-| Name                                   | Required | Used by | Notes                                                                                           |
-| -------------------------------------- | -------- | ------- | ----------------------------------------------------------------------------------------------- |
-| `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` | Yes      | API     | Base URL for the session-pool data-plane routes.                                                |
-| `ADE_SCOPE_SESSION_SECRET`             | Yes      | API     | Secret used to derive deterministic ADE session identifiers from `workspaceId:configVersionId`. |
+| Name                                   | Required | Used by | Notes                                                                                       |
+| -------------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------- |
+| `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` | Yes      | API     | Base URL for the session-pool data-plane routes.                                            |
+| `ADE_SANDBOX_ENVIRONMENT_SECRET`       | Yes      | API     | Secret used to derive deterministic sandbox identifiers from `workspaceId:configVersionId`. |
 
 ADE does not discover or build Python wheels at runtime. Instead it relies on two fixed runtime conventions relative to the app working directory:
 
-- `.package/session-bundle/`
-- `.package/session-configs/<workspaceId>/<configVersionId>/`
+- `.package/sandbox-environment.tar.gz`
+- `.package/configs/<workspaceId>/<configVersionId>/`
 
-The session bundle contains the shared connector binary, `prepare.sh`, `run.py`, the pinned Python toolchain bundle, and the base wheelhouse used to satisfy `ade-config` dependencies such as `ade-engine`. The scope-config root contains one config wheel per workspace/config pair. Each prepared scope session uploads that wheel into the fixed host directory `/app/ade/config/`.
+The sandbox-environment tarball contains the shared connector binary, `setup.sh`, the pinned Python runtime already laid out under `/mnt/data/ade/python/current`, and the base wheelhouse used to satisfy `ade-config` dependencies such as `ade-engine`. `setup.sh` does not fetch Python from the internet. The configs root contains one config wheel per workspace/config pair for local fixture installs.
+
+ADE prepares the shared sandbox environment first, then installs the selected config as a separate runtime step. The API uploads the tarball, extracts it, starts `reverse-connect`, runs `setup.sh`, installs the mounted config wheel directly with `pip`, and executes `ade process` directly.
 
 ADE does not support a migration-on-startup toggle. `ade-api` never runs migrations on startup, and `ade-migrate` is the only supported migration entrypoint.
 
@@ -109,10 +113,10 @@ ADE queues run execution inside the API and starts at most a small bounded numbe
 - local Azurite Blob Storage on `http://127.0.0.1:10000/devstoreaccount1`
 - local SQL on `127.0.0.1:8013`
 - local session-pool emulator on `http://127.0.0.1:8014`
-- freshly packaged local session artifacts under:
-  - `.package/session-bundle`
-  - `.package/session-configs/workspace-a/config-v1`
-  - `.package/session-configs/workspace-b/config-v2`
+- local sandbox-environment assets under:
+  - `.package/sandbox-environment.tar.gz`
+  - `.package/configs/workspace-a/config-v1`
+  - `.package/configs/workspace-b/config-v2`
 
 Managed local blob settings are injected as:
 
@@ -120,7 +124,6 @@ Managed local blob settings are injected as:
 - `ADE_BLOB_CONTAINER=documents`
 - `ADE_BLOB_ACCOUNT_KEY=<Azurite devstoreaccount1 key>`
 - `ADE_BLOB_PUBLIC_ACCOUNT_URL=http://127.0.0.1:10000/devstoreaccount1`
-- `ADE_BLOB_RUNTIME_ACCOUNT_URL=http://host.docker.internal:10000/devstoreaccount1`
 - `ADE_BLOB_CORS_ALLOWED_ORIGINS=http://127.0.0.1:<web-port>,http://localhost:<web-port>`
 
 `pnpm start` and `pnpm test:acceptance` load `.env` when present.
@@ -129,8 +132,8 @@ Managed local blob settings are injected as:
 - If `AZURE_SQL_CONNECTIONSTRING` is absent, they start local SQL and synthesize the container-safe connection string.
 - If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is absent, they start the local session-pool emulator and inject:
   - `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT=http://host.docker.internal:8014`
-  - `ADE_SCOPE_SESSION_SECRET=ade-local-session-secret`
-- If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they require `ADE_SCOPE_SESSION_SECRET` to already be configured in `.env`.
+  - `ADE_SANDBOX_ENVIRONMENT_SECRET=ade-local-session-secret`
+- If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they require `ADE_SANDBOX_ENVIRONMENT_SECRET` to already be configured in `.env`.
 
 Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, a lifecycle policy that tiers scoped block blobs to Cool after 30 days and Archive after 180 days, and one shared session-pool endpoint. The running app gets Blob Storage RBAC so it can mint user delegation SAS, but the session runtime does not receive broad storage access.
 

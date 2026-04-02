@@ -21,7 +21,7 @@ use crate::{
     error::AppError,
     readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::RunService,
-    scope_session::ScopeSessionService,
+    sandbox_environment::SandboxEnvironmentManager,
     terminal::TerminalService,
 };
 
@@ -29,7 +29,7 @@ pub struct ServerOptions {
     pub host: String,
     pub port: u16,
     pub probe_interval_ms: u64,
-    pub scope_session_service: Arc<ScopeSessionService>,
+    pub sandbox_environment_manager: Arc<SandboxEnvironmentManager>,
     pub run_service: Arc<RunService>,
     pub terminal_service: Arc<TerminalService>,
     pub stale_after_ms: u64,
@@ -61,7 +61,7 @@ impl ServerInstance {
         });
         let app = create_app(AppState {
             readiness: readiness.clone(),
-            scope_session_service: options.scope_session_service,
+            sandbox_environment_manager: options.sandbox_environment_manager,
             run_service: options.run_service,
             terminal_service: options.terminal_service,
             web_root: options.web_root,
@@ -232,6 +232,8 @@ mod tests {
     };
 
     use async_trait::async_trait;
+    use flate2::{Compression, write::GzEncoder};
+    use tar::Builder;
     use tempfile::tempdir;
     use tokio::time::sleep;
 
@@ -239,7 +241,7 @@ mod tests {
     use crate::{
         config::DEFAULT_READINESS_STALE_AFTER_MS,
         runs::{InMemoryRunStore, RunService},
-        scope_session::ScopeSessionService,
+        sandbox_environment::SandboxEnvironmentManager,
         terminal::TerminalService,
     };
 
@@ -282,34 +284,67 @@ mod tests {
         }
     }
 
-    fn fixture_scope_session_service() -> Arc<ScopeSessionService> {
+    fn write_sandbox_environment_archive(path: &std::path::Path) {
+        let file = fs::File::create(path).unwrap();
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = Builder::new(encoder);
+
+        for (archive_path, content, mode) in [
+            (
+                "app/ade/bin/reverse-connect",
+                b"connector".as_slice(),
+                0o755,
+            ),
+            (
+                "app/ade/bin/setup.sh",
+                b"#!/bin/sh\nexit 0\n".as_slice(),
+                0o755,
+            ),
+            (
+                "mnt/data/ade/python/current/bin/python3",
+                b"python3".as_slice(),
+                0o755,
+            ),
+            (
+                "mnt/data/ade/python/current/bin/ade",
+                b"ade".as_slice(),
+                0o755,
+            ),
+            (
+                "app/ade/wheelhouse/base/ade_engine-0.1.0-py3-none-any.whl",
+                b"engine".as_slice(),
+                0o644,
+            ),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_path(archive_path).unwrap();
+            header.set_mode(mode);
+            header.set_size(content.len() as u64);
+            header.set_cksum();
+            archive.append(&header, content).unwrap();
+        }
+
+        archive.finish().unwrap();
+        let encoder = archive.into_inner().unwrap();
+        encoder.finish().unwrap();
+    }
+
+    fn fixture_sandbox_environment_manager() -> Arc<SandboxEnvironmentManager> {
         let tempdir = tempdir().unwrap();
-        let bundle_root = tempdir.path().join("session-bundle");
-        let config_root = tempdir.path().join("session-configs");
-        fs::create_dir_all(bundle_root.join("bin")).unwrap();
-        fs::create_dir_all(bundle_root.join("python")).unwrap();
-        fs::create_dir_all(bundle_root.join("wheelhouse/base")).unwrap();
+        let environment_archive = tempdir.path().join("sandbox-environment.tar.gz");
+        let config_root = tempdir.path().join("configs");
         fs::create_dir_all(config_root.join("workspace-a/config-v1")).unwrap();
-        let connector = bundle_root.join("bin/reverse-connect");
-        let prepare = bundle_root.join("bin/prepare.sh");
-        let run_script = bundle_root.join("bin/run.py");
-        let engine = bundle_root.join("wheelhouse/base/ade_engine-0.1.0-py3-none-any.whl");
         let config = config_root.join("workspace-a/config-v1/ade_config-0.1.0-py3-none-any.whl");
-        let toolchain = bundle_root.join("python/python-3.12.11-linux-x86_64.tar.gz");
-        fs::write(&connector, b"connector").unwrap();
-        fs::write(&prepare, b"#!/bin/sh\nexit 0\n").unwrap();
-        fs::write(&run_script, b"print('ok')\n").unwrap();
-        fs::write(&engine, b"engine").unwrap();
+        write_sandbox_environment_archive(&environment_archive);
         fs::write(&config, b"config").unwrap();
-        fs::write(&toolchain, b"toolchain").unwrap();
         std::mem::forget(tempdir);
 
         Arc::new(
-            ScopeSessionService::from_paths(
+            SandboxEnvironmentManager::from_paths(
                 "http://127.0.0.1:8000",
                 "http://127.0.0.1:9",
                 "test-session-secret",
-                bundle_root,
+                environment_archive,
                 config_root,
             )
             .unwrap(),
@@ -317,7 +352,7 @@ mod tests {
     }
 
     fn fixture_terminal_service(
-        scope_session_service: Arc<ScopeSessionService>,
+        sandbox_environment_manager: Arc<SandboxEnvironmentManager>,
     ) -> Arc<TerminalService> {
         let env = [(
             "ADE_PUBLIC_API_URL".to_string(),
@@ -325,10 +360,12 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        Arc::new(TerminalService::from_env(&env, scope_session_service).unwrap())
+        Arc::new(TerminalService::from_env(&env, sandbox_environment_manager).unwrap())
     }
 
-    fn fixture_run_service(scope_session_service: Arc<ScopeSessionService>) -> Arc<RunService> {
+    fn fixture_run_service(
+        sandbox_environment_manager: Arc<SandboxEnvironmentManager>,
+    ) -> Arc<RunService> {
         let env = [
             (
                 "ADE_PUBLIC_API_URL".to_string(),
@@ -353,7 +390,7 @@ mod tests {
         Arc::new(
             RunService::from_env(
                 &env,
-                scope_session_service,
+                sandbox_environment_manager,
                 Arc::new(InMemoryRunStore::default()),
             )
             .unwrap(),
@@ -364,14 +401,14 @@ mod tests {
     async fn startup_fails_when_initial_probe_fails() {
         let database: Arc<dyn DatabaseProbe> =
             Arc::new(FakeDatabase::new(vec![Err("sql unavailable".to_string())]));
-        let scope_session_service = fixture_scope_session_service();
+        let sandbox_environment_manager = fixture_sandbox_environment_manager();
         let mut server = ServerInstance::new(ServerOptions {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
-            scope_session_service: Arc::clone(&scope_session_service),
-            run_service: fixture_run_service(Arc::clone(&scope_session_service)),
-            terminal_service: fixture_terminal_service(Arc::clone(&scope_session_service)),
+            sandbox_environment_manager: Arc::clone(&sandbox_environment_manager),
+            run_service: fixture_run_service(Arc::clone(&sandbox_environment_manager)),
+            terminal_service: fixture_terminal_service(Arc::clone(&sandbox_environment_manager)),
             stale_after_ms: DEFAULT_READINESS_STALE_AFTER_MS,
             web_root: None,
             database,
@@ -393,14 +430,14 @@ mod tests {
             Ok(()),
             Ok(()),
         ]));
-        let scope_session_service = fixture_scope_session_service();
+        let sandbox_environment_manager = fixture_sandbox_environment_manager();
         let mut server = ServerInstance::new(ServerOptions {
             host: "127.0.0.1".to_string(),
             port: 0,
             probe_interval_ms: 10,
-            scope_session_service: Arc::clone(&scope_session_service),
-            run_service: fixture_run_service(Arc::clone(&scope_session_service)),
-            terminal_service: fixture_terminal_service(Arc::clone(&scope_session_service)),
+            sandbox_environment_manager: Arc::clone(&sandbox_environment_manager),
+            run_service: fixture_run_service(Arc::clone(&sandbox_environment_manager)),
+            terminal_service: fixture_terminal_service(Arc::clone(&sandbox_environment_manager)),
             stale_after_ms: DEFAULT_READINESS_STALE_AFTER_MS,
             web_root: None,
             database,

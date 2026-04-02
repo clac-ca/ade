@@ -10,11 +10,11 @@ use uuid::Uuid;
 use crate::{
     config::EnvBag,
     error::AppError,
-    scope::Scope,
-    scope_session::{
-        ChannelId, ChannelKind, ChannelOpenParams, ChannelStream, PtySize, ScopeSessionEvent,
-        ScopeSessionService,
+    sandbox_environment::{
+        ChannelId, ChannelKind, ChannelOpenParams, ChannelStream, PtySize, SandboxEnvironmentEvent,
+        SandboxEnvironmentManager,
     },
+    scope::Scope,
 };
 
 use super::protocol::{
@@ -27,17 +27,17 @@ const DEFAULT_TERMINAL_ROWS: u16 = 32;
 #[derive(Clone)]
 pub struct TerminalService {
     active_sessions: ActiveTerminalManager,
-    scope_session_service: Arc<ScopeSessionService>,
+    sandbox_environment_manager: Arc<SandboxEnvironmentManager>,
 }
 
 impl TerminalService {
     pub fn from_env(
         _env: &EnvBag,
-        scope_session_service: Arc<ScopeSessionService>,
+        sandbox_environment_manager: Arc<SandboxEnvironmentManager>,
     ) -> Result<Self, AppError> {
         Ok(Self {
             active_sessions: ActiveTerminalManager::default(),
-            scope_session_service,
+            sandbox_environment_manager,
         })
     }
 
@@ -55,8 +55,8 @@ impl TerminalService {
         };
 
         let handle = match self
-            .scope_session_service
-            .ensure_ready_scope_session(&scope)
+            .sandbox_environment_manager
+            .ensure_ready_environment(&scope)
             .await
         {
             Ok(handle) => handle,
@@ -72,7 +72,7 @@ impl TerminalService {
             .open_channel(ChannelOpenParams {
                 channel_id: channel_id.clone(),
                 command: "exec /bin/sh -i".to_string(),
-                cwd: Some(handle.session_root().to_string()),
+                cwd: Some(handle.root_path().to_string()),
                 env: Default::default(),
                 kind: ChannelKind::Pty,
                 pty: Some(PtySize {
@@ -126,7 +126,7 @@ impl TerminalService {
 
     async fn handle_browser_message(
         message: Option<Result<Message, axum::Error>>,
-        handle: &crate::scope_session::ScopeSession,
+        handle: &crate::sandbox_environment::SandboxEnvironment,
         channel_id: &ChannelId,
     ) -> Result<ControlFlow<()>, AppError> {
         match message {
@@ -164,12 +164,12 @@ impl TerminalService {
     }
 
     async fn handle_connector_event(
-        event: Result<ScopeSessionEvent, tokio::sync::broadcast::error::RecvError>,
+        event: Result<SandboxEnvironmentEvent, tokio::sync::broadcast::error::RecvError>,
         channel_id: &ChannelId,
         browser_socket: &mut WebSocket,
     ) -> Result<ControlFlow<()>, AppError> {
         match event {
-            Ok(ScopeSessionEvent::Data {
+            Ok(SandboxEnvironmentEvent::Data {
                 channel_id: event_channel_id,
                 data,
                 stream: ChannelStream::Pty,
@@ -183,21 +183,21 @@ impl TerminalService {
                 .await?;
                 Ok(ControlFlow::Continue(()))
             }
-            Ok(ScopeSessionEvent::Exit {
+            Ok(SandboxEnvironmentEvent::Exit {
                 channel_id: event_channel_id,
                 code,
             }) if event_channel_id == *channel_id => {
                 send_terminal_event(browser_socket, TerminalServerMessage::Exit { code }).await?;
                 Ok(ControlFlow::Break(()))
             }
-            Ok(ScopeSessionEvent::Error {
+            Ok(SandboxEnvironmentEvent::Error {
                 channel_id: Some(event_channel_id),
                 message,
             }) if event_channel_id == *channel_id => {
                 Self::fail_terminal(browser_socket, message, None).await?;
                 Ok(ControlFlow::Break(()))
             }
-            Ok(ScopeSessionEvent::Error {
+            Ok(SandboxEnvironmentEvent::Error {
                 channel_id: None,
                 message,
             }) => {
@@ -208,7 +208,7 @@ impl TerminalService {
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                 Self::fail_terminal(
                     browser_socket,
-                    "Scope session connector event stream overflowed while the terminal was active."
+                    "Sandbox environment event stream overflowed while the terminal was active."
                         .to_string(),
                     None,
                 )
@@ -218,7 +218,7 @@ impl TerminalService {
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                 Self::fail_terminal(
                     browser_socket,
-                    "Scope session connector disconnected while the terminal was active."
+                    "Sandbox environment connector disconnected while the terminal was active."
                         .to_string(),
                     None,
                 )

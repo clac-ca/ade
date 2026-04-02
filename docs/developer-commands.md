@@ -20,7 +20,7 @@ pnpm dev
 
 ADE opens at `http://127.0.0.1:5173`.
 
-`pnpm dev` starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host. Use `pnpm dev --port 8100` to change only the web port, and use `pnpm dev --no-open` to skip opening the browser.
+`pnpm dev` rebuilds the shared sandbox-environment tarball only when it is stale, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host. Use `pnpm dev --port 8100` to change only the web port, and use `pnpm dev --no-open` to skip opening the browser.
 
 ## Daily Commands
 
@@ -28,6 +28,7 @@ Normal local development:
 
 ```sh
 pnpm dev
+pnpm check
 pnpm dev --port 8100
 pnpm dev --no-open
 pnpm --filter @ade/web gen:api
@@ -40,7 +41,6 @@ pnpm test
 pnpm test:unit
 pnpm test:session:local
 pnpm test:scripts
-pnpm package:python
 pnpm clean
 ```
 
@@ -49,6 +49,8 @@ pnpm clean
 `pnpm --filter @ade/web gen:api` regenerates the committed frontend API schema from the backend OpenAPI contract.
 
 `pnpm --filter @ade/web gen:api:check` verifies that the committed frontend schema is up to date without rewriting files. The generated schema keeps the real `/api/...` routes.
+
+`pnpm check` is the fast repo-level verification path. It runs TypeScript checks, backend `cargo check`, and frontend API schema drift checks without building the production image.
 
 Dependency-only commands:
 
@@ -82,6 +84,7 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 - `pnpm dev` is host-based and does not read `.env`.
 - `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local Azurite Blob Storage, local SQL, and the local session-pool emulator automatically.
 - `pnpm test:session:local` is the black-box smoke command for the local session-pool path.
+- ADE builds one shared sandbox-environment tarball at `.package/sandbox-environment.tar.gz` and one local config root under `.package/configs`.
 - ADE uses Azure session pools only when the Azure session-pool settings are explicitly configured; otherwise it falls back to the local emulator.
 - See [runtime-config.md](runtime-config.md) for the full connection string and hosted runtime rules.
 

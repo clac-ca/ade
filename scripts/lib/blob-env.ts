@@ -13,7 +13,6 @@ const blobAccountUrlEnvName = "ADE_BLOB_ACCOUNT_URL";
 const blobContainerEnvName = "ADE_BLOB_CONTAINER";
 const blobCorsAllowedOriginsEnvName = "ADE_BLOB_CORS_ALLOWED_ORIGINS";
 const blobPublicAccountUrlEnvName = "ADE_BLOB_PUBLIC_ACCOUNT_URL";
-const blobRuntimeAccountUrlEnvName = "ADE_BLOB_RUNTIME_ACCOUNT_URL";
 
 function configuredBlobEnv(
   env: NodeJS.ProcessEnv,
@@ -29,18 +28,13 @@ function configuredBlobEnv(
     env,
     blobPublicAccountUrlEnvName,
   );
-  const runtimeAccountUrl = readOptionalTrimmedString(
-    env,
-    blobRuntimeAccountUrlEnvName,
-  );
 
   if (
     accountKey === undefined &&
     accountUrl === undefined &&
     container === undefined &&
     corsAllowedOrigins === undefined &&
-    publicAccountUrl === undefined &&
-    runtimeAccountUrl === undefined
+    publicAccountUrl === undefined
   ) {
     return undefined;
   }
@@ -64,11 +58,6 @@ function configuredBlobEnv(
           [blobPublicAccountUrlEnvName]: publicAccountUrl,
         }
       : {}),
-    ...(runtimeAccountUrl
-      ? {
-          [blobRuntimeAccountUrlEnvName]: runtimeAccountUrl,
-        }
-      : {}),
     ...(corsAllowedOrigins
       ? {
           [blobCorsAllowedOriginsEnvName]: corsAllowedOrigins,
@@ -88,7 +77,6 @@ function createManagedLocalBlobValues(options: {
   accountUrl: string;
   corsPort: number;
   publicAccountUrl: string;
-  runtimeAccountUrl: string;
 }): Record<string, string> {
   return {
     [blobAccountKeyEnvName]: localBlobAccountKey,
@@ -98,7 +86,6 @@ function createManagedLocalBlobValues(options: {
       options.corsPort,
     ),
     [blobPublicAccountUrlEnvName]: options.publicAccountUrl,
-    [blobRuntimeAccountUrlEnvName]: options.runtimeAccountUrl,
   };
 }
 
@@ -121,7 +108,6 @@ function createHostBlobEnv(env: NodeJS.ProcessEnv = process.env): {
       accountUrl: createLocalBlobAccountUrl(),
       corsPort: localWebPort,
       publicAccountUrl: createLocalBlobAccountUrl(),
-      runtimeAccountUrl: createLocalContainerBlobAccountUrl(),
     }),
   };
 }
@@ -148,7 +134,6 @@ function createContainerBlobEnv(
       accountUrl: createLocalContainerBlobAccountUrl(),
       corsPort: hostPort,
       publicAccountUrl: createLocalBlobAccountUrl(),
-      runtimeAccountUrl: createLocalContainerBlobAccountUrl(),
     }),
   };
 }

@@ -11,25 +11,30 @@ import { readOptionalTrimmedString } from "./runtime";
 
 const appUrlEnvName = "ADE_PUBLIC_API_URL";
 const managementEndpointEnvName = "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT";
-const sessionSecretEnvName = "ADE_SCOPE_SESSION_SECRET";
+const legacySessionSecretEnvName = "ADE_SCOPE_SESSION_SECRET";
+const sessionSecretEnvName = "ADE_SANDBOX_ENVIRONMENT_SECRET";
 
 function ensureLocalSessionArtifacts(): void {
-  const bundleRoot = fileURLToPath(
-    new URL("../../.package/session-bundle", import.meta.url),
+  const sandboxEnvironmentArchive = fileURLToPath(
+    new URL("../../.package/sandbox-environment.tar.gz", import.meta.url),
   );
   const configRoot = fileURLToPath(
-    new URL("../../.package/session-configs", import.meta.url),
+    new URL("../../.package/configs", import.meta.url),
   );
 
-  if (!existsSync(bundleRoot) || !existsSync(configRoot)) {
+  if (!existsSync(sandboxEnvironmentArchive) || !existsSync(configRoot)) {
     throw new Error(
-      "Missing local session artifacts under .package/. Run `pnpm package:session-bundle` first.",
+      "Missing local sandbox environment assets under .package/. Run `pnpm build:sandbox-environment` first.",
     );
   }
 }
 
 function readRequiredEnv(env: NodeJS.ProcessEnv, name: string): string {
-  const value = readOptionalTrimmedString(env, name);
+  const value =
+    readOptionalTrimmedString(env, name) ??
+    (name === sessionSecretEnvName
+      ? readOptionalTrimmedString(env, legacySessionSecretEnvName)
+      : undefined);
   if (value === undefined) {
     throw new Error(`Missing required environment variable: ${name}`);
   }

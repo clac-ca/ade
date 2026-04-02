@@ -7,7 +7,6 @@ use std::{
 };
 
 use axum::http::StatusCode;
-use reqwest::Url;
 use sha2::{Digest, Sha256};
 use tokio::{
     io::AsyncWriteExt,
@@ -24,8 +23,8 @@ use crate::{
     },
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
+    sandbox_environment::SandboxEnvironmentManager,
     scope::Scope,
-    scope_session::ScopeSessionService,
 };
 
 use super::{
@@ -38,12 +37,10 @@ use super::{
     store::{RunEvent, RunEventPayload, RunPhase, RunStatus, RunStore, RunStoreHandle, StoredRun},
 };
 
-const PUBLIC_API_URL_ENV_NAME: &str = "ADE_PUBLIC_API_URL";
 const BULK_UPLOAD_ACCESS_TTL_SECONDS: u64 = 1_800;
 const BULK_UPLOAD_MAX_FILE_COUNT: usize = 100;
 const BULK_UPLOAD_MAX_TOTAL_SIZE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 const RUN_ACCESS_TTL_SECONDS: u64 = 900;
-const RUN_ACCESS_TIMEOUT_BUFFER_SECONDS: u64 = 60;
 const RUN_TIMEOUT_DEFAULT_SECONDS: u64 = 900;
 const RUN_MAX_CONCURRENT_DEFAULT: usize = 4;
 const RUN_MAX_CONCURRENT_ENV_NAME: &str = "ADE_RUN_MAX_CONCURRENT";
@@ -53,11 +50,10 @@ const RUN_REPLAY_WINDOW_SIZE: usize = 2_048;
 #[derive(Clone)]
 pub struct RunService {
     active_runs: ActiveRunManager,
-    app_url: Url,
     artifact_store: Arc<BlobArtifactStore>,
     run_store: RunStoreHandle,
     permits: Arc<Semaphore>,
-    scope_session_service: Arc<ScopeSessionService>,
+    sandbox_environment_manager: Arc<SandboxEnvironmentManager>,
 }
 
 #[derive(Clone)]
@@ -309,37 +305,15 @@ fn run_id_for_input(scope: &Scope, input_path: &str) -> String {
 impl RunService {
     pub fn from_env(
         env: &EnvBag,
-        scope_session_service: Arc<ScopeSessionService>,
+        sandbox_environment_manager: Arc<SandboxEnvironmentManager>,
         run_store: Arc<dyn RunStore>,
     ) -> Result<Self, AppError> {
-        let app_url = read_optional_trimmed_string(env, PUBLIC_API_URL_ENV_NAME).ok_or_else(|| {
-            AppError::config(format!(
-                "Missing required environment variable: {PUBLIC_API_URL_ENV_NAME}"
-            ))
-        })?;
-        let app_url = Url::parse(&app_url).map_err(|error| {
-            AppError::config_with_source(
-                "ADE_PUBLIC_API_URL is not a valid URL.".to_string(),
-                error,
-            )
-        })?;
-
-        match app_url.scheme() {
-            "http" | "https" => {}
-            _ => {
-                return Err(AppError::config(
-                    "ADE_PUBLIC_API_URL must use http or https.".to_string(),
-                ));
-            }
-        }
-
         Ok(Self {
             active_runs: ActiveRunManager::default(),
-            app_url,
             artifact_store: Arc::new(blob_artifact_store_from_env(env)?),
             run_store,
             permits: Arc::new(Semaphore::new(read_run_max_concurrent(env)?)),
-            scope_session_service,
+            sandbox_environment_manager,
         })
     }
 
@@ -614,7 +588,7 @@ impl RunService {
                         &input_path,
                         execution::attempt_failure(
                             AppError::internal("Run scheduler is unavailable."),
-                            Some(RunPhase::ExecuteRun),
+                            Some(RunPhase::Execute),
                         ),
                         &active,
                     )
@@ -704,10 +678,6 @@ fn validate_upload_batch(request: &CreateUploadBatchRequest) -> Result<(), AppEr
     Ok(())
 }
 
-fn run_access_ttl_seconds(timeout_in_seconds: Option<u64>) -> u64 {
-    run_timeout_in_seconds(timeout_in_seconds).saturating_add(RUN_ACCESS_TIMEOUT_BUFFER_SECONDS)
-}
-
 fn run_timeout_in_seconds(timeout_in_seconds: Option<u64>) -> u64 {
     timeout_in_seconds.unwrap_or(RUN_TIMEOUT_DEFAULT_SECONDS)
 }
@@ -728,7 +698,7 @@ mod tests {
                 seq,
                 level: "info".to_string(),
                 message: format!("event {seq}"),
-                phase: RunPhase::ExecuteRun,
+                phase: RunPhase::Execute,
             })
             .collect::<VecDeque<_>>();
 
@@ -750,7 +720,7 @@ mod tests {
             },
             RunEvent::Status {
                 seq: 11,
-                phase: RunPhase::ExecuteRun,
+                phase: RunPhase::Execute,
                 state: "started".to_string(),
                 session_guid: None,
                 operation_id: None,

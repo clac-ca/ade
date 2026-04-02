@@ -1,40 +1,15 @@
 use std::time::Duration;
 
 use super::*;
-use serde::Serialize;
 
-use crate::{
-    artifacts::ArtifactAccessGrant,
-    runs::models::ArtifactAccessInstruction,
-    scope_session::{
-        ChannelId, ChannelKind, ChannelOpenParams, ChannelStream, ScopeSessionEvent, SignalName,
-        ScopeSession,
-    },
+use crate::sandbox_environment::{
+    ChannelId, ChannelKind, ChannelOpenParams, ChannelStream, SandboxEnvironmentEvent, SignalName,
 };
-
-const REMOTE_MANIFEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Clone, Debug)]
 struct AttemptSuccess {
     output_path: String,
     validation_issues: Vec<RunValidationIssue>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProcessResult {
-    output_path: String,
-    validation_issues: Vec<RunValidationIssue>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RunRequestPayload {
-    input_access: ArtifactAccessInstruction,
-    local_input_path: String,
-    local_output_dir: String,
-    output_access: ArtifactAccessInstruction,
-    output_path: String,
 }
 
 struct RunAttempt<'a> {
@@ -241,7 +216,7 @@ impl RunService {
                 run.phase = *phase;
             }
             RunEventPayload::Result { .. } => {
-                run.phase = Some(RunPhase::PersistOutputs);
+                run.phase = Some(RunPhase::Execute);
             }
         }
 
@@ -279,7 +254,7 @@ impl RunService {
             &mut run,
             active,
             RunEventPayload::Status {
-                phase: RunPhase::InstallPackages,
+                phase: RunPhase::Allocate,
                 state: "started".to_string(),
                 session_guid: None,
                 operation_id: None,
@@ -290,13 +265,13 @@ impl RunService {
         .map_err(store_failure)?;
 
         let handle = self
-            .scope_session_service
-            .ensure_ready_scope_session(attempt.scope)
+            .sandbox_environment_manager
+            .allocate(attempt.scope)
             .await
             .map_err(|error| AttemptFailure {
                 emitted_error: false,
                 error,
-                phase: Some(RunPhase::InstallPackages),
+                phase: Some(RunPhase::Allocate),
                 retriable: true,
                 status: RunStatus::Failed,
             })?;
@@ -305,7 +280,85 @@ impl RunService {
             &mut run,
             active,
             RunEventPayload::Status {
-                phase: RunPhase::InstallPackages,
+                phase: RunPhase::Allocate,
+                state: "completed".to_string(),
+                session_guid: None,
+                operation_id: None,
+                timings: None,
+            },
+        )
+        .await
+        .map_err(store_failure)?;
+
+        self.handle_runtime_event(
+            &mut run,
+            active,
+            RunEventPayload::Status {
+                phase: RunPhase::Prepare,
+                state: "started".to_string(),
+                session_guid: None,
+                operation_id: None,
+                timings: None,
+            },
+        )
+        .await
+        .map_err(store_failure)?;
+
+        self.sandbox_environment_manager
+            .prepare(attempt.scope, &handle)
+            .await
+            .map_err(|error| AttemptFailure {
+                emitted_error: false,
+                error,
+                phase: Some(RunPhase::Prepare),
+                retriable: true,
+                status: RunStatus::Failed,
+            })?;
+
+        self.handle_runtime_event(
+            &mut run,
+            active,
+            RunEventPayload::Status {
+                phase: RunPhase::Prepare,
+                state: "completed".to_string(),
+                session_guid: None,
+                operation_id: None,
+                timings: None,
+            },
+        )
+        .await
+        .map_err(store_failure)?;
+
+        self.handle_runtime_event(
+            &mut run,
+            active,
+            RunEventPayload::Status {
+                phase: RunPhase::Install,
+                state: "started".to_string(),
+                session_guid: None,
+                operation_id: None,
+                timings: None,
+            },
+        )
+        .await
+        .map_err(store_failure)?;
+
+        self.sandbox_environment_manager
+            .install(attempt.scope, &handle)
+            .await
+            .map_err(|error| AttemptFailure {
+                emitted_error: false,
+                error,
+                phase: Some(RunPhase::Install),
+                retriable: true,
+                status: RunStatus::Failed,
+            })?;
+
+        self.handle_runtime_event(
+            &mut run,
+            active,
+            RunEventPayload::Status {
+                phase: RunPhase::Install,
                 state: "completed".to_string(),
                 session_guid: None,
                 operation_id: None,
@@ -325,97 +378,41 @@ impl RunService {
             });
         }
 
-        let access_expires_at = time::OffsetDateTime::now_utc()
-            + time::Duration::seconds(run_access_ttl_seconds(attempt.timeout_in_seconds) as i64);
-        let input_download = self
-            .artifact_store
-            .create_download_access(attempt.input_path, access_expires_at)
-            .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::ExecuteRun),
-                retriable: false,
-                status: RunStatus::Failed,
-            })?;
-        let output_upload = self
-            .artifact_store
-            .create_upload_access(attempt.output_path, None, access_expires_at)
-            .await
-            .map_err(|error| AttemptFailure {
-                emitted_error: false,
-                error,
-                phase: Some(RunPhase::PersistOutputs),
-                retriable: false,
-                status: RunStatus::Failed,
-            })?;
-
-        let local_input_path = format!(
-            "{}/ade/runs/{}/attempt-{}/input/{}",
-            handle.session_root(),
-            attempt.run_id,
-            attempt.attempt,
-            uploaded_basename(attempt.input_path)
-        );
-        let local_output_dir = format!(
-            "{}/ade/runs/{}/attempt-{}/output",
-            handle.session_root(),
-            attempt.run_id,
-            attempt.attempt
-        );
-        let request_file_name = format!(
-            "{}-attempt-{}-request.json",
+        let input_filename = uploaded_basename(attempt.input_path);
+        let local_input_directory = format!(
+            "ade/runs/{}/attempt-{}/input",
             attempt.run_id, attempt.attempt
         );
-        let request_path = format!("/app/ade/runs/{request_file_name}");
-        let result_path = format!(
-            "{}/ade/runs/{}/attempt-{}/result.json",
-            handle.session_root(),
-            attempt.run_id,
-            attempt.attempt
+        let local_output_directory = format!(
+            "ade/runs/{}/attempt-{}/output",
+            attempt.run_id, attempt.attempt
         );
-        let request_payload = RunRequestPayload {
-            input_access: resolve_artifact_access(&self.app_url, input_download).map_err(|error| {
-                AttemptFailure {
-                    emitted_error: false,
-                    error,
-                    phase: Some(RunPhase::ExecuteRun),
-                    retriable: false,
-                    status: RunStatus::Failed,
-                }
-            })?,
-            local_input_path,
-            local_output_dir,
-            output_access: resolve_artifact_access(&self.app_url, output_upload).map_err(|error| {
-                AttemptFailure {
-                    emitted_error: false,
-                    error,
-                    phase: Some(RunPhase::PersistOutputs),
-                    retriable: false,
-                    status: RunStatus::Failed,
-                }
-            })?,
-            output_path: attempt.output_path.to_string(),
-        };
-        let request_body = serde_json::to_vec(&request_payload).map_err(|error| AttemptFailure {
-            emitted_error: false,
-            error: AppError::internal_with_source("Failed to encode the run request payload.", error),
-            phase: Some(RunPhase::ExecuteRun),
-            retriable: false,
-            status: RunStatus::Failed,
-        })?;
-        self.scope_session_service
-            .upload_scope_file(
+        let local_input_path = format!("/app/{local_input_directory}/{input_filename}");
+        let local_output_dir = format!("/app/{local_output_directory}");
+        let expected_output_filename = normalized_output_filename(&input_filename);
+        let input_bytes = self
+            .artifact_store
+            .download_bytes(attempt.input_path)
+            .await
+            .map_err(|error| AttemptFailure {
+                emitted_error: false,
+                error,
+                phase: Some(RunPhase::Execute),
+                retriable: false,
+                status: RunStatus::Failed,
+            })?;
+        self.sandbox_environment_manager
+            .upload_sandbox_file(
                 attempt.scope,
-                format!("ade/runs/{request_file_name}"),
-                "application/json",
-                request_body,
+                format!("{local_input_directory}/{input_filename}"),
+                "application/octet-stream",
+                input_bytes,
             )
             .await
             .map_err(|error| AttemptFailure {
                 emitted_error: false,
                 error,
-                phase: Some(RunPhase::ExecuteRun),
+                phase: Some(RunPhase::Execute),
                 retriable: true,
                 status: RunStatus::Failed,
             })?;
@@ -429,13 +426,12 @@ impl RunService {
             .open_channel(ChannelOpenParams {
                 channel_id: channel_id.clone(),
                 command: format!(
-                    "{} {} {} {}",
-                    shell_single_quote(handle.python_executable_path()),
-                    shell_single_quote(handle.run_script_path()),
-                    shell_single_quote(&request_path),
-                    shell_single_quote(&result_path),
+                    "{} process {} --output-dir {}",
+                    shell_single_quote(handle.ade_executable_path()),
+                    shell_single_quote(&local_input_path),
+                    shell_single_quote(&local_output_dir),
                 ),
-                cwd: Some(handle.session_root().to_string()),
+                cwd: Some(handle.root_path().to_string()),
                 env: Default::default(),
                 kind: ChannelKind::Exec,
                 pty: None,
@@ -444,7 +440,7 @@ impl RunService {
             .map_err(|error| AttemptFailure {
                 emitted_error: false,
                 error,
-                phase: Some(RunPhase::ExecuteRun),
+                phase: Some(RunPhase::Execute),
                 retriable: true,
                 status: RunStatus::Failed,
             })?;
@@ -453,7 +449,7 @@ impl RunService {
             &mut run,
             active,
             RunEventPayload::Status {
-                phase: RunPhase::ExecuteRun,
+                phase: RunPhase::Execute,
                 state: "started".to_string(),
                 session_guid: None,
                 operation_id: None,
@@ -495,14 +491,14 @@ impl RunService {
                                 run_timeout_in_seconds(attempt.timeout_in_seconds)
                             ),
                         ),
-                        phase: Some(RunPhase::ExecuteRun),
+                        phase: Some(RunPhase::Execute),
                         retriable: false,
                         status: RunStatus::Failed,
                     });
                 }
                 event = events.recv() => {
                     match event {
-                        Ok(ScopeSessionEvent::Data { channel_id: event_channel_id, data, stream }) if event_channel_id == channel_id => {
+                        Ok(SandboxEnvironmentEvent::Data { channel_id: event_channel_id, data, stream }) if event_channel_id == channel_id => {
                             match stream {
                                 ChannelStream::Stdout => {
                                     for line in stdout_lines.push(&data) {
@@ -512,7 +508,7 @@ impl RunService {
                                             RunEventPayload::Log {
                                                 level: "info".to_string(),
                                                 message: line,
-                                                phase: RunPhase::ExecuteRun,
+                                                phase: RunPhase::Execute,
                                             },
                                         )
                                         .await
@@ -527,7 +523,7 @@ impl RunService {
                                             RunEventPayload::Log {
                                                 level: "error".to_string(),
                                                 message: line,
-                                                phase: RunPhase::ExecuteRun,
+                                                phase: RunPhase::Execute,
                                             },
                                         )
                                         .await
@@ -537,28 +533,34 @@ impl RunService {
                                 ChannelStream::Pty => {}
                             }
                         }
-                        Ok(ScopeSessionEvent::Exit { channel_id: event_channel_id, code }) if event_channel_id == channel_id => {
+                        Ok(SandboxEnvironmentEvent::Exit { channel_id: event_channel_id, code }) if event_channel_id == channel_id => {
                             if code == Some(0) {
-                                let success = self.read_attempt_result(&handle, attempt.run_id, attempt.attempt, &result_path).await.map_err(|error| AttemptFailure {
+                                let output_bytes = self.sandbox_environment_manager.download_sandbox_file(
+                                    attempt.scope,
+                                    local_output_directory.clone(),
+                                    expected_output_filename.clone(),
+                                ).await.map_err(|error| AttemptFailure {
                                     emitted_error: false,
                                     error,
-                                    phase: Some(RunPhase::PersistOutputs),
+                                    phase: Some(RunPhase::Execute),
                                     retriable: false,
                                     status: RunStatus::Failed,
                                 })?;
-                                self.handle_runtime_event(
-                                    &mut run,
-                                    active,
-                                    RunEventPayload::Status {
-                                        phase: RunPhase::PersistOutputs,
-                                        state: "started".to_string(),
-                                        session_guid: None,
-                                        operation_id: None,
-                                        timings: None,
-                                    },
-                                )
-                                .await
-                                .map_err(store_failure)?;
+                                self.artifact_store.upload_bytes(
+                                    attempt.output_path,
+                                    None,
+                                    output_bytes,
+                                ).await.map_err(|error| AttemptFailure {
+                                    emitted_error: false,
+                                    error,
+                                    phase: Some(RunPhase::Execute),
+                                    retriable: false,
+                                    status: RunStatus::Failed,
+                                })?;
+                                let success = AttemptSuccess {
+                                    output_path: attempt.output_path.to_string(),
+                                    validation_issues: Vec::new(),
+                                };
                                 self.handle_runtime_event(
                                     &mut run,
                                     active,
@@ -573,7 +575,7 @@ impl RunService {
                                     &mut run,
                                     active,
                                     RunEventPayload::Status {
-                                        phase: RunPhase::PersistOutputs,
+                                        phase: RunPhase::Execute,
                                         state: "completed".to_string(),
                                         session_guid: None,
                                         operation_id: None,
@@ -591,17 +593,17 @@ impl RunService {
                                     StatusCode::BAD_GATEWAY,
                                     run_exit_message(code, &stdout_lines, &stderr_lines),
                                 ),
-                                phase: Some(RunPhase::ExecuteRun),
+                                phase: Some(RunPhase::Execute),
                                 retriable: false,
                                 status: RunStatus::Failed,
                             });
                         }
-                        Ok(ScopeSessionEvent::Error { channel_id: Some(event_channel_id), message }) if event_channel_id == channel_id => {
+                        Ok(SandboxEnvironmentEvent::Error { channel_id: Some(event_channel_id), message }) if event_channel_id == channel_id => {
                             self.handle_runtime_event(
                                 &mut run,
                                 active,
                                 RunEventPayload::Error {
-                                    phase: Some(RunPhase::ExecuteRun),
+                                    phase: Some(RunPhase::Execute),
                                     message: message.clone(),
                                     retriable: false,
                                 },
@@ -611,16 +613,16 @@ impl RunService {
                             return Err(AttemptFailure {
                                 emitted_error: true,
                                 error: AppError::status(StatusCode::BAD_GATEWAY, message),
-                                phase: Some(RunPhase::ExecuteRun),
+                                phase: Some(RunPhase::Execute),
                                 retriable: false,
                                 status: RunStatus::Failed,
                             });
                         }
-                        Ok(ScopeSessionEvent::Error { channel_id: None, message }) => {
+                        Ok(SandboxEnvironmentEvent::Error { channel_id: None, message }) => {
                             return Err(AttemptFailure {
                                 emitted_error: false,
                                 error: AppError::status(StatusCode::BAD_GATEWAY, message),
-                                phase: run.phase.or(Some(RunPhase::ExecuteRun)),
+                                phase: run.phase.or(Some(RunPhase::Execute)),
                                 retriable: true,
                                 status: RunStatus::Failed,
                             });
@@ -631,9 +633,9 @@ impl RunService {
                                 emitted_error: false,
                                 error: AppError::status(
                                     StatusCode::BAD_GATEWAY,
-                                    "Scope session connector event stream overflowed while the run was active.",
+                                    "Sandbox environment event stream overflowed while the run was active.",
                                 ),
-                                phase: run.phase.or(Some(RunPhase::ExecuteRun)),
+                                phase: run.phase.or(Some(RunPhase::Execute)),
                                 retriable: true,
                                 status: RunStatus::Failed,
                             });
@@ -643,9 +645,9 @@ impl RunService {
                                 emitted_error: false,
                                 error: AppError::status(
                                     StatusCode::BAD_GATEWAY,
-                                    "Scope session connector disconnected while the run was active.",
+                                    "Sandbox environment connector disconnected while the run was active.",
                                 ),
-                                phase: run.phase.or(Some(RunPhase::ExecuteRun)),
+                                phase: run.phase.or(Some(RunPhase::Execute)),
                                 retriable: true,
                                 status: RunStatus::Failed,
                             });
@@ -655,116 +657,6 @@ impl RunService {
             }
         }
     }
-
-    async fn read_attempt_result(
-        &self,
-        handle: &ScopeSession,
-        run_id: &str,
-        attempt: i32,
-        result_path: &str,
-    ) -> Result<AttemptSuccess, AppError> {
-        let channel_id = ChannelId::new(format!("run-result-{run_id}-attempt-{attempt}"));
-        let mut events = handle.subscribe();
-        handle
-            .open_channel(ChannelOpenParams {
-                channel_id: channel_id.clone(),
-                command: format!("cat {}", shell_single_quote(result_path)),
-                cwd: Some(handle.session_root().to_string()),
-                env: Default::default(),
-                kind: ChannelKind::Exec,
-                pty: None,
-            })
-            .await?;
-
-        let timeout = tokio::time::sleep(REMOTE_MANIFEST_TIMEOUT);
-        tokio::pin!(timeout);
-        let mut stdout = LineBuffer::default();
-        let mut stderr = LineBuffer::default();
-
-        loop {
-            tokio::select! {
-                event = events.recv() => {
-                    match event {
-                        Ok(ScopeSessionEvent::Data { channel_id: event_channel_id, data, stream }) if event_channel_id == channel_id => {
-                            match stream {
-                                ChannelStream::Stdout => {
-                                    let _ = stdout.push(&data);
-                                }
-                                ChannelStream::Stderr => {
-                                    let _ = stderr.push(&data);
-                                }
-                                ChannelStream::Pty => {}
-                            }
-                        }
-                        Ok(ScopeSessionEvent::Exit { channel_id: event_channel_id, code }) if event_channel_id == channel_id => {
-                            if code == Some(0) {
-                                let payload = stdout.finish().join("\n");
-                                let result: ProcessResult = serde_json::from_str(&payload).map_err(|error| {
-                                    AppError::internal_with_source("Failed to parse the run result manifest.", error)
-                                })?;
-                                return Ok(AttemptSuccess {
-                                    output_path: result.output_path,
-                                    validation_issues: result.validation_issues,
-                                });
-                            }
-
-                            return Err(AppError::status(
-                                StatusCode::BAD_GATEWAY,
-                                run_exit_message(code, &stdout, &stderr),
-                            ));
-                        }
-                        Ok(ScopeSessionEvent::Error { channel_id: Some(event_channel_id), message }) if event_channel_id == channel_id => {
-                            return Err(AppError::status(StatusCode::BAD_GATEWAY, message));
-                        }
-                        Ok(ScopeSessionEvent::Error { channel_id: None, message }) => {
-                            return Err(AppError::status(StatusCode::BAD_GATEWAY, message));
-                        }
-                        Ok(_) => {}
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            return Err(AppError::status(
-                                StatusCode::BAD_GATEWAY,
-                                "Scope session connector event stream overflowed while reading the run result.",
-                            ));
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            return Err(AppError::status(
-                                StatusCode::BAD_GATEWAY,
-                                "Scope session connector disconnected while reading the run result.",
-                            ));
-                        }
-                    }
-                }
-                _ = &mut timeout => {
-                    let _ = handle.close_channel(channel_id.clone()).await;
-                    return Err(AppError::status(
-                        StatusCode::BAD_GATEWAY,
-                        "Timed out while reading the run result manifest.",
-                    ));
-                }
-            }
-        }
-    }
-}
-
-fn resolve_artifact_access(
-    app_url: &Url,
-    access: ArtifactAccessGrant,
-) -> Result<ArtifactAccessInstruction, AppError> {
-    let url = match Url::parse(&access.url) {
-        Ok(url) => url.to_string(),
-        Err(_) => app_url
-            .join(&access.url)
-            .map_err(|error| {
-                AppError::internal_with_source("Failed to resolve an artifact access URL.", error)
-            })?
-            .to_string(),
-    };
-    Ok(ArtifactAccessInstruction {
-        expires_at: access.expires_at,
-        headers: access.headers,
-        method: access.method.to_string(),
-        url,
-    })
 }
 
 fn run_exit_message(
@@ -793,6 +685,16 @@ fn uploaded_basename(path: &str) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("input.bin")
         .to_string()
+}
+
+fn normalized_output_filename(input_filename: &str) -> String {
+    let path = std::path::Path::new(input_filename);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("output");
+    format!("{stem}.normalized.xlsx")
 }
 
 fn shell_single_quote(value: &str) -> String {

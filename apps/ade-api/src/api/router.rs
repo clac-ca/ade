@@ -21,14 +21,14 @@ use crate::{
     error::AppError,
     readiness::ReadinessController,
     runs::RunService,
-    scope_session::ScopeSessionService,
+    sandbox_environment::SandboxEnvironmentManager,
     terminal::TerminalService,
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub readiness: ReadinessController,
-    pub scope_session_service: Arc<ScopeSessionService>,
+    pub sandbox_environment_manager: Arc<SandboxEnvironmentManager>,
     pub run_service: Arc<RunService>,
     pub terminal_service: Arc<TerminalService>,
     pub web_root: Option<PathBuf>,
@@ -46,9 +46,9 @@ impl FromRef<AppState> for Arc<RunService> {
     }
 }
 
-impl FromRef<AppState> for Arc<ScopeSessionService> {
+impl FromRef<AppState> for Arc<SandboxEnvironmentManager> {
     fn from_ref(state: &AppState) -> Self {
-        Arc::clone(&state.scope_session_service)
+        Arc::clone(&state.sandbox_environment_manager)
     }
 }
 

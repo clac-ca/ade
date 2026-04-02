@@ -1,3 +1,3 @@
 mod client;
 
-pub(crate) use client::{SessionExecution, SessionPoolClient};
+pub(crate) use client::{SessionExecution, SessionFile, SessionOperationResult, SessionPoolClient};

@@ -63,7 +63,7 @@ pnpm lint:python
 pnpm format:python
 pnpm format:python:check
 pnpm test:python
-pnpm package:python
+pnpm build:python-artifacts
 ```
 
 ## Release Model

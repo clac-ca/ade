@@ -9,7 +9,7 @@ use ade_api::{
     api::{AppState, create_app},
     readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::{InMemoryRunStore, RunService},
-    scope_session::ScopeSessionService,
+    sandbox_environment::SandboxEnvironmentManager,
     terminal::TerminalService,
     unix_time_ms,
 };
@@ -21,10 +21,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, post},
 };
-use base64::Engine as _;
+use flate2::{Compression, write::GzEncoder};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Method, Url};
 use serde_json::{Value, json};
+use tar::Builder;
 use tempfile::tempdir;
 use tokio_tungstenite::{
     connect_async,
@@ -101,6 +102,62 @@ fn ready_state() -> ReadinessController {
     })
 }
 
+fn write_sandbox_environment_archive(archive_path: &FsPath, base_wheel_path: &FsPath) {
+    let file = std::fs::File::create(archive_path).unwrap();
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut archive = Builder::new(encoder);
+
+    let append_bytes = |archive: &mut Builder<GzEncoder<std::fs::File>>,
+                        archive_path: &str,
+                        content: &[u8],
+                        mode: u32| {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(archive_path).unwrap();
+        header.set_mode(mode);
+        header.set_size(content.len() as u64);
+        header.set_cksum();
+        archive.append(&header, content).unwrap();
+    };
+
+    append_bytes(
+        &mut archive,
+        "app/ade/bin/reverse-connect",
+        b"connector-binary",
+        0o755,
+    );
+    append_bytes(
+        &mut archive,
+        "app/ade/bin/setup.sh",
+        b"#!/bin/sh\nexit 0\n",
+        0o755,
+    );
+    append_bytes(
+        &mut archive,
+        "mnt/data/ade/python/current/bin/python3",
+        b"python3",
+        0o755,
+    );
+    append_bytes(
+        &mut archive,
+        "mnt/data/ade/python/current/bin/ade",
+        b"ade",
+        0o755,
+    );
+
+    let base_wheel_bytes = std::fs::read(base_wheel_path).unwrap();
+    let base_wheel_name = base_wheel_path.file_name().unwrap().to_str().unwrap();
+    append_bytes(
+        &mut archive,
+        &format!("app/ade/wheelhouse/base/{base_wheel_name}"),
+        &base_wheel_bytes,
+        0o644,
+    );
+
+    archive.finish().unwrap();
+    let encoder = archive.into_inner().unwrap();
+    encoder.finish().unwrap();
+}
+
 async fn stub_upload_file(
     State(stub): State<PoolStub>,
     headers: HeaderMap,
@@ -154,6 +211,38 @@ async fn stub_upload_file(
     }
 }
 
+async fn stub_download_file(
+    State(stub): State<PoolStub>,
+    headers: HeaderMap,
+    Path(filename): Path<String>,
+    Query(query): Query<IdentifierQuery>,
+) -> Response {
+    let result = (|| {
+        validate_stub_request(&headers, query.api_version.as_deref())?;
+        let filename = validate_stub_filename(&filename)?;
+        let stored_name = match normalize_stub_directory(query.path.as_deref())? {
+            Some(path) => format!("{path}/{filename}"),
+            None => filename,
+        };
+        let key = session_file_storage_key(&query.identifier, &stored_name);
+        let Some(bytes) = stub.state.lock().unwrap().session_files.get(&key).cloned() else {
+            return Err("File not found.".to_string());
+        };
+        Ok::<_, String>(bytes)
+    })();
+
+    match result {
+        Ok(bytes) => ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
+        Err(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "message": message,
+            })),
+        )
+            .into_response(),
+    }
+}
+
 async fn stub_execute(
     State(stub): State<PoolStub>,
     headers: HeaderMap,
@@ -186,58 +275,26 @@ async fn stub_execute(
     if code.contains("reverse-connect")
         && let (Some(connector_url), Some(bearer_token)) = (connector_url, bearer_token)
     {
-            let run_execution_count = {
-                let mut state = stub.state.lock().unwrap();
-                state.run_execution_count += 1;
-                state.run_execution_count
-            };
-            let connect_delay_ms = stub
-                .options
-                .run_connector_delay_ms
-                .max(stub.options.terminal_connector_delay_ms);
-            let execution_delay_ms = stub
-                .options
-                .run_execution_delay_ms
-                .max(stub.options.terminal_execution_delay_ms);
+        let run_execution_count = {
+            let mut state = stub.state.lock().unwrap();
+            state.run_execution_count += 1;
+            state.run_execution_count
+        };
+        let connect_delay_ms = stub
+            .options
+            .run_connector_delay_ms
+            .max(stub.options.terminal_connector_delay_ms);
+        let execution_delay_ms = stub
+            .options
+            .run_execution_delay_ms
+            .max(stub.options.terminal_execution_delay_ms);
 
-            if run_execution_count
-                <= stub.options.run_connector_disconnect_before_ready_attempts
+        if run_execution_count <= stub.options.run_connector_disconnect_before_ready_attempts {
+            if let Ok((mut socket, _response)) =
+                connect_async(connector_request(&connector_url, &bearer_token)).await
             {
-                if let Ok((mut socket, _response)) =
-                    connect_async(connector_request(&connector_url, &bearer_token)).await
-                {
-                    let _ = socket.close(None).await;
-                }
-                return Json(json!({
-                    "status": "0",
-                    "result": {
-                        "stdout": "",
-                        "stderr": "",
-                        "executionTimeInMilliseconds": 4,
-                    }
-                }))
-                .into_response();
+                let _ = socket.close(None).await;
             }
-
-            if connect_delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(connect_delay_ms)).await;
-            }
-
-            if stub.options.auto_connect_run_connector
-                && stub.options.auto_connect_terminal_connector
-            {
-                drive_reverse_connect_stub(
-                    stub.clone(),
-                    &identifier,
-                    &connector_url,
-                    &bearer_token,
-                    execution_delay_ms,
-                )
-                .await;
-            } else if execution_delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(execution_delay_ms)).await;
-            }
-
             return Json(json!({
                 "status": "0",
                 "result": {
@@ -247,6 +304,34 @@ async fn stub_execute(
                 }
             }))
             .into_response();
+        }
+
+        if connect_delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(connect_delay_ms)).await;
+        }
+
+        if stub.options.auto_connect_run_connector && stub.options.auto_connect_terminal_connector {
+            drive_reverse_connect_stub(
+                stub.clone(),
+                &identifier,
+                &connector_url,
+                &bearer_token,
+                execution_delay_ms,
+            )
+            .await;
+        } else if execution_delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(execution_delay_ms)).await;
+        }
+
+        return Json(json!({
+            "status": "0",
+            "result": {
+                "stdout": "",
+                "stderr": "",
+                "executionTimeInMilliseconds": 4,
+            }
+        }))
+        .into_response();
     }
 
     Json(json!({
@@ -258,29 +343,6 @@ async fn stub_execute(
         }
     }))
     .into_response()
-}
-
-async fn request_artifact(
-    client: &Client,
-    access: &serde_json::Map<String, Value>,
-    body: Option<Vec<u8>>,
-) -> reqwest::Response {
-    let method = Method::from_bytes(access["method"].as_str().unwrap().as_bytes()).unwrap();
-    let mut request = client.request(method, access["url"].as_str().unwrap());
-    for (name, value) in access["headers"].as_object().expect("access headers") {
-        request = request.header(name, value.as_str().unwrap());
-    }
-    if let Some(body) = body {
-        request = request.body(body);
-    }
-
-    let response = request.send().await.unwrap();
-    assert!(
-        response.status().is_success(),
-        "artifact request failed with status {}",
-        response.status()
-    );
-    response
 }
 
 fn blob_storage_key(account: &str, container: &str, blob_path: &str) -> String {
@@ -478,6 +540,10 @@ async fn start_stub_server_with_options(
     };
     let app = Router::new()
         .route("/files", post(stub_upload_file))
+        .route(
+            "/files/{filename}/content",
+            axum::routing::get(stub_download_file),
+        )
         .route("/executions", post(stub_execute))
         .route("/{account}", any(stub_blob_account))
         .route("/{account}/{container}", any(stub_blob_container))
@@ -523,26 +589,9 @@ fn app_with_session_and_url_and_run_limit(
     run_max_concurrent: Option<usize>,
 ) -> axum::Router {
     let runtime_dir = tempdir().unwrap();
-    let bundle_root = runtime_dir.path().join("session-bundle");
-    let config_root = runtime_dir.path().join("session-configs");
-    let connector_binary_path = bundle_root.join("bin/reverse-connect");
-    let prepare_script_path = bundle_root.join("bin/prepare.sh");
-    let run_script_path = bundle_root.join("bin/run.py");
-    let wheelhouse_path = bundle_root.join("wheelhouse/base");
-    let python_dir = bundle_root.join("python");
-    let python_toolchain_path = python_dir.join("python-3.12.11-linux-x86_64.tar.gz");
-    std::fs::create_dir_all(connector_binary_path.parent().unwrap()).unwrap();
-    std::fs::create_dir_all(&wheelhouse_path).unwrap();
-    std::fs::create_dir_all(&python_dir).unwrap();
-    std::fs::write(&connector_binary_path, b"connector-binary").unwrap();
-    std::fs::write(&prepare_script_path, b"#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::write(&run_script_path, b"print('ok')\n").unwrap();
-    std::fs::write(&python_toolchain_path, b"python-toolchain").unwrap();
-    std::fs::copy(
-        base_wheel_path,
-        wheelhouse_path.join(base_wheel_path.file_name().unwrap()),
-    )
-    .unwrap();
+    let environment_archive = runtime_dir.path().join("sandbox-environment.tar.gz");
+    let config_root = runtime_dir.path().join("configs");
+    write_sandbox_environment_archive(&environment_archive, base_wheel_path);
     for (workspace_id, config_version_id, wheel_path) in config_targets {
         let scope_dir = config_root.join(workspace_id).join(config_version_id);
         std::fs::create_dir_all(&scope_dir).unwrap();
@@ -554,7 +603,7 @@ fn app_with_session_and_url_and_run_limit(
             endpoint.to_string(),
         ),
         (
-            "ADE_SCOPE_SESSION_SECRET".to_string(),
+            "ADE_SANDBOX_ENVIRONMENT_SECRET".to_string(),
             "test-session-secret".to_string(),
         ),
         ("ADE_PUBLIC_API_URL".to_string(), app_url.to_string()),
@@ -577,12 +626,12 @@ fn app_with_session_and_url_and_run_limit(
 
     std::mem::forget(runtime_dir);
 
-    let scope_session_service = Arc::new(
-        ScopeSessionService::from_paths(
+    let sandbox_environment_manager = Arc::new(
+        SandboxEnvironmentManager::from_paths(
             app_url,
             endpoint,
             "test-session-secret",
-            bundle_root,
+            environment_archive,
             config_root,
         )
         .unwrap(),
@@ -597,17 +646,18 @@ fn app_with_session_and_url_and_run_limit(
     let run_service = Arc::new(
         RunService::from_env(
             &run_env,
-            Arc::clone(&scope_session_service),
+            Arc::clone(&sandbox_environment_manager),
             Arc::new(InMemoryRunStore::default()),
         )
         .unwrap(),
     );
-    let terminal_service =
-        Arc::new(TerminalService::from_env(&env, Arc::clone(&scope_session_service)).unwrap());
+    let terminal_service = Arc::new(
+        TerminalService::from_env(&env, Arc::clone(&sandbox_environment_manager)).unwrap(),
+    );
 
     create_app(AppState {
         readiness: ready_state(),
-        scope_session_service,
+        sandbox_environment_manager,
         run_service,
         terminal_service,
         web_root: None,
@@ -654,11 +704,9 @@ async fn drive_reverse_connect_stub(
     bearer_token: &str,
     execution_delay_ms: u64,
 ) {
-    let client = Client::new();
     if let Ok((mut socket, _response)) =
         connect_async(connector_request(connector_url, bearer_token)).await
     {
-        let mut runtime_files = HashMap::<String, Vec<u8>>::new();
         let hello = json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -735,22 +783,7 @@ async fn drive_reverse_connect_stub(
                         let _ = socket.send(Message::Text(exit.to_string().into())).await;
                         continue;
                     }
-                    if command.starts_with("cat ") {
-                        let Some(path) = single_quoted_args(command).first().cloned() else {
-                            continue;
-                        };
-                        let Some(result_bytes) = runtime_files.get(&path).cloned() else {
-                            continue;
-                        };
-                        let output = json!({
-                            "jsonrpc": "2.0",
-                            "method": "channel.data",
-                            "params": {
-                                "channelId": channel_id,
-                                "stream": "stdout",
-                                "data": base64::engine::general_purpose::STANDARD.encode(result_bytes),
-                            }
-                        });
+                    if command.contains("-m pip install") {
                         let exit = json!({
                             "jsonrpc": "2.0",
                             "method": "channel.exit",
@@ -759,47 +792,39 @@ async fn drive_reverse_connect_stub(
                                 "code": 0,
                             }
                         });
-                        let _ = socket.send(Message::Text(output.to_string().into())).await;
                         let _ = socket.send(Message::Text(exit.to_string().into())).await;
                         continue;
                     }
 
                     let command_args = single_quoted_args(command);
-                    let request_path = command_args
+                    let input_path = command_args
+                        .get(1)
+                        .expect("run command input path")
+                        .to_string();
+                    let output_dir = command_args
                         .get(2)
-                        .expect("run command request path")
+                        .expect("run command output dir")
                         .to_string();
-                    let result_path = command_args
-                        .get(3)
-                        .expect("run command result path")
-                        .to_string();
-                    let request_storage_key = session_file_storage_key(
-                        identifier,
-                        request_path.trim_start_matches("/app/"),
+                    let input_filename = std::path::Path::new(&input_path)
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .expect("run input filename");
+                    let output_filename = format!(
+                        "{}.normalized.xlsx",
+                        std::path::Path::new(input_filename)
+                            .file_stem()
+                            .and_then(|value| value.to_str())
+                            .expect("run input stem")
                     );
-                    let request_body = {
-                        let state = stub.state.lock().unwrap();
-                        state
-                            .session_files
-                            .get(&request_storage_key)
-                            .cloned()
-                            .expect("request manifest should be uploaded")
-                    };
-                    let request_manifest = serde_json::from_slice::<Value>(&request_body).unwrap();
-                    let input_download = request_manifest["inputAccess"].clone();
-                    let output_upload = request_manifest["outputAccess"].clone();
-                    request_artifact(
-                        &client,
-                        input_download.as_object().expect("input download"),
-                        None,
-                    )
-                    .await;
-                    request_artifact(
-                        &client,
-                        output_upload.as_object().expect("output upload"),
-                        Some(b"normalized-output".to_vec()),
-                    )
-                    .await;
+                    let output_storage_key = session_file_storage_key(
+                        identifier,
+                        format!(
+                            "{}/{}",
+                            output_dir.trim_start_matches("/app/"),
+                            output_filename
+                        )
+                        .as_str(),
+                    );
                     let stdout = json!({
                         "jsonrpc": "2.0",
                         "method": "channel.data",
@@ -821,14 +846,11 @@ async fn drive_reverse_connect_stub(
                     if execution_delay_ms > 0 {
                         tokio::time::sleep(Duration::from_millis(execution_delay_ms)).await;
                     }
-                    runtime_files.insert(
-                        result_path,
-                        serde_json::to_vec(&json!({
-                            "outputPath": request_manifest["outputPath"].as_str().unwrap(),
-                            "validationIssues": [],
-                        }))
-                        .unwrap(),
-                    );
+                    stub.state
+                        .lock()
+                        .unwrap()
+                        .session_files
+                        .insert(output_storage_key, b"normalized-output".to_vec());
                     let _ = socket.send(Message::Text(exit.to_string().into())).await;
                     continue;
                 }
@@ -1833,7 +1855,7 @@ async fn removed_public_file_routes_return_not_found() {
 }
 
 #[tokio::test]
-async fn scope_session_launches_reverse_connect_with_url_and_bearer_token() {
+async fn sandbox_environment_launches_reverse_connect_with_url_and_bearer_token() {
     let (endpoint, state, stub_handle) = start_stub_server().await;
     let (_tempdir, config_v1, _config_v2, engine) = create_wheels();
 
@@ -1872,13 +1894,11 @@ async fn scope_session_launches_reverse_connect_with_url_and_bearer_token() {
     assert!(
         uploaded_paths
             .iter()
-            .any(|path| path.ends_with(":ade/bin/reverse-connect"))
+            .any(|path| path.ends_with(":sandbox-environment.tar.gz"))
     );
-    assert!(
-        uploaded_paths
-            .iter()
-            .any(|path| path.ends_with(":ade/bin/prepare.sh"))
-    );
+    assert!(uploaded_paths.iter().any(|path| {
+        path.ends_with(":mnt/data/ade/config/current/ade_config-0.1.0-py3-none-any.whl")
+    }));
 
     let _ = socket.close(None).await;
     app_handle.abort();

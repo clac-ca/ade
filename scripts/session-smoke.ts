@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
+import { buildSandboxEnvironmentAssets } from "../apps/ade-api/sandbox-environment/build";
 import {
   createLocalSqlConnectionString,
   localApiHost,
@@ -13,7 +14,6 @@ import { runCommand, spawnCommand, waitForReady } from "./lib/shell";
 import { downLocalDependencies, upLocalDependencies } from "./local-deps";
 
 const cargoCommand = process.platform === "win32" ? "cargo.exe" : "cargo";
-const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const sqlConnectionStringName = "AZURE_SQL_CONNECTIONSTRING";
 const storageServiceVersion = "2024-11-04";
@@ -297,9 +297,7 @@ function parseSseIds(body: string): number[] {
 }
 
 async function main(logger = createConsoleLogger()): Promise<void> {
-  await runCommand(pnpmCommand, ["package:session-bundle"], {
-    cwd: rootDir,
-  });
+  buildSandboxEnvironmentAssets(logger);
   const env = apiEnv();
   let apiProcess: ReturnType<typeof spawnCommand> | undefined;
 

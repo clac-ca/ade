@@ -53,28 +53,28 @@ impl RunStatus {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum RunPhase {
-    ExecuteRun,
-    InstallPackages,
-    PersistOutputs,
-    UploadArtifacts,
+    Allocate,
+    Prepare,
+    Install,
+    Execute,
 }
 
 impl RunPhase {
     fn as_str(self) -> &'static str {
         match self {
-            Self::ExecuteRun => "executeRun",
-            Self::InstallPackages => "installPackages",
-            Self::PersistOutputs => "persistOutputs",
-            Self::UploadArtifacts => "uploadArtifacts",
+            Self::Allocate => "allocate",
+            Self::Prepare => "prepare",
+            Self::Install => "install",
+            Self::Execute => "execute",
         }
     }
 
     fn from_str(value: &str) -> Result<Self, AppError> {
         match value {
-            "executeRun" => Ok(Self::ExecuteRun),
-            "installPackages" => Ok(Self::InstallPackages),
-            "persistOutputs" => Ok(Self::PersistOutputs),
-            "uploadArtifacts" => Ok(Self::UploadArtifacts),
+            "allocate" => Ok(Self::Allocate),
+            "prepare" => Ok(Self::Prepare),
+            "install" => Ok(Self::Install),
+            "execute" => Ok(Self::Execute),
             _ => Err(AppError::internal(format!(
                 "Unsupported run phase '{value}'."
             ))),
@@ -508,8 +508,8 @@ mod tests {
             RunStatus::Pending
         );
         assert_eq!(
-            RunPhase::from_str(RunPhase::UploadArtifacts.as_str()).unwrap(),
-            RunPhase::UploadArtifacts
+            RunPhase::from_str(RunPhase::Execute.as_str()).unwrap(),
+            RunPhase::Execute
         );
     }
 
@@ -517,7 +517,7 @@ mod tests {
     fn event_payloads_apply_sequences() {
         assert_eq!(
             RunEventPayload::Status {
-                phase: RunPhase::UploadArtifacts,
+                phase: RunPhase::Execute,
                 state: "started".to_string(),
                 session_guid: None,
                 operation_id: None,

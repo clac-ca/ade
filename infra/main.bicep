@@ -59,7 +59,7 @@ param sessionPoolName string = '${prefix}-sessions'
 
 @description('Secret used to derive deterministic ADE runtime session identifiers.')
 @secure()
-param runtimeSessionSecret string
+param sandboxEnvironmentSecret string
 
 @description('CPU allocation for the ADE container app.')
 param appCpu string = '0.25'
@@ -190,7 +190,7 @@ module app 'modules/container-app.bicep' = {
         value: appSqlConnectionString
       }
       {
-        name: 'ADE_SCOPE_SESSION_SECRET'
+        name: 'ADE_SANDBOX_ENVIRONMENT_SECRET'
         secretRef: 'ade-runtime-session-secret'
       }
       {
@@ -265,7 +265,7 @@ module app 'modules/container-app.bicep' = {
     secrets: [
       {
         name: 'ade-runtime-session-secret'
-        value: runtimeSessionSecret
+        value: sandboxEnvironmentSecret
       }
     ]
     tags: mergedTags

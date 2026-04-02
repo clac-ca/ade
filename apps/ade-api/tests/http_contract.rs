@@ -5,7 +5,7 @@ use ade_api::{
     config::SERVICE_VERSION,
     readiness::{DatabaseReadiness, ReadinessController, ReadinessPhase, ReadinessSnapshot},
     runs::{InMemoryRunStore, RunService},
-    scope_session::ScopeSessionService,
+    sandbox_environment::SandboxEnvironmentManager,
     terminal::TerminalService,
     unix_time_ms,
 };
@@ -14,7 +14,9 @@ use axum::{
     http::{Method, Request, StatusCode},
     response::Response,
 };
+use flate2::{Compression, write::GzEncoder};
 use pretty_assertions::assert_eq;
+use tar::Builder;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
 
@@ -38,34 +40,67 @@ fn request_with_method(uri: &str, method: Method) -> Request<Body> {
         .unwrap()
 }
 
-fn fixture_scope_session_service() -> Arc<ScopeSessionService> {
+fn write_sandbox_environment_archive(path: &std::path::Path) {
+    let file = std::fs::File::create(path).unwrap();
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut archive = Builder::new(encoder);
+
+    for (archive_path, content, mode) in [
+        (
+            "app/ade/bin/reverse-connect",
+            b"connector".as_slice(),
+            0o755,
+        ),
+        (
+            "app/ade/bin/setup.sh",
+            b"#!/bin/sh\nexit 0\n".as_slice(),
+            0o755,
+        ),
+        (
+            "mnt/data/ade/python/current/bin/python3",
+            b"python3".as_slice(),
+            0o755,
+        ),
+        (
+            "mnt/data/ade/python/current/bin/ade",
+            b"ade".as_slice(),
+            0o755,
+        ),
+        (
+            "app/ade/wheelhouse/base/ade_engine-0.1.0-py3-none-any.whl",
+            b"engine".as_slice(),
+            0o644,
+        ),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(archive_path).unwrap();
+        header.set_mode(mode);
+        header.set_size(content.len() as u64);
+        header.set_cksum();
+        archive.append(&header, content).unwrap();
+    }
+
+    archive.finish().unwrap();
+    let encoder = archive.into_inner().unwrap();
+    encoder.finish().unwrap();
+}
+
+fn fixture_sandbox_environment_manager() -> Arc<SandboxEnvironmentManager> {
     let tempdir = tempdir().unwrap();
-    let bundle_root = tempdir.path().join("session-bundle");
-    let config_root = tempdir.path().join("session-configs");
-    fs::create_dir_all(bundle_root.join("bin")).unwrap();
-    fs::create_dir_all(bundle_root.join("python")).unwrap();
-    fs::create_dir_all(bundle_root.join("wheelhouse/base")).unwrap();
+    let environment_archive = tempdir.path().join("sandbox-environment.tar.gz");
+    let config_root = tempdir.path().join("configs");
     fs::create_dir_all(config_root.join("workspace-a/config-v1")).unwrap();
-    let connector = bundle_root.join("bin/reverse-connect");
-    let prepare = bundle_root.join("bin/prepare.sh");
-    let run_script = bundle_root.join("bin/run.py");
-    let engine = bundle_root.join("wheelhouse/base/ade_engine-0.1.0-py3-none-any.whl");
     let config = config_root.join("workspace-a/config-v1/ade_config-0.1.0-py3-none-any.whl");
-    let toolchain = bundle_root.join("python/python-3.12.11-linux-x86_64.tar.gz");
-    std::fs::write(&connector, b"connector").unwrap();
-    std::fs::write(&prepare, b"#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::write(&run_script, b"print('ok')\n").unwrap();
-    std::fs::write(&engine, b"engine").unwrap();
+    write_sandbox_environment_archive(&environment_archive);
     std::fs::write(&config, b"config").unwrap();
-    std::fs::write(&toolchain, b"toolchain").unwrap();
     std::mem::forget(tempdir);
 
     Arc::new(
-        ScopeSessionService::from_paths(
+        SandboxEnvironmentManager::from_paths(
             "http://127.0.0.1:8000",
             "http://127.0.0.1:9",
             "test-session-secret",
-            bundle_root,
+            environment_archive,
             config_root,
         )
         .unwrap(),
@@ -73,7 +108,7 @@ fn fixture_scope_session_service() -> Arc<ScopeSessionService> {
 }
 
 fn fixture_terminal_service(
-    scope_session_service: Arc<ScopeSessionService>,
+    sandbox_environment_manager: Arc<SandboxEnvironmentManager>,
 ) -> Arc<TerminalService> {
     let env = [(
         "ADE_PUBLIC_API_URL".to_string(),
@@ -82,11 +117,11 @@ fn fixture_terminal_service(
     .into_iter()
     .collect();
 
-    Arc::new(TerminalService::from_env(&env, scope_session_service).unwrap())
+    Arc::new(TerminalService::from_env(&env, sandbox_environment_manager).unwrap())
 }
 
 fn app_state(readiness: ReadinessController) -> AppState {
-    let scope_session_service = fixture_scope_session_service();
+    let sandbox_environment_manager = fixture_sandbox_environment_manager();
     let env = [
         (
             "ADE_PUBLIC_API_URL".to_string(),
@@ -113,13 +148,13 @@ fn app_state(readiness: ReadinessController) -> AppState {
         run_service: Arc::new(
             RunService::from_env(
                 &env,
-                Arc::clone(&scope_session_service),
+                Arc::clone(&sandbox_environment_manager),
                 Arc::new(InMemoryRunStore::default()),
             )
             .unwrap(),
         ),
-        scope_session_service: Arc::clone(&scope_session_service),
-        terminal_service: fixture_terminal_service(Arc::clone(&scope_session_service)),
+        sandbox_environment_manager: Arc::clone(&sandbox_environment_manager),
+        terminal_service: fixture_terminal_service(Arc::clone(&sandbox_environment_manager)),
         web_root: Some(fixture_web_root()),
     }
 }

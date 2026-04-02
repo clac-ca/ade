@@ -19,5 +19,5 @@ param tags = {
 }
 param appMinReplicas = 0
 param appName = 'ca-ade-prod-canadacentral-002'
-param runtimeSessionSecret = 'replace-at-deploy-time'
+param sandboxEnvironmentSecret = 'replace-at-deploy-time'
 param sessionPoolName = 'sp-ade-prod-canadacentral-002'

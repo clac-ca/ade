@@ -7,10 +7,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
-use http::{
-    HeaderValue,
-    header::AUTHORIZATION,
-};
+use http::{HeaderValue, header::AUTHORIZATION};
 use portable_pty::{CommandBuilder, PtySize as PortablePtySize, native_pty_system};
 use thiserror::Error;
 use tokio::{

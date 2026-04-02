@@ -23,11 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{
-    io::AsyncWriteExt,
-    net::TcpListener,
-    process::Command,
-    sync::Mutex as AsyncMutex,
-    time::timeout,
+    io::AsyncWriteExt, net::TcpListener, process::Command, sync::Mutex as AsyncMutex, time::timeout,
 };
 use tracing::info;
 use uuid::Uuid;
@@ -297,7 +293,10 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut headers = supported_version_headers();
-        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(self.content_type));
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(self.content_type),
+        );
         if let Some(error_code) = self.error_code.as_deref()
             && let Ok(value) = HeaderValue::from_str(error_code)
         {
@@ -321,14 +320,13 @@ impl SessionPoolEmulator {
             ApiError::internal(format!("Failed to create /mnt for session mounts: {error}"))
         })?;
 
-        let baseline = serde_json::from_str::<BaselineFixture>(include_str!(
-            "../azure-shell-baseline.json"
-        ))
-        .map_err(|error| {
-            ApiError::internal(format!(
-                "Failed to load the embedded Azure Shell baseline fixture: {error}"
-            ))
-        })?;
+        let baseline =
+            serde_json::from_str::<BaselineFixture>(include_str!("../azure-shell-baseline.json"))
+                .map_err(|error| {
+                ApiError::internal(format!(
+                    "Failed to load the embedded Azure Shell baseline fixture: {error}"
+                ))
+            })?;
         if baseline.api_version != AZURE_SHELL_API_VERSION {
             return Err(ApiError::internal(format!(
                 "Embedded baseline apiVersion '{}' does not match '{}'.",
@@ -368,12 +366,18 @@ impl SessionPoolEmulator {
             ));
         }
         fs::remove_file(&target).map_err(|error| {
-            ApiError::internal(format!("Failed to delete file '{}': {error}", target.display()))
+            ApiError::internal(format!(
+                "Failed to delete file '{}': {error}",
+                target.display()
+            ))
         })?;
         session
             .file_content_types
             .remove(&logical_file_key(directory, &filename)?);
-        Ok((session_headers(session, new_allocation), StatusCode::NO_CONTENT))
+        Ok((
+            session_headers(session, new_allocation),
+            StatusCode::NO_CONTENT,
+        ))
     }
 
     fn delete_session(&self, identifier: &str) -> Result<(), ApiError> {
@@ -637,7 +641,10 @@ impl SessionPoolEmulator {
         }
         files.sort_by(|left, right| left.name.cmp(&right.name));
 
-        Ok((session_headers(session, new_allocation), FileListResponse { value: files }))
+        Ok((
+            session_headers(session, new_allocation),
+            FileListResponse { value: files },
+        ))
     }
 
     fn list_sessions(&self) -> Result<SessionListResponse, ApiError> {
@@ -736,7 +743,11 @@ impl SessionPoolEmulator {
                 })?;
         }
 
-        let output = match timeout(Duration::from_secs(timeout_seconds), child.wait_with_output()).await
+        let output = match timeout(
+            Duration::from_secs(timeout_seconds),
+            child.wait_with_output(),
+        )
+        .await
         {
             Ok(output) => output.map_err(|error| {
                 ApiError::internal(format!(
@@ -877,14 +888,12 @@ impl SessionPoolEmulator {
                     ))
                 },
             )?;
-            fs::set_permissions(&app_root, fs::Permissions::from_mode(0o755)).map_err(
-                |error| {
-                    ApiError::internal(format!(
-                        "Failed to set permissions on '{}': {error}",
-                        app_root.display()
-                    ))
-                },
-            )?;
+            fs::set_permissions(&app_root, fs::Permissions::from_mode(0o755)).map_err(|error| {
+                ApiError::internal(format!(
+                    "Failed to set permissions on '{}': {error}",
+                    app_root.display()
+                ))
+            })?;
             sessions.insert(
                 identifier.to_string(),
                 SessionState {
@@ -1025,7 +1034,10 @@ fn file_record(
     recursive: bool,
 ) -> Result<FileRecord, ApiError> {
     let metadata = fs::metadata(path).map_err(|error| {
-        ApiError::internal(format!("Failed to read file metadata '{}': {error}", path.display()))
+        ApiError::internal(format!(
+            "Failed to read file metadata '{}': {error}",
+            path.display()
+        ))
     })?;
     let modified_at = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let modified_at = OffsetDateTime::from(modified_at)
@@ -1042,7 +1054,10 @@ fn file_record(
             .unwrap_or_default()
             .to_string()
     };
-    let filename = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+    let filename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
     Ok(FileRecord {
         content_type: if metadata.is_file() {
             Some(file_content_type(session, directory, filename, true)?)
@@ -1052,7 +1067,11 @@ fn file_record(
         last_modified_at: modified_at,
         name,
         size_in_bytes: metadata.len(),
-        kind: if metadata.is_dir() { "directory" } else { "file" },
+        kind: if metadata.is_dir() {
+            "directory"
+        } else {
+            "file"
+        },
     })
 }
 
@@ -1107,9 +1126,25 @@ async fn list_sessions(
 
 fn list_target_path(session: &SessionState, directory: Option<&str>) -> Result<PathBuf, ApiError> {
     match normalized_directory(directory)? {
-        Some(directory) => Ok(session.app_root.join(directory)),
+        Some(directory) => Ok(resolve_session_directory(session, &directory)),
         None => Ok(session.mnt_data_root.clone()),
     }
+}
+
+fn resolve_session_directory(session: &SessionState, directory: &str) -> PathBuf {
+    if directory == "mnt/data" {
+        return session.mnt_data_root.clone();
+    }
+    if let Some(relative) = directory.strip_prefix("mnt/data/") {
+        return session.mnt_data_root.join(relative);
+    }
+    if directory == "app" {
+        return session.app_root.clone();
+    }
+    if let Some(relative) = directory.strip_prefix("app/") {
+        return session.app_root.join(relative);
+    }
+    session.app_root.join(directory)
 }
 
 fn logical_file_key(directory: Option<&str>, filename: &str) -> Result<String, ApiError> {
@@ -1244,7 +1279,9 @@ fn build_command(
         }
         (None, Some(command_and_args)) => {
             if command_and_args.is_empty() {
-                return Err(ApiError::validation("execCommandAndArgs must not be empty."));
+                return Err(ApiError::validation(
+                    "execCommandAndArgs must not be empty.",
+                ));
             }
             let mut command = Command::new(&command_and_args[0]);
             command.args(&command_and_args[1..]);
@@ -1304,10 +1341,9 @@ async fn upload_file(
         .ok_or_else(|| ApiError::validation("Uploaded file must include a filename."))?
         .to_string();
     let content_type = field.content_type().map(ToOwned::to_owned);
-    let bytes = field
-        .bytes()
-        .await
-        .map_err(|error| ApiError::validation(format!("Failed to read uploaded file bytes: {error}")))?;
+    let bytes = field.bytes().await.map_err(|error| {
+        ApiError::validation(format!("Failed to read uploaded file bytes: {error}"))
+    })?;
 
     let (response_headers, payload) = state.emulator.upload_file(
         &query.identifier,
@@ -1389,7 +1425,10 @@ fn walk_directory(
     files: &mut Vec<FileRecord>,
 ) -> Result<(), ApiError> {
     for entry in fs::read_dir(root).map_err(|error| {
-        ApiError::internal(format!("Failed to read session files under '{}': {error}", root.display()))
+        ApiError::internal(format!(
+            "Failed to read session files under '{}': {error}",
+            root.display()
+        ))
     })? {
         let entry = entry.map_err(|error| {
             ApiError::internal(format!(
@@ -1441,23 +1480,19 @@ async fn serve(args: ServeArgs) {
 
 fn healthcheck(args: HealthcheckArgs) {
     let mut stream = TcpStream::connect((args.host.as_str(), args.port)).unwrap_or_else(|error| {
-        panic!(
-            "Failed to connect to session pool emulator health endpoint: {error}"
-        )
+        panic!("Failed to connect to session pool emulator health endpoint: {error}")
     });
     stream
         .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         .unwrap_or_else(|error| {
-            panic!(
-                "Failed to write the session pool health check request: {error}"
-            )
+            panic!("Failed to write the session pool health check request: {error}")
         });
     let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap_or_else(|error| {
-        panic!(
-            "Failed to read the session pool health check response: {error}"
-        )
-    });
+    stream
+        .read_to_string(&mut response)
+        .unwrap_or_else(|error| {
+            panic!("Failed to read the session pool health check response: {error}")
+        });
     assert!(
         response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"),
         "Unexpected health response: {response}"

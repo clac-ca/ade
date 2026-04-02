@@ -12,7 +12,9 @@ pnpm dev
 
 ADE opens at `http://127.0.0.1:5173`.
 
-`pnpm dev` starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host.
+`pnpm dev` builds the local sandbox-environment tarball when it is stale, starts local Azurite Blob Storage, local SQL Server, and the local session-pool emulator, runs the separate `ade-migrate` binary, then starts the Axum API and Vite web app on the host.
+
+The API owns and ships one sandbox-environment tarball. That tarball is built from `apps/ade-api/sandbox-environment/` and carried by the API image.
 
 ## What Starts Locally
 
@@ -30,6 +32,7 @@ Use these for normal local development:
 
 ```sh
 pnpm dev
+pnpm check
 pnpm dev --port 8100
 pnpm dev --no-open
 pnpm --filter @ade/web gen:api
@@ -98,14 +101,19 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 
 - `apps/ade-web` - React web app
 - `apps/ade-api` - Axum API and production web host
+- `apps/ade-api/sandbox-environment` - API-owned sandbox runtime component packaged into one tarball
 - `packages/ade-config` - installed business rules package
 - `packages/ade-engine` - runtime library and `ade` CLI used by `ade-config`
+- `packages/reverse-connect` - reusable reverse connection binary injected into the sandbox-environment tarball at build time
 - `infra/` - Azure infrastructure definitions
 - `scripts/` - root development, build, acceptance, and deployment entrypoints
 
 ## Further Docs
 
 - [docs/developer-commands.md](docs/developer-commands.md) - local development commands and defaults
+- [docs/architecture/README.md](docs/architecture/README.md) - canonical architecture docs
+- [docs/architecture/glossary.md](docs/architecture/glossary.md) - canonical terminology and definitions
+- [docs/architecture/sandbox-environment.md](docs/architecture/sandbox-environment.md) - sandbox-environment lifecycle and boundaries
 - [docs/python-packages.md](docs/python-packages.md) - Python package structure, commands, and authoring conventions
 - [docs/runtime-config.md](docs/runtime-config.md) - application runtime configuration
 - [docs/release-deployment.md](docs/release-deployment.md) - release pipeline overview

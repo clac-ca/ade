@@ -1,6 +1,7 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { buildSandboxEnvironmentAssets } from "../apps/ade-api/sandbox-environment/build";
 import { parseDevArgs } from "./lib/args";
 import { createHostBlobEnv } from "./lib/blob-env";
 import { openBrowser } from "./lib/browser";
@@ -67,9 +68,7 @@ async function terminateChildren(
 
 async function main(logger = createConsoleLogger()): Promise<void> {
   const { noOpen, port } = parseDevArgs(process.argv.slice(2));
-  await runCommand(pnpmCommand, ["package:session-bundle"], {
-    cwd: rootDir,
-  });
+  buildSandboxEnvironmentAssets(logger);
   const sessionEnv = createHostSessionPoolEnv();
   const { values: blobEnv } = createHostBlobEnv();
   const apiEnv = {

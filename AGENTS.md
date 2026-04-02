@@ -35,6 +35,7 @@ pnpm install
 pnpm deps:up
 pnpm deps:down
 pnpm dev
+pnpm check
 pnpm build
 pnpm start
 pnpm lint
@@ -43,6 +44,5 @@ pnpm format:check
 pnpm test
 pnpm test:unit
 pnpm test:acceptance
-pnpm package:python
 pnpm clean
 ```

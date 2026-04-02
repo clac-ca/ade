@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { buildSandboxEnvironmentAssets } from "../apps/ade-api/sandbox-environment/build";
 import { readOptionalTrimmedString, runMain } from "./lib/runtime";
 import { ensureDocker, runCommand } from "./lib/shell";
 
@@ -83,6 +84,7 @@ async function main(): Promise<void> {
   const metadata = readBuildMetadata(process.env);
 
   await ensureDocker(dockerCommand, "`pnpm build`");
+  buildSandboxEnvironmentAssets();
   await buildImage("ade-platform:local", ".", {
     BUILT_AT: metadata.builtAt,
     GIT_SHA: metadata.gitSha,

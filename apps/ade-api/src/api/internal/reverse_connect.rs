@@ -11,7 +11,7 @@ use axum::{
     routing::get,
 };
 
-use crate::{error::AppError, scope_session::ScopeSessionService};
+use crate::{error::AppError, sandbox_environment::SandboxEnvironmentManager};
 
 pub fn router() -> Router<crate::api::AppState> {
     Router::new().route("/reverse-connect/{channelId}", get(connect))
@@ -19,13 +19,13 @@ pub fn router() -> Router<crate::api::AppState> {
 
 async fn connect(
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
-    State(scope_session_service): State<Arc<ScopeSessionService>>,
+    State(sandbox_environment_manager): State<Arc<SandboxEnvironmentManager>>,
     Path(channel_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
     let ws = ws.map_err(|error| AppError::request(error.to_string()))?;
     let token = bearer_token(&headers)?;
-    let socket_tx = scope_session_service.claim_rendezvous(&channel_id, token)?;
+    let socket_tx = sandbox_environment_manager.claim_rendezvous(&channel_id, token)?;
     Ok(ws
         .protocols([::reverse_connect::protocol::WEBSOCKET_SUBPROTOCOL])
         .max_message_size(1024 * 1024)

@@ -274,7 +274,7 @@ export interface components {
             validationIssues: components["schemas"]["RunValidationIssue"][];
         };
         /** @enum {string} */
-        RunPhase: "executeRun" | "installPackages" | "persistOutputs" | "uploadArtifacts";
+        RunPhase: "allocate" | "prepare" | "install" | "execute";
         /** @enum {string} */
         RunStatus: "cancelled" | "failed" | "pending" | "running" | "succeeded";
         RunValidationIssue: {

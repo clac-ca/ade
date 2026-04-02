@@ -16,6 +16,16 @@ The template deploys:
 - one public Container App for the API/web host
 - one manual Azure Container Apps Job for schema migrations
 
+## Terminology Mapping
+
+Keep Azure and ADE terms separate:
+
+- Azure `session pool` is the provider resource that allocates execution capacity.
+- Azure `session` is the provider’s allocated runtime instance.
+- ADE treats that allocated provider runtime as a `sandbox environment`.
+
+Infrastructure docs should keep Azure’s provider terms accurate, while application docs should describe ADE in terms of sandbox environments, configs, and runs.
+
 The running Container App uses a system-assigned managed identity.
 The manual migration job reuses the deployment managed identity.
 
@@ -140,7 +150,7 @@ image=<image-ref>
 Choose a strong runtime session secret and keep it as a shell-local variable:
 
 ```sh
-runtimeSessionSecret="$(openssl rand -hex 32)"
+sandboxEnvironmentSecret="$(openssl rand -hex 32)"
 ```
 
 ```sh
@@ -148,7 +158,7 @@ az deployment group validate \
   --name ade-prod-initial-validate \
   --resource-group rg-ade-prod-canadacentral-002 \
   --parameters infra/environments/main.prod.bicepparam \
-  --parameters image="$image" runtimeSessionSecret="$runtimeSessionSecret"
+  --parameters image="$image" sandboxEnvironmentSecret="$sandboxEnvironmentSecret"
 ```
 
 ```sh
@@ -156,7 +166,7 @@ az deployment group create \
   --name ade-prod-initial \
   --resource-group rg-ade-prod-canadacentral-002 \
   --parameters infra/environments/main.prod.bicepparam \
-  --parameters image="$image" runtimeSessionSecret="$runtimeSessionSecret"
+  --parameters image="$image" sandboxEnvironmentSecret="$sandboxEnvironmentSecret"
 ```
 
 ### 7. Grant the deployment identity the minimum Azure RBAC it needs

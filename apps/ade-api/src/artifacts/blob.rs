@@ -18,8 +18,8 @@ use crate::error::AppError;
 
 use super::{
     ArtifactAccessGrant, ArtifactMetadata, BLOB_ACCOUNT_KEY_ENV_NAME, BLOB_ACCOUNT_URL_ENV_NAME,
-    BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME, BLOB_RUNTIME_ACCOUNT_URL_ENV_NAME, artifact_content_type,
-    format_iso_8601, normalize_artifact_path,
+    BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME, artifact_content_type, format_iso_8601,
+    normalize_artifact_path,
 };
 
 const BLOB_CORS_MAX_AGE_SECONDS: u64 = 3600;
@@ -53,7 +53,6 @@ pub(crate) struct BlobArtifactStore {
     local_cors_allowed_origins: Vec<String>,
     local_setup_complete: Mutex<bool>,
     public_account_url: Url,
-    runtime_account_url: Url,
     user_delegation_key: Mutex<Option<CachedUserDelegationKey>>,
 }
 
@@ -61,7 +60,6 @@ impl BlobArtifactStore {
     pub(super) fn new(
         account_url: String,
         public_account_url: Option<String>,
-        runtime_account_url: Option<String>,
         container: String,
         shared_key: Option<String>,
         local_cors_allowed_origins: Vec<String>,
@@ -80,9 +78,6 @@ impl BlobArtifactStore {
         };
         let public_account_url =
             parse_optional_blob_base_url(BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME, public_account_url)?
-                .unwrap_or_else(|| account_url.clone());
-        let runtime_account_url =
-            parse_optional_blob_base_url(BLOB_RUNTIME_ACCOUNT_URL_ENV_NAME, runtime_account_url)?
                 .unwrap_or_else(|| account_url.clone());
 
         Ok(Self {
@@ -104,7 +99,6 @@ impl BlobArtifactStore {
             local_cors_allowed_origins,
             local_setup_complete: Mutex::new(false),
             public_account_url,
-            runtime_account_url,
             user_delegation_key: Mutex::new(None),
         })
     }
@@ -651,41 +645,6 @@ impl BlobArtifactStore {
         .await
     }
 
-    pub(crate) async fn create_download_access(
-        &self,
-        path: &str,
-        expires_at: OffsetDateTime,
-    ) -> Result<ArtifactAccessGrant, AppError> {
-        self.ensure_local_blob_ready().await?;
-        self.create_access_grant(
-            &self.runtime_account_url,
-            path,
-            "r",
-            "GET",
-            None,
-            expires_at,
-        )
-        .await
-    }
-
-    pub(crate) async fn create_upload_access(
-        &self,
-        path: &str,
-        content_type: Option<&str>,
-        expires_at: OffsetDateTime,
-    ) -> Result<ArtifactAccessGrant, AppError> {
-        self.ensure_local_blob_ready().await?;
-        self.create_access_grant(
-            &self.runtime_account_url,
-            path,
-            "cw",
-            "PUT",
-            content_type,
-            expires_at,
-        )
-        .await
-    }
-
     pub(crate) async fn metadata(&self, path: &str) -> Result<Option<ArtifactMetadata>, AppError> {
         self.ensure_local_blob_ready().await?;
         let normalized = normalize_artifact_path(path)?;
@@ -734,6 +693,32 @@ impl BlobArtifactStore {
             .map_err(|error| {
                 AppError::io_with_source(format!("Failed to read '{normalized}'."), error)
             })
+    }
+
+    pub(crate) async fn upload_bytes(
+        &self,
+        path: &str,
+        content_type: Option<&str>,
+        content: Vec<u8>,
+    ) -> Result<ArtifactMetadata, AppError> {
+        self.ensure_local_blob_ready().await?;
+        let normalized = normalize_artifact_path(path)?;
+        let resolved_content_type = artifact_content_type(&normalized, content_type);
+        let size = content.len();
+        let mut headers = blob_request_headers(Some(&resolved_content_type))?;
+        headers.insert("x-ms-blob-type", HeaderValue::from_static("BlockBlob"));
+        self.request(
+            Method::PUT,
+            self.blob_url(&normalized)?,
+            headers,
+            Some(content),
+        )
+        .await?;
+
+        Ok(ArtifactMetadata {
+            content_type: resolved_content_type,
+            size,
+        })
     }
 
     pub(crate) async fn upload_file(
@@ -1287,7 +1272,6 @@ mod tests {
         let store = BlobArtifactStore::new(
             "https://runtime.example.com".to_string(),
             Some("https://public.example.com".to_string()),
-            Some("https://runtime.example.com".to_string()),
             "documents".to_string(),
             Some("c2hhcmVkLWtleQ==".to_string()),
             Vec::new(),

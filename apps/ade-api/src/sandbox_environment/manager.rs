@@ -20,12 +20,13 @@ use crate::{
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
     scope::Scope,
-    session_pool::{SessionExecution, SessionPoolClient},
+    session_pool::SessionExecution,
     unix_time_ms,
 };
 
 use super::{
-    bundle::{ScopeSessionId, SessionBundle, SessionBundleSource},
+    assets::{ConfigPackage, SandboxAssets, SandboxId},
+    provider::SandboxProvider,
     rendezvous::{
         PendingConnectorManager, create_rendezvous_token, generate_channel_id,
         verify_rendezvous_token,
@@ -47,17 +48,28 @@ const CONNECTOR_RENDEZVOUS_TOKEN_TTL_MS: u64 = 60_000;
 const CONNECTOR_EXECUTION_TIMEOUT_SECONDS: u64 = 3_600;
 
 #[derive(Clone)]
-pub struct ScopeSession {
+pub struct SandboxEnvironment {
     commands: mpsc::Sender<OutboundRpc>,
-    events: broadcast::Sender<ScopeSessionEvent>,
-    prepare_lock: Arc<tokio::sync::Mutex<()>>,
-    prepared_revision: Arc<tokio::sync::Mutex<Option<String>>>,
+    events: broadcast::Sender<SandboxEnvironmentEvent>,
+    ade_executable_path: String,
     python_executable_path: String,
-    run_script_path: String,
-    session_root: String,
+    root_path: String,
+    runtime_state: Arc<tokio::sync::Mutex<SandboxRuntimeState>>,
 }
 
-impl ScopeSession {
+#[derive(Default)]
+struct SandboxRuntimeState {
+    installed_config_revision: Option<String>,
+    prepared_environment_revision: Option<String>,
+}
+
+struct CapturedExec {
+    code: Option<i32>,
+    stderr: Vec<u8>,
+    stdout: Vec<u8>,
+}
+
+impl SandboxEnvironment {
     pub fn is_closed(&self) -> bool {
         self.commands.is_closed()
     }
@@ -111,7 +123,7 @@ impl ScopeSession {
             .await
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<ScopeSessionEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<SandboxEnvironmentEvent> {
         self.events.subscribe()
     }
 
@@ -119,12 +131,12 @@ impl ScopeSession {
         &self.python_executable_path
     }
 
-    pub fn run_script_path(&self) -> &str {
-        &self.run_script_path
+    pub fn ade_executable_path(&self) -> &str {
+        &self.ade_executable_path
     }
 
-    pub fn session_root(&self) -> &str {
-        &self.session_root
+    pub fn root_path(&self) -> &str {
+        &self.root_path
     }
 
     async fn notify(
@@ -144,7 +156,7 @@ impl ScopeSession {
             .map_err(|_| {
                 AppError::status(
                     axum::http::StatusCode::BAD_GATEWAY,
-                    "Scope session connector is unavailable.",
+                    "Sandbox environment connector is unavailable.",
                 )
             })
     }
@@ -168,7 +180,7 @@ impl ScopeSession {
             .map_err(|_| {
                 AppError::status(
                     axum::http::StatusCode::BAD_GATEWAY,
-                    "Scope session connector is unavailable.",
+                    "Sandbox environment connector is unavailable.",
                 )
             })?;
         match response_rx.await {
@@ -179,14 +191,14 @@ impl ScopeSession {
             )),
             Err(_) => Err(AppError::status(
                 axum::http::StatusCode::BAD_GATEWAY,
-                "Scope session connector request was cancelled.",
+                "Sandbox environment connector request was cancelled.",
             )),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub enum ScopeSessionEvent {
+pub enum SandboxEnvironmentEvent {
     Data {
         channel_id: ChannelId,
         data: Vec<u8>,
@@ -204,18 +216,18 @@ pub enum ScopeSessionEvent {
 }
 
 #[derive(Clone)]
-pub struct ScopeSessionService {
+pub struct SandboxEnvironmentManager {
     app_url: Url,
-    bundle_source: SessionBundleSource,
+    assets: SandboxAssets,
     manager: PendingConnectorManager,
-    pool_client: SessionPoolClient,
-    sessions: Arc<Mutex<HashMap<ScopeSessionId, SessionEntry>>>,
-    session_secret: String,
+    provider: SandboxProvider,
+    sessions: Arc<Mutex<HashMap<SandboxId, SessionEntry>>>,
+    sandbox_secret: String,
 }
 
 enum SessionEntry {
-    Ready(ScopeSession),
-    Starting(Vec<oneshot::Sender<Result<ScopeSession, String>>>),
+    Ready(SandboxEnvironment),
+    Starting(Vec<oneshot::Sender<Result<SandboxEnvironment, String>>>),
 }
 
 enum OutboundRpc {
@@ -230,13 +242,14 @@ enum OutboundRpc {
     },
 }
 
-impl ScopeSessionService {
+impl SandboxEnvironmentManager {
     pub fn from_env(env: &EnvBag) -> Result<Self, AppError> {
-        let app_url = read_optional_trimmed_string(env, PUBLIC_API_URL_ENV_NAME).ok_or_else(|| {
-            AppError::config(format!(
-                "Missing required environment variable: {PUBLIC_API_URL_ENV_NAME}"
-            ))
-        })?;
+        let app_url =
+            read_optional_trimmed_string(env, PUBLIC_API_URL_ENV_NAME).ok_or_else(|| {
+                AppError::config(format!(
+                    "Missing required environment variable: {PUBLIC_API_URL_ENV_NAME}"
+                ))
+            })?;
         let app_url = Url::parse(&app_url).map_err(|error| {
             AppError::config_with_source(
                 "ADE_PUBLIC_API_URL is not a valid URL.".to_string(),
@@ -252,32 +265,32 @@ impl ScopeSessionService {
             }
         }
 
-        let bundle_source = SessionBundleSource::from_env(env)?;
-        Self::new(app_url, bundle_source, SessionPoolClient::from_env(env)?)
+        let assets = SandboxAssets::from_env(env)?;
+        Self::new(app_url, assets, SandboxProvider::from_env(env)?)
     }
 
     pub(crate) fn new(
         app_url: Url,
-        bundle_source: SessionBundleSource,
-        pool_client: SessionPoolClient,
+        assets: SandboxAssets,
+        provider: SandboxProvider,
     ) -> Result<Self, AppError> {
-        let session_secret = bundle_source.session_secret().to_string();
+        let sandbox_secret = assets.sandbox_secret().to_string();
 
         Ok(Self {
             app_url,
-            bundle_source,
+            assets,
             manager: PendingConnectorManager::default(),
-            pool_client,
+            provider,
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            session_secret,
+            sandbox_secret,
         })
     }
 
     pub fn from_paths(
         app_url: &str,
         endpoint: &str,
-        session_secret: &str,
-        bundle_root: PathBuf,
+        sandbox_secret: &str,
+        environment_archive: PathBuf,
         config_root: PathBuf,
     ) -> Result<Self, AppError> {
         let app_url = Url::parse(app_url).map_err(|error| {
@@ -286,9 +299,9 @@ impl ScopeSessionService {
                 error,
             )
         })?;
-        let bundle_env = [(
-            "ADE_SCOPE_SESSION_SECRET".to_string(),
-            session_secret.to_string(),
+        let sandbox_env = [(
+            "ADE_SANDBOX_ENVIRONMENT_SECRET".to_string(),
+            sandbox_secret.to_string(),
         )]
         .into_iter()
         .collect();
@@ -300,8 +313,8 @@ impl ScopeSessionService {
         .collect();
         Self::new(
             app_url,
-            SessionBundleSource::from_paths(bundle_root, config_root, &bundle_env)?,
-            SessionPoolClient::from_env(&pool_env)?,
+            SandboxAssets::from_paths(environment_archive, config_root, &sandbox_env)?,
+            SandboxProvider::new(crate::session_pool::SessionPoolClient::from_env(&pool_env)?),
         )
     }
 
@@ -310,38 +323,58 @@ impl ScopeSessionService {
         channel_id: &str,
         token: &str,
     ) -> Result<oneshot::Sender<WebSocket>, AppError> {
-        verify_rendezvous_token(&self.session_secret, channel_id, token, unix_time_ms())?;
+        verify_rendezvous_token(&self.sandbox_secret, channel_id, token, unix_time_ms())?;
         self.manager.claim(channel_id)
     }
 
-    pub(crate) async fn ensure_ready_scope_session(
+    pub(crate) async fn ensure_ready_environment(
         &self,
         scope: &Scope,
-    ) -> Result<ScopeSession, AppError> {
-        let bundle = self.bundle_source.bundle_for_scope(scope)?;
-        let handle = self.connect_scope_session(scope, &bundle).await?;
-        self.prepare_scope_session(&handle, &bundle).await?;
+    ) -> Result<SandboxEnvironment, AppError> {
+        let handle = self.allocate(scope).await?;
+        self.prepare(scope, &handle).await?;
+        self.install(scope, &handle).await?;
         Ok(handle)
     }
 
-    async fn connect_scope_session(
+    pub(crate) async fn allocate(&self, scope: &Scope) -> Result<SandboxEnvironment, AppError> {
+        self.connect_sandbox_environment(scope).await
+    }
+
+    pub(crate) async fn prepare(
+        &self,
+        _scope: &Scope,
+        handle: &SandboxEnvironment,
+    ) -> Result<(), AppError> {
+        self.prepare_sandbox_environment(handle).await
+    }
+
+    pub(crate) async fn install(
         &self,
         scope: &Scope,
-        bundle: &SessionBundle,
-    ) -> Result<ScopeSession, AppError> {
-        let scope_session_id = self.bundle_source.scope_session_id(scope);
+        handle: &SandboxEnvironment,
+    ) -> Result<(), AppError> {
+        let config = self.assets.config_for_scope(scope)?;
+        self.install_config(scope, handle, &config).await
+    }
+
+    async fn connect_sandbox_environment(
+        &self,
+        scope: &Scope,
+    ) -> Result<SandboxEnvironment, AppError> {
+        let sandbox_id = self.assets.sandbox_id(scope);
 
         loop {
             let mut should_launch = false;
             let mut wait_rx = None;
             {
-                let mut sessions = self.sessions.lock().expect("scope session lock poisoned");
-                match sessions.get_mut(&scope_session_id) {
+                let mut sessions = self.sessions.lock().expect("sandbox lock poisoned");
+                match sessions.get_mut(&sandbox_id) {
                     Some(SessionEntry::Ready(handle)) if !handle.is_closed() => {
                         return Ok(handle.clone());
                     }
                     Some(SessionEntry::Ready(_)) => {
-                        sessions.remove(&scope_session_id);
+                        sessions.remove(&sandbox_id);
                         continue;
                     }
                     Some(SessionEntry::Starting(waiters)) => {
@@ -350,8 +383,7 @@ impl ScopeSessionService {
                         wait_rx = Some(rx);
                     }
                     None => {
-                        sessions
-                            .insert(scope_session_id.clone(), SessionEntry::Starting(Vec::new()));
+                        sessions.insert(sandbox_id.clone(), SessionEntry::Starting(Vec::new()));
                         should_launch = true;
                     }
                 }
@@ -359,28 +391,25 @@ impl ScopeSessionService {
 
             if let Some(wait_rx) = wait_rx {
                 let result = wait_rx.await.map_err(|_| {
-                    AppError::internal("Scope session startup wait channel closed unexpectedly.")
+                    AppError::internal(
+                        "Sandbox environment startup wait channel closed unexpectedly.",
+                    )
                 })?;
                 return result.map_err(AppError::unavailable);
             }
 
             if should_launch {
-                let result = self
-                    .launch_scope_session(scope, &scope_session_id, bundle)
-                    .await;
+                let result = self.launch_sandbox_environment(scope, &sandbox_id).await;
                 let mut waiters = Vec::new();
                 {
-                    let mut sessions = self.sessions.lock().expect("scope session lock poisoned");
-                    match sessions.remove(&scope_session_id) {
+                    let mut sessions = self.sessions.lock().expect("sandbox lock poisoned");
+                    match sessions.remove(&sandbox_id) {
                         Some(SessionEntry::Starting(pending)) => waiters = pending,
                         Some(SessionEntry::Ready(handle)) => return Ok(handle),
                         None => {}
                     }
                     if let Ok(handle) = result.as_ref() {
-                        sessions.insert(
-                            scope_session_id.clone(),
-                            SessionEntry::Ready(handle.clone()),
-                        );
+                        sessions.insert(sandbox_id.clone(), SessionEntry::Ready(handle.clone()));
                     }
                 }
 
@@ -403,29 +432,103 @@ impl ScopeSessionService {
         }
     }
 
-    async fn prepare_scope_session(
+    async fn prepare_sandbox_environment(
         &self,
-        handle: &ScopeSession,
-        bundle: &SessionBundle,
+        handle: &SandboxEnvironment,
     ) -> Result<(), AppError> {
-        let _guard = handle.prepare_lock.lock().await;
+        let mut runtime_state = handle.runtime_state.lock().await;
+        if runtime_state
+            .prepared_environment_revision
+            .as_ref()
+            .is_some_and(|current| current == self.assets.environment_revision())
         {
-            let prepared = handle.prepared_revision.lock().await;
-            if prepared
-                .as_ref()
-                .is_some_and(|current| current == &bundle.prepare_revision)
-            {
-                return Ok(());
-            }
+            return Ok(());
         }
 
-        let channel_id = ChannelId::new(format!("prepare-{}", Uuid::new_v4().simple()));
+        let output = self
+            .run_exec_command(
+                handle,
+                "setup",
+                format!("sh {}", shell_single_quote(self.assets.setup_script_path())),
+                "Timed out waiting for the sandbox environment to finish setup.",
+                "Sandbox environment event stream overflowed during setup.",
+                "Sandbox environment disconnected during setup.",
+            )
+            .await?;
+
+        if output.code != Some(0) {
+            return Err(AppError::status(
+                axum::http::StatusCode::BAD_GATEWAY,
+                setup_failure_message(output.code, &output.stdout, &output.stderr),
+            ));
+        }
+
+        runtime_state.prepared_environment_revision =
+            Some(self.assets.environment_revision().to_string());
+        runtime_state.installed_config_revision = None;
+        Ok(())
+    }
+
+    async fn install_config(
+        &self,
+        scope: &Scope,
+        handle: &SandboxEnvironment,
+        config: &ConfigPackage,
+    ) -> Result<(), AppError> {
+        let mut runtime_state = handle.runtime_state.lock().await;
+        if runtime_state
+            .installed_config_revision
+            .as_ref()
+            .is_some_and(|current| current == &config.install_revision)
+        {
+            return Ok(());
+        }
+
+        self.upload_config_package(scope, config).await?;
+
+        let output = self
+            .run_exec_command(
+                handle,
+                "config",
+                format!(
+                    "{} -m pip install --upgrade --no-index --find-links {} {}",
+                    shell_single_quote(handle.python_executable_path()),
+                    shell_single_quote(self.assets.base_wheelhouse_path()),
+                    shell_single_quote(&config.mounted_path),
+                ),
+                "Timed out waiting for config installation to finish.",
+                "Sandbox environment event stream overflowed during config installation.",
+                "Sandbox environment disconnected during config installation.",
+            )
+            .await?;
+
+        if output.code != Some(0) {
+            return Err(AppError::status(
+                axum::http::StatusCode::BAD_GATEWAY,
+                config_install_failure_message(output.code, &output.stdout, &output.stderr),
+            ));
+        }
+
+        runtime_state.installed_config_revision = Some(config.install_revision.clone());
+        Ok(())
+    }
+
+    async fn run_exec_command(
+        &self,
+        handle: &SandboxEnvironment,
+        channel_prefix: &str,
+        command: String,
+        timeout_message: &'static str,
+        overflow_message: &'static str,
+        disconnected_message: &'static str,
+    ) -> Result<CapturedExec, AppError> {
+        let channel_id = ChannelId::new(format!("{channel_prefix}-{}", Uuid::new_v4().simple()));
         let mut events = handle.subscribe();
         handle
             .open_channel(ChannelOpenParams {
                 channel_id: channel_id.clone(),
-                command: format!("sh {}", shell_single_quote(&bundle.prepare_script_path)),
-                cwd: Some(bundle.session_root.clone()),
+                command,
+                cwd: Some(handle.root_path().to_string()),
                 env: Default::default(),
                 kind: ::reverse_connect::protocol::ChannelKind::Exec,
                 pty: None,
@@ -442,42 +545,33 @@ impl ScopeSessionService {
             tokio::select! {
                 event = events.recv() => {
                     match event {
-                        Ok(ScopeSessionEvent::Data { channel_id: event_channel_id, data, stream }) if event_channel_id == channel_id => {
+                        Ok(SandboxEnvironmentEvent::Data { channel_id: event_channel_id, data, stream }) if event_channel_id == channel_id => {
                             match stream {
                                 ChannelStream::Stdout => stdout.extend_from_slice(&data),
                                 ChannelStream::Stderr => stderr.extend_from_slice(&data),
                                 ChannelStream::Pty => {}
                             }
                         }
-                        Ok(ScopeSessionEvent::Exit { channel_id: event_channel_id, code }) if event_channel_id == channel_id => {
-                            if code == Some(0) {
-                                let mut prepared = handle.prepared_revision.lock().await;
-                                *prepared = Some(bundle.prepare_revision.clone());
-                                return Ok(());
-                            }
-
-                            return Err(AppError::status(
-                                axum::http::StatusCode::BAD_GATEWAY,
-                                prepare_failure_message(code, &stdout, &stderr),
-                            ));
+                        Ok(SandboxEnvironmentEvent::Exit { channel_id: event_channel_id, code }) if event_channel_id == channel_id => {
+                            return Ok(CapturedExec { code, stdout, stderr });
                         }
-                        Ok(ScopeSessionEvent::Error { channel_id: Some(event_channel_id), message }) if event_channel_id == channel_id => {
+                        Ok(SandboxEnvironmentEvent::Error { channel_id: Some(event_channel_id), message }) if event_channel_id == channel_id => {
                             return Err(AppError::status(axum::http::StatusCode::BAD_GATEWAY, message));
                         }
-                        Ok(ScopeSessionEvent::Error { channel_id: None, message }) => {
+                        Ok(SandboxEnvironmentEvent::Error { channel_id: None, message }) => {
                             return Err(AppError::status(axum::http::StatusCode::BAD_GATEWAY, message));
                         }
                         Ok(_) => {}
                         Err(broadcast::error::RecvError::Lagged(_)) => {
                             return Err(AppError::status(
                                 axum::http::StatusCode::BAD_GATEWAY,
-                                "Scope session connector event stream overflowed during prepare.",
+                                overflow_message,
                             ));
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             return Err(AppError::status(
                                 axum::http::StatusCode::BAD_GATEWAY,
-                                "Scope session connector disconnected during prepare.",
+                                disconnected_message,
                             ));
                         }
                     }
@@ -486,24 +580,23 @@ impl ScopeSessionService {
                     let _ = handle.close_channel(channel_id.clone()).await;
                     return Err(AppError::status(
                         axum::http::StatusCode::BAD_GATEWAY,
-                        "Timed out waiting for the scope session to prepare.",
+                        timeout_message,
                     ));
                 }
             }
         }
     }
 
-    async fn launch_scope_session(
+    async fn launch_sandbox_environment(
         &self,
         scope: &Scope,
-        scope_session_id: &ScopeSessionId,
-        bundle: &SessionBundle,
-    ) -> Result<ScopeSession, AppError> {
-        self.upload_bundle_files(scope, bundle).await?;
+        sandbox_id: &SandboxId,
+    ) -> Result<SandboxEnvironment, AppError> {
+        self.upload_environment_archive(scope).await?;
 
-        let channel_id = generate_channel_id(&self.session_secret);
+        let channel_id = generate_channel_id(&self.sandbox_secret);
         let token = create_rendezvous_token(
-            &self.session_secret,
+            &self.sandbox_secret,
             &channel_id,
             unix_time_ms() + CONNECTOR_RENDEZVOUS_TOKEN_TTL_MS,
         );
@@ -521,16 +614,17 @@ impl ScopeSessionService {
         rendezvous_url.set_query(None);
 
         let command = render_launch_command(
-            &bundle.connector_path,
+            &self.assets.archive_remote_path(),
+            self.assets.connector_path(),
             rendezvous_url.as_ref(),
             &token,
             CONNECTOR_IDLE_SHUTDOWN_SECONDS,
         );
 
-        let pool_client = self.pool_client.clone();
-        let identifier = scope_session_id.as_str().to_string();
+        let provider = self.provider.clone();
+        let identifier = sandbox_id.as_str().to_string();
         let mut execution_task = tokio::spawn(async move {
-            pool_client
+            provider
                 .execute(
                     &identifier,
                     command,
@@ -546,17 +640,16 @@ impl ScopeSessionService {
 
         let (events_tx, _) = broadcast::channel(256);
         let (command_tx, command_rx) = mpsc::channel(256);
-        let handle = ScopeSession {
+        let handle = SandboxEnvironment {
             commands: command_tx,
             events: events_tx.clone(),
-            prepare_lock: Arc::new(tokio::sync::Mutex::new(())),
-            prepared_revision: Arc::new(tokio::sync::Mutex::new(None)),
-            python_executable_path: bundle.python_executable_path.clone(),
-            run_script_path: bundle.run_script_path.clone(),
-            session_root: bundle.session_root.clone(),
+            ade_executable_path: self.assets.ade_executable_path().to_string(),
+            python_executable_path: self.assets.python_executable_path().to_string(),
+            root_path: self.assets.root_path().to_string(),
+            runtime_state: Arc::new(tokio::sync::Mutex::new(SandboxRuntimeState::default())),
         };
         let mut ready_rx = events_tx.subscribe();
-        tokio::spawn(run_scope_session_task(
+        tokio::spawn(run_sandbox_environment_task(
             connector_socket,
             command_rx,
             events_tx,
@@ -580,7 +673,7 @@ impl ScopeSessionService {
             result = &mut socket_rx => {
                 result.map_err(|_| AppError::status(
                     axum::http::StatusCode::BAD_GATEWAY,
-                    "Scope session connector cancelled before the control channel connected.",
+                    "Sandbox environment connector cancelled before the control channel connected.",
                 ))
             }
             result = &mut *execution_task => {
@@ -591,7 +684,7 @@ impl ScopeSessionService {
                 self.manager.cancel(channel_id);
                 Err(AppError::status(
                     axum::http::StatusCode::BAD_GATEWAY,
-                    "Timed out waiting for the scope session connector to connect.",
+                    "Timed out waiting for the sandbox environment connector to connect.",
                 ))
             }
         };
@@ -604,48 +697,69 @@ impl ScopeSessionService {
         result
     }
 
-    async fn upload_bundle_files(
-        &self,
-        scope: &Scope,
-        bundle: &SessionBundle,
-    ) -> Result<(), AppError> {
-        let scope_session_id = self.bundle_source.scope_session_id(scope);
-        for file in &bundle.files {
-            let content = fs::read(&file.local_path).await.map_err(|error| {
+    async fn upload_environment_archive(&self, scope: &Scope) -> Result<(), AppError> {
+        let sandbox_id = self.assets.sandbox_id(scope);
+        let content = fs::read(self.assets.archive_local_path())
+            .await
+            .map_err(|error| {
                 AppError::io_with_source(
                     format!(
-                        "Failed to read the session bundle file '{}'.",
-                        file.local_path.display()
+                        "Failed to read the sandbox-environment archive '{}'.",
+                        self.assets.archive_local_path().display()
                     ),
                     error,
                 )
             })?;
-            let (path, filename) = split_upload_target(&file.session_path);
-            self.pool_client
-                .upload_file(
-                    scope_session_id.as_str(),
-                    path,
-                    filename,
-                    Some(file.content_type),
-                    content,
-                )
-                .await?;
-        }
+        self.provider
+            .upload_file(
+                sandbox_id.as_str(),
+                None,
+                self.assets.archive_filename(),
+                Some(self.assets.archive_content_type()),
+                content,
+            )
+            .await?;
         Ok(())
     }
 
-    pub(crate) async fn upload_scope_file(
+    async fn upload_config_package(
         &self,
         scope: &Scope,
-        session_path: String,
+        config: &ConfigPackage,
+    ) -> Result<(), AppError> {
+        let content = fs::read(&config.local_path).await.map_err(|error| {
+            AppError::io_with_source(
+                format!(
+                    "Failed to read the config package '{}'.",
+                    config.local_path.display()
+                ),
+                error,
+            )
+        })?;
+        self.provider
+            .upload_file(
+                self.assets.sandbox_id(scope).as_str(),
+                Some(&config.mounted_directory_path),
+                &config.filename,
+                Some("application/octet-stream"),
+                content,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn upload_sandbox_file(
+        &self,
+        scope: &Scope,
+        sandbox_path: String,
         content_type: &str,
         content: Vec<u8>,
     ) -> Result<(), AppError> {
-        let scope_session_id = self.bundle_source.scope_session_id(scope);
-        let (path, filename) = split_upload_target(&session_path);
-        self.pool_client
+        let sandbox_id = self.assets.sandbox_id(scope);
+        let (path, filename) = split_upload_target(&sandbox_path);
+        self.provider
             .upload_file(
-                scope_session_id.as_str(),
+                sandbox_id.as_str(),
                 path,
                 filename,
                 Some(content_type),
@@ -654,19 +768,39 @@ impl ScopeSessionService {
             .await?;
         Ok(())
     }
+
+    pub(crate) async fn download_sandbox_file(
+        &self,
+        scope: &Scope,
+        sandbox_directory: String,
+        filename: String,
+    ) -> Result<Vec<u8>, AppError> {
+        let sandbox_id = self.assets.sandbox_id(scope);
+        let directory = if sandbox_directory.is_empty() {
+            None
+        } else {
+            Some(sandbox_directory.as_str())
+        };
+        self.provider
+            .download_file(sandbox_id.as_str(), directory, &filename)
+            .await
+            .map(|result| result.value)
+    }
 }
 
 fn render_launch_command(
+    archive_path: &str,
     connector_path: &str,
     url: &str,
     bearer_token: &str,
     idle_timeout_seconds: u64,
 ) -> String {
+    let archive_path = shell_single_quote(archive_path);
     let connector_path = shell_single_quote(connector_path);
     let url = shell_single_quote(url);
     let bearer_token = shell_single_quote(bearer_token);
     format!(
-        "set -eu\nchmod 755 {connector_path}\nexec {connector_path} connect --url {url} --bearer-token {bearer_token} --idle-timeout-seconds {idle_timeout_seconds}"
+        "set -eu\ntar --keep-directory-symlink -xzf {archive_path} -C /\nchmod 755 {connector_path}\nexec {connector_path} connect --url {url} --bearer-token {bearer_token} --idle-timeout-seconds {idle_timeout_seconds}"
     )
 }
 
@@ -681,7 +815,7 @@ fn split_upload_target(path: &str) -> (Option<&str>, &str) {
     }
 }
 
-fn prepare_failure_message(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
+fn setup_failure_message(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(stdout).trim().to_string();
     if !stderr.is_empty() {
@@ -691,7 +825,22 @@ fn prepare_failure_message(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> S
         return stdout;
     }
     format!(
-        "Scope session prepare command exited with code {}.",
+        "Sandbox environment setup command exited with code {}.",
+        code.unwrap_or_default()
+    )
+}
+
+fn config_install_failure_message(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(stdout).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    if !stdout.is_empty() {
+        return stdout;
+    }
+    format!(
+        "Sandbox config installation exited with code {}.",
         code.unwrap_or_default()
     )
 }
@@ -708,7 +857,8 @@ fn startup_execution_error(
             } else if !stdout.is_empty() {
                 stdout.to_string()
             } else {
-                "Scope session connector exited before the control channel connected.".to_string()
+                "Sandbox environment connector exited before the control channel connected."
+                    .to_string()
             };
             AppError::status(axum::http::StatusCode::BAD_GATEWAY, message)
         }
@@ -721,7 +871,7 @@ fn startup_execution_error(
                 stdout.to_string()
             } else {
                 format!(
-                    "Scope session connector exited with status {}.",
+                    "Sandbox environment connector exited with status {}.",
                     execution.status
                 )
             };
@@ -730,13 +880,13 @@ fn startup_execution_error(
         Ok(Err(error)) => error,
         Err(error) => AppError::status(
             axum::http::StatusCode::BAD_GATEWAY,
-            format!("Scope session execution task failed: {error}"),
+            format!("Sandbox environment execution task failed: {error}"),
         ),
     }
 }
 
 async fn wait_for_connector_ready(
-    ready_rx: &mut broadcast::Receiver<ScopeSessionEvent>,
+    ready_rx: &mut broadcast::Receiver<SandboxEnvironmentEvent>,
 ) -> Result<(), AppError> {
     let timeout = tokio::time::sleep(CONNECTOR_READY_TIMEOUT);
     tokio::pin!(timeout);
@@ -745,21 +895,21 @@ async fn wait_for_connector_ready(
         tokio::select! {
             event = ready_rx.recv() => {
                 match event {
-                    Ok(ScopeSessionEvent::Ready(_)) => return Ok(()),
-                    Ok(ScopeSessionEvent::Error { message, .. }) => {
+                    Ok(SandboxEnvironmentEvent::Ready(_)) => return Ok(()),
+                    Ok(SandboxEnvironmentEvent::Error { message, .. }) => {
                         return Err(AppError::status(axum::http::StatusCode::BAD_GATEWAY, message));
                     }
                     Ok(_) => {}
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         return Err(AppError::status(
                             axum::http::StatusCode::BAD_GATEWAY,
-                            "Scope session connector event stream overflowed before startup completed.",
+                            "Sandbox environment event stream overflowed before startup completed.",
                         ));
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         return Err(AppError::status(
                             axum::http::StatusCode::BAD_GATEWAY,
-                            "Scope session connector closed before becoming ready.",
+                            "Sandbox environment connector closed before becoming ready.",
                         ));
                     }
                 }
@@ -767,17 +917,17 @@ async fn wait_for_connector_ready(
             _ = &mut timeout => {
                 return Err(AppError::status(
                     axum::http::StatusCode::BAD_GATEWAY,
-                    "Timed out waiting for the scope session connector to become ready.",
+                    "Timed out waiting for the sandbox environment connector to become ready.",
                 ));
             }
         }
     }
 }
 
-async fn run_scope_session_task(
+async fn run_sandbox_environment_task(
     mut socket: WebSocket,
     mut commands: mpsc::Receiver<OutboundRpc>,
-    events: broadcast::Sender<ScopeSessionEvent>,
+    events: broadcast::Sender<SandboxEnvironmentEvent>,
     mut execution_task: JoinHandle<Result<SessionExecution, AppError>>,
 ) {
     let mut request_id = 10_u64;
@@ -803,7 +953,7 @@ async fn run_scope_session_task(
                 let payload = match message.and_then(|message| serde_json::to_string(&RpcMessage::Request(message))) {
                     Ok(payload) => payload,
                     Err(error) => {
-                        let _ = events.send(ScopeSessionEvent::Error {
+                        let _ = events.send(SandboxEnvironmentEvent::Error {
                             channel_id: None,
                             message: format!("Failed to encode a reverse-connect message: {error}"),
                         });
@@ -811,9 +961,9 @@ async fn run_scope_session_task(
                     }
                 };
                 if socket.send(Message::Text(payload.into())).await.is_err() {
-                    let _ = events.send(ScopeSessionEvent::Error {
+                    let _ = events.send(SandboxEnvironmentEvent::Error {
                         channel_id: None,
-                        message: "Scope session connector disconnected.".to_string(),
+                        message: "Sandbox environment connector disconnected.".to_string(),
                     });
                     break;
                 }
@@ -836,7 +986,7 @@ async fn run_scope_session_task(
                                 }
                             }
                             Err(error) => {
-                                let _ = events.send(ScopeSessionEvent::Error {
+                                let _ = events.send(SandboxEnvironmentEvent::Error {
                                     channel_id: None,
                                     message: format!("Invalid reverse-connect message: {error}"),
                                 });
@@ -845,14 +995,14 @@ async fn run_scope_session_task(
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
-                        let _ = events.send(ScopeSessionEvent::Error {
+                        let _ = events.send(SandboxEnvironmentEvent::Error {
                             channel_id: None,
-                            message: "Scope session connector disconnected.".to_string(),
+                            message: "Sandbox environment connector disconnected.".to_string(),
                         });
                         break;
                     }
                     Some(Ok(Message::Binary(_))) => {
-                        let _ = events.send(ScopeSessionEvent::Error {
+                        let _ = events.send(SandboxEnvironmentEvent::Error {
                             channel_id: None,
                             message: "Binary reverse-connect messages are not supported.".to_string(),
                         });
@@ -860,9 +1010,11 @@ async fn run_scope_session_task(
                     }
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
                     Some(Err(error)) => {
-                        let _ = events.send(ScopeSessionEvent::Error {
+                        let _ = events.send(SandboxEnvironmentEvent::Error {
                             channel_id: None,
-                            message: format!("Scope session websocket failed: {error}"),
+                            message: format!(
+                                "Sandbox environment websocket failed: {error}"
+                            ),
                         });
                         break;
                     }
@@ -875,7 +1027,10 @@ async fn run_scope_session_task(
                         Some(if execution.stderr.trim().is_empty() {
                             let stdout = execution.stdout.trim();
                             if stdout.is_empty() {
-                                format!("Scope session connector exited with status {}.", execution.status)
+                                format!(
+                                    "Sandbox environment connector exited with status {}.",
+                                    execution.status
+                                )
                             } else {
                                 stdout.to_string()
                             }
@@ -884,10 +1039,12 @@ async fn run_scope_session_task(
                         })
                     }
                     Ok(Err(error)) => Some(error.to_string()),
-                    Err(error) => Some(format!("Scope session execution task failed: {error}")),
+                    Err(error) => Some(format!(
+                        "Sandbox environment execution task failed: {error}"
+                    )),
                 };
                 if let Some(message) = message {
-                    let _ = events.send(ScopeSessionEvent::Error {
+                    let _ = events.send(SandboxEnvironmentEvent::Error {
                         channel_id: None,
                         message,
                     });
@@ -898,7 +1055,9 @@ async fn run_scope_session_task(
     }
 
     for (_, waiter) in pending {
-        let _ = waiter.send(Err("Scope session connector disconnected.".to_string()));
+        let _ = waiter.send(Err(
+            "Sandbox environment connector disconnected.".to_string()
+        ));
     }
     let _ = socket.send(Message::Close(None)).await;
     if !execution_task.is_finished() {
@@ -909,13 +1068,13 @@ async fn run_scope_session_task(
 
 async fn handle_connector_request(
     socket: &mut WebSocket,
-    events: &broadcast::Sender<ScopeSessionEvent>,
+    events: &broadcast::Sender<SandboxEnvironmentEvent>,
     request: RequestMessage,
 ) -> Result<(), ()> {
     match request.method.as_str() {
         CONNECTOR_HELLO_METHOD => {
             let Some(id) = request.id else {
-                let _ = events.send(ScopeSessionEvent::Error {
+                let _ = events.send(SandboxEnvironmentEvent::Error {
                     channel_id: None,
                     message: "connector.hello must be a request.".to_string(),
                 });
@@ -923,7 +1082,7 @@ async fn handle_connector_request(
             };
             let response = match request.parse_params::<ConnectorHelloParams>() {
                 Ok(params) => {
-                    let _ = events.send(ScopeSessionEvent::Ready(params));
+                    let _ = events.send(SandboxEnvironmentEvent::Ready(params));
                     ResponseMessage::success(id, EmptyResult {}).expect("serializable hello ack")
                 }
                 Err(error) => ResponseMessage::invalid_params(id, error.to_string()),
@@ -940,21 +1099,21 @@ async fn handle_connector_request(
                 let data = match STANDARD.decode(&params.data) {
                     Ok(data) => data,
                     Err(error) => {
-                        let _ = events.send(ScopeSessionEvent::Error {
+                        let _ = events.send(SandboxEnvironmentEvent::Error {
                             channel_id: Some(params.channel_id),
                             message: format!("Invalid base64 channel data: {error}"),
                         });
                         return Ok(());
                     }
                 };
-                let _ = events.send(ScopeSessionEvent::Data {
+                let _ = events.send(SandboxEnvironmentEvent::Data {
                     channel_id: params.channel_id,
                     data,
                     stream: params.stream,
                 });
             }
             Err(error) => {
-                let _ = events.send(ScopeSessionEvent::Error {
+                let _ = events.send(SandboxEnvironmentEvent::Error {
                     channel_id: None,
                     message: format!("Invalid channel.data payload: {error}"),
                 });
@@ -962,13 +1121,13 @@ async fn handle_connector_request(
         },
         CHANNEL_EXIT_METHOD => match request.parse_params::<ChannelExitParams>() {
             Ok(params) => {
-                let _ = events.send(ScopeSessionEvent::Exit {
+                let _ = events.send(SandboxEnvironmentEvent::Exit {
                     channel_id: params.channel_id,
                     code: params.code,
                 });
             }
             Err(error) => {
-                let _ = events.send(ScopeSessionEvent::Error {
+                let _ = events.send(SandboxEnvironmentEvent::Error {
                     channel_id: None,
                     message: format!("Invalid channel.exit payload: {error}"),
                 });
@@ -976,13 +1135,13 @@ async fn handle_connector_request(
         },
         SESSION_ERROR_METHOD => match request.parse_params::<SessionErrorParams>() {
             Ok(params) => {
-                let _ = events.send(ScopeSessionEvent::Error {
+                let _ = events.send(SandboxEnvironmentEvent::Error {
                     channel_id: params.channel_id,
                     message: params.message,
                 });
             }
             Err(error) => {
-                let _ = events.send(ScopeSessionEvent::Error {
+                let _ = events.send(SandboxEnvironmentEvent::Error {
                     channel_id: None,
                     message: format!("Invalid session.error payload: {error}"),
                 });
@@ -998,7 +1157,7 @@ async fn handle_connector_request(
                     .await
                     .map_err(|_| ())?;
             } else {
-                let _ = events.send(ScopeSessionEvent::Error {
+                let _ = events.send(SandboxEnvironmentEvent::Error {
                     channel_id: None,
                     message: format!("Unsupported connector message '{method}'."),
                 });
@@ -1022,6 +1181,7 @@ mod tests {
     #[test]
     fn render_launch_command_quotes_shell_arguments() {
         let command = render_launch_command(
+            "/mnt/data/sandbox-environment.tar.gz",
             "/app/ade/bin/reverse-connect",
             "wss://example.test/api/internal/reverse-connect/channel?id=1&x=2",
             "1712016000000.abc123def456",
@@ -1032,6 +1192,7 @@ mod tests {
             command,
             concat!(
                 "set -eu\n",
+                "tar --keep-directory-symlink -xzf '/mnt/data/sandbox-environment.tar.gz' -C /\n",
                 "chmod 755 '/app/ade/bin/reverse-connect'\n",
                 "exec '/app/ade/bin/reverse-connect' connect ",
                 "--url 'wss://example.test/api/internal/reverse-connect/channel?id=1&x=2' ",

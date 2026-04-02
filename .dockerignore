@@ -2,6 +2,10 @@
 .github
 node_modules
 .package
+!.package
+!.package/sandbox-environment
+!.package/sandbox-environment/rootfs
+!.package/sandbox-environment/rootfs/**
 target
 python/*/dist
 apps/*/dist
