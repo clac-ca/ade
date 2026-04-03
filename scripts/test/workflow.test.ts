@@ -25,6 +25,8 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
   assert.match(workflow, /Load acceptance session-pool-emulator image/);
   assert.match(workflow, /ADE_SESSION_POOL_EMULATOR_IMAGE/);
   assert.match(workflow, /uses: docker\/build-push-action@/);
+  assert.match(workflow, /context: infra\/local\/session-pool-emulator/);
+  assert.match(workflow, /file: infra\/local\/session-pool-emulator\/Dockerfile/);
   assert.doesNotMatch(workflow, /ghcr\.io\/.*ade-sessionpool/);
   assert.doesNotMatch(workflow, /acceptance_stage:[\s\S]*pnpm build/);
 });

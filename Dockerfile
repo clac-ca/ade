@@ -34,7 +34,6 @@ RUN apk add --no-cache build-base musl-dev pkgconfig ca-certificates perl
 COPY Cargo.toml ./Cargo.toml
 COPY Cargo.lock ./Cargo.lock
 COPY apps/ade-api ./apps/ade-api
-COPY packages/reverse-connect ./packages/reverse-connect
 
 ARG SERVICE_VERSION=0.1.0
 ENV ADE_PLATFORM_VERSION="${SERVICE_VERSION}"
@@ -55,7 +54,6 @@ RUN apk add --no-cache build-base musl-dev pkgconfig ca-certificates perl
 COPY Cargo.toml ./Cargo.toml
 COPY Cargo.lock ./Cargo.lock
 COPY apps/ade-api ./apps/ade-api
-COPY packages/reverse-connect ./packages/reverse-connect
 
 RUN --mount=type=cache,id=ade-rust-target,target=/build/target,sharing=locked \
     --mount=type=cache,id=ade-rust-cargo-git,target=/usr/local/cargo/git/db,sharing=locked \

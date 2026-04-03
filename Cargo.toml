@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "apps/ade-api",
-    "packages/reverse-connect",
+    "apps/ade-api/crates/reverse-connect",
 ]
 resolver = "2"
 

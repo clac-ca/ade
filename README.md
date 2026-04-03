@@ -106,7 +106,7 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 - `apps/ade-api/sandbox-environment` - API-owned sandbox runtime component packaged into one tarball
 - `packages/ade-config` - installed business rules package
 - `packages/ade-engine` - runtime library and `ade` CLI used by `ade-config`
-- `packages/reverse-connect` - reusable reverse connection binary injected into the sandbox-environment tarball at build time
+- `apps/ade-api/crates/reverse-connect` - app-owned reverse connection crate injected into the sandbox-environment tarball at build time
 - `infra/` - Azure infrastructure definitions
 - `scripts/` - root development, build, acceptance, and deployment entrypoints
 

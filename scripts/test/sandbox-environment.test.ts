@@ -24,6 +24,13 @@ test("sandbox environment stays app-owned and does not become a package", () => 
     existsSync(join(repoRoot, "packages/sandbox-environment")),
     false,
   );
+  assert.ok(
+    existsSync(join(repoRoot, "apps/ade-api/crates/reverse-connect/Cargo.toml")),
+  );
+  assert.equal(
+    existsSync(join(repoRoot, "packages/reverse-connect/Cargo.toml")),
+    false,
+  );
 });
 
 test("sandbox-environment build stays internal to the main build flow", () => {

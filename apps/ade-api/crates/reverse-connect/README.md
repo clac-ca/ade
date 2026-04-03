@@ -1,6 +1,6 @@
 # reverse-connect
 
-`reverse-connect` is a small CLI and Rust library for opening an outbound WebSocket connection and running remote `exec` and `pty` channels over JSON-RPC 2.0.
+`reverse-connect` is an app-owned Rust crate for `ade-api`. It provides a small CLI and library for opening an outbound WebSocket connection and running remote `exec` and `pty` channels over JSON-RPC 2.0.
 
 ## How it works
 

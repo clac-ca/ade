@@ -9,7 +9,8 @@
 ├── tsconfig.scripts.json
 ├── infra/
 │   ├── local/
-│   │   └── compose.yaml
+│   │   ├── compose.yaml
+│   │   └── session-pool-emulator/
 │   ├── main.bicep
 │   ├── environments/
 │   └── modules/
@@ -24,6 +25,7 @@
 │   └── test/
 ├── apps/
 │   ├── ade-api/
+│   │   └── crates/
 │   └── ade-web/
 └── packages/
     ├── ade-engine/
@@ -37,7 +39,6 @@ pnpm deps:down
 pnpm dev
 pnpm build
 pnpm start
-pnpm lint
 pnpm format
 pnpm format:check
 pnpm test

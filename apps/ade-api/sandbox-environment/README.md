@@ -16,7 +16,7 @@ The shared sandbox environment is separate from config installation.
 
 This directory contains only app-owned runtime assets.
 
-- `reverse-connect` source code stays in `packages/reverse-connect` because it is reusable code with its own tests and binary output.
+- `reverse-connect` source code stays in `apps/ade-api/crates/reverse-connect` because it is an app-owned Rust crate built alongside `ade-api`.
 - Its Linux binary is built inside the root Dockerfile and then copied into the sandbox-environment tarball during the same build graph that produces the platform image.
 - Config wheels do not belong here because they are installed separately after prepare.
 - Generated runtime additions such as `reverse-connect`, the pinned Python runtime, and the base wheelhouse are injected at build time and written only to the tarball output.
