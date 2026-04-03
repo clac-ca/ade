@@ -25,7 +25,7 @@ Operating model:
 - On push, that same `pnpm build` path publishes the candidate image to `ghcr.io/<org>/ade-platform`, and the build leg publishes the exact image ref/digest metadata for later stages.
 - Acceptance reuses that exact immutable digest. The build leg also publishes the prebuilt local session-pool emulator image and uploads the local config-mount fixtures that acceptance needs.
 - Acceptance pulls those already-built artifacts, runs `pnpm test:acceptance --image <release-candidate-image>`, starts the same release candidate, waits for readiness, runs the full upload -> run -> SSE -> output checks, and tears the environment down. It does not rebuild the platform image or compile the session-pool emulator.
-- Release reuses that exact immutable digest, validates the Bicep deployment inputs first, passes the image to Bicep as an explicit `image=` parameter override, starts the separate migration job explicitly after deployment, tags the commit as `ade-platform-v...`, and creates the GitHub Release.
+- Release reuses that exact immutable digest, validates the Bicep deployment inputs first, passes the image to Bicep as an explicit `image=` parameter override, starts the separate migration job explicitly after deployment, tags the commit as `ade-platform-v...`, and creates the GitHub Release. If the production sandbox secret is not configured, the release stage is skipped instead of failing.
 - The app container never runs schema migrations on startup.
 
 ## Required GitHub environment variables
@@ -36,6 +36,7 @@ Create a `production` environment and set:
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
+- `ADE_SANDBOX_ENVIRONMENT_SECRET`
 
 For the one-time Azure bootstrap and first manual deployment, follow [infra/README.md](../../infra/README.md).
 

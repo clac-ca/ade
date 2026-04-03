@@ -25,6 +25,29 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
   assert.doesNotMatch(workflow, /acceptance_stage:[\s\S]*pnpm build/);
 });
 
+test("release stage only runs when its deployment secret is configured", () => {
+  const workflow = readFileSync(
+    join(
+      repoRoot,
+      ".github/workflows/platform-development-pipeline.yml",
+    ),
+    "utf8",
+  );
+
+  assert.match(
+    workflow,
+    /ADE_SANDBOX_ENVIRONMENT_SECRET: \$\{\{ secrets\.ADE_SANDBOX_ENVIRONMENT_SECRET \}\}/,
+  );
+  assert.match(
+    workflow,
+    /Skip release when sandbox secret is not configured/,
+  );
+  assert.match(
+    workflow,
+    /if: env\.ADE_SANDBOX_ENVIRONMENT_SECRET != ''/,
+  );
+});
+
 test("local dependency launcher chooses session-pool compose mode from env", () => {
   const localDeps = readFileSync(join(repoRoot, "scripts/local-deps.ts"), "utf8");
   const buildCompose = readFileSync(
