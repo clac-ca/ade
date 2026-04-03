@@ -1,8 +1,8 @@
 services:
   session-pool-emulator:
     build:
-      context: ../..
-      dockerfile: infra/local/sessionpool/Dockerfile
+      context: ./sessionpool
+      dockerfile: Dockerfile
     platform: linux/amd64
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -112,7 +112,7 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/git/db
             target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}
+          key: rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}
           restore-keys: |
             rust-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
 
@@ -136,9 +136,9 @@ jobs:
             ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-target
             ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-cargo-git
             ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-cargo-registry
-          key: ${{ format('buildkit-cargo-main-{0}-{1}-{2}', runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml'), github.sha) }}
+          key: ${{ format('buildkit-cargo-main-{0}-{1}-{2}', runner.os, hashFiles('Dockerfile', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'packages/reverse-connect/Cargo.toml'), github.sha) }}
           restore-keys: |
-            buildkit-cargo-main-${{ runner.os }}-${{ hashFiles('Dockerfile', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'infra/local/sessionpool/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}-
+            buildkit-cargo-main-${{ runner.os }}-${{ hashFiles('Dockerfile', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'packages/reverse-connect/Cargo.toml') }}-
 
       - name: Restore BuildKit Cargo cache mounts
         if: matrix.task == 'build'
@@ -178,18 +178,19 @@ jobs:
 
       - name: Build acceptance session-pool-emulator image
         if: matrix.task == 'build'
-        env:
-          SESSION_POOL_EMULATOR_IMAGE: ade-session-pool-emulator:acceptance-${{ github.sha }}
-        run: |
-          mkdir -p "${RUNNER_TEMP}/session-pool-emulator-image"
-          docker buildx build \
-            --platform linux/amd64 \
-            --cache-from "type=gha,scope=session-pool-emulator" \
-            --cache-to "type=gha,scope=session-pool-emulator,mode=max" \
-            --file infra/local/sessionpool/Dockerfile \
-            --output "type=docker,dest=${RUNNER_TEMP}/session-pool-emulator-image/session-pool-emulator-image.tar" \
-            --tag "${SESSION_POOL_EMULATOR_IMAGE}" \
-            .
+        run: mkdir -p "${RUNNER_TEMP}/session-pool-emulator-image"
+
+      - name: Package acceptance session-pool-emulator image
+        if: matrix.task == 'build'
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: infra/local/sessionpool
+          file: infra/local/sessionpool/Dockerfile
+          platforms: linux/amd64
+          tags: ade-session-pool-emulator:acceptance-${{ github.sha }}
+          outputs: type=docker,dest=${{ runner.temp }}/session-pool-emulator-image/session-pool-emulator-image.tar
+          cache-from: type=gha,scope=session-pool-emulator
+          cache-to: type=gha,scope=session-pool-emulator,mode=max
 
       - name: Prepare acceptance fixtures
         if: matrix.task == 'build'
