@@ -15,13 +15,16 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
     "utf8",
   );
 
-  assert.match(workflow, /Build acceptance session-pool image/);
+  assert.match(workflow, /Build acceptance session-pool-emulator image/);
   assert.match(workflow, /Prepare acceptance fixtures/);
   assert.match(workflow, /Upload acceptance fixtures/);
   assert.match(workflow, /Download acceptance fixtures/);
   assert.match(workflow, /path: \.package\/configs/);
-  assert.match(workflow, /Pull acceptance session-pool image/);
-  assert.match(workflow, /ADE_SESSIONPOOL_IMAGE/);
+  assert.match(workflow, /Upload acceptance session-pool-emulator image/);
+  assert.match(workflow, /Download acceptance session-pool-emulator image/);
+  assert.match(workflow, /Load acceptance session-pool-emulator image/);
+  assert.match(workflow, /ADE_SESSION_POOL_EMULATOR_IMAGE/);
+  assert.doesNotMatch(workflow, /ghcr\.io\/.*ade-sessionpool/);
   assert.doesNotMatch(workflow, /acceptance_stage:[\s\S]*pnpm build/);
 });
 
@@ -48,20 +51,20 @@ test("release stage only runs when its deployment secret is configured", () => {
   );
 });
 
-test("local dependency launcher chooses session-pool compose mode from env", () => {
+test("local dependency launcher chooses session-pool-emulator compose mode from env", () => {
   const localDeps = readFileSync(join(repoRoot, "scripts/local-deps.ts"), "utf8");
   const buildCompose = readFileSync(
-    join(repoRoot, "infra/local/compose.sessionpool.build.yaml"),
+    join(repoRoot, "infra/local/compose.session-pool-emulator.build.yaml"),
     "utf8",
   );
   const imageCompose = readFileSync(
-    join(repoRoot, "infra/local/compose.sessionpool.image.yaml"),
+    join(repoRoot, "infra/local/compose.session-pool-emulator.image.yaml"),
     "utf8",
   );
 
-  assert.match(localDeps, /compose\.sessionpool\.build\.yaml/);
-  assert.match(localDeps, /compose\.sessionpool\.image\.yaml/);
-  assert.match(localDeps, /ADE_SESSIONPOOL_IMAGE/);
+  assert.match(localDeps, /compose\.session-pool-emulator\.build\.yaml/);
+  assert.match(localDeps, /compose\.session-pool-emulator\.image\.yaml/);
+  assert.match(localDeps, /ADE_SESSION_POOL_EMULATOR_IMAGE/);
   assert.match(buildCompose, /host\.docker\.internal:host-gateway/);
   assert.match(imageCompose, /host\.docker\.internal:host-gateway/);
 });

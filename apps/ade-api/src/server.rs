@@ -335,6 +335,7 @@ mod tests {
             SandboxEnvironmentManager::from_paths(
                 "http://127.0.0.1:8000",
                 "http://127.0.0.1:9",
+                None,
                 "test-session-secret",
                 environment_archive,
             )

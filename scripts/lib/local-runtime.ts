@@ -97,7 +97,7 @@ async function startLocalRuntime(options: {
   const managedDependencies = [
     ...(usesManagedLocalBlobStorage ? ["Blob Storage"] : []),
     ...(usesManagedLocalSql ? ["SQL"] : []),
-    ...(usesManagedLocalSessionPool ? ["session pool"] : []),
+    ...(usesManagedLocalSessionPool ? ["session-pool emulator"] : []),
   ];
   const usesManagedLocalDependencies = managedDependencies.length > 0;
 

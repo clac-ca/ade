@@ -54,12 +54,9 @@ Local development uses Azurite instead of Azure Blob Storage. Azurite does not s
 
 ## Sandbox Environment Config
 
-ADE uses one shared Azure Container Apps Shell session-pool resource per environment. Local development uses a Dockerized session-pool emulator that exposes the same internal execution and file routes.
+ADE uses one shared Azure Container Apps Shell session-pool resource per environment. Local development uses a Dockerized session-pool emulator that exposes the same management-endpoint contract.
 
-The ADE API requires that session-pool config to be present at startup. The session-pool client always uses the pinned Shell data-plane API version `2025-10-02-preview`, and it always sends a Bearer header:
-
-- `*.dynamicsessions.io` uses Azure bearer-token auth for the `https://dynamicsessions.io` audience
-- any other host is treated as the local emulator and uses the built-in local bearer token
+The ADE API requires that session-pool config to be present at startup. The session-pool client always uses the pinned Shell data-plane API version `2025-10-02-preview`, always sends a Bearer header, and only knows about one provider boundary: the session-pool management endpoint.
 
 ADE intentionally follows the observed Shell pool behavior rather than the broader code-interpreter documentation when they diverge:
 
@@ -72,6 +69,7 @@ The steady-state hosted runtime settings are:
 | Name                                   | Required | Used by | Notes                                                                                       |
 | -------------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------- |
 | `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` | Yes      | API     | Base URL for the session-pool data-plane routes.                                            |
+| `ADE_SESSION_POOL_BEARER_TOKEN`        | No       | API     | Optional explicit bearer token override. Local dev and the emulator use this instead of Azure credential acquisition. |
 | `ADE_SANDBOX_ENVIRONMENT_SECRET`       | Yes      | API     | Secret used to derive deterministic sandbox identifiers from `workspaceId:configVersionId`. |
 
 ADE does not discover or build Python wheels at runtime. It relies on one fixed shared runtime artifact:
@@ -133,10 +131,11 @@ Managed local blob settings are injected as:
 - If `AZURE_SQL_CONNECTIONSTRING` is absent, they start local SQL and synthesize the container-safe connection string.
 - If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is absent, they start the local session-pool emulator and inject:
   - `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT=http://host.docker.internal:8014`
+  - `ADE_SESSION_POOL_BEARER_TOKEN=ade-local-session-token`
   - `ADE_SANDBOX_ENVIRONMENT_SECRET=ade-local-session-secret`
 - If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they require `ADE_SANDBOX_ENVIRONMENT_SECRET` to already be configured in `.env`.
 
-Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, a lifecycle policy that tiers scoped block blobs to Cool after 30 days and Archive after 180 days, and one shared session-pool endpoint. The running app gets Blob Storage RBAC so it can mint user delegation SAS, but the session runtime does not receive broad storage access.
+Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, a lifecycle policy that tiers scoped block blobs to Cool after 30 days and Archive after 180 days, and one shared session-pool endpoint. Hosted environments leave `ADE_SESSION_POOL_BEARER_TOKEN` unset so the app acquires Azure bearer tokens for the session-pool audience. The running app gets Blob Storage RBAC so it can mint user delegation SAS, but the session runtime does not receive broad storage access.
 
 ## Public Runtime API
 

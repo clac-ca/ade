@@ -13,26 +13,32 @@ const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const composeFile = fileURLToPath(
   new URL("../infra/local/compose.yaml", import.meta.url),
 );
-const sessionPoolBuildComposeFile = fileURLToPath(
-  new URL("../infra/local/compose.sessionpool.build.yaml", import.meta.url),
+const sessionPoolEmulatorBuildComposeFile = fileURLToPath(
+  new URL(
+    "../infra/local/compose.session-pool-emulator.build.yaml",
+    import.meta.url,
+  ),
 );
-const sessionPoolImageComposeFile = fileURLToPath(
-  new URL("../infra/local/compose.sessionpool.image.yaml", import.meta.url),
+const sessionPoolEmulatorImageComposeFile = fileURLToPath(
+  new URL(
+    "../infra/local/compose.session-pool-emulator.image.yaml",
+    import.meta.url,
+  ),
 );
 
 function readComposeFiles(
   env: Record<string, string | undefined>,
 ): readonly string[] {
-  const sessionPoolImage = readOptionalTrimmedString(
+  const sessionPoolEmulatorImage = readOptionalTrimmedString(
     env,
-    "ADE_SESSIONPOOL_IMAGE",
+    "ADE_SESSION_POOL_EMULATOR_IMAGE",
   );
 
   return [
     composeFile,
-    sessionPoolImage
-      ? sessionPoolImageComposeFile
-      : sessionPoolBuildComposeFile,
+    sessionPoolEmulatorImage
+      ? sessionPoolEmulatorImageComposeFile
+      : sessionPoolEmulatorBuildComposeFile,
   ];
 }
 
@@ -81,7 +87,7 @@ async function upLocalDependencies(): Promise<void> {
     "--wait",
     "azurite",
     "sqlserver",
-    "sessionpool",
+    "session-pool-emulator",
   ]);
 }
 
@@ -94,7 +100,11 @@ async function downLocalDependencies(
 }
 
 async function readLocalDependencyLogs(
-  services: readonly string[] = ["azurite", "sqlserver", "sessionpool"],
+  services: readonly string[] = [
+    "azurite",
+    "sqlserver",
+    "session-pool-emulator",
+  ],
 ): Promise<string> {
   const composeFiles = readComposeFiles(process.env);
   const { stdout } = await runCommandCapture(
@@ -129,12 +139,16 @@ async function main(logger = createConsoleLogger()): Promise<void> {
 
   if (command === "up") {
     await upLocalDependencies();
-    logger.info("ADE local Blob Storage, SQL, and session pool are running");
+    logger.info(
+      "ADE local Blob Storage, SQL, and session-pool emulator are running",
+    );
     return;
   }
 
   await downLocalDependencies();
-  logger.info("ADE local Blob Storage, SQL, and session pool are stopped");
+  logger.info(
+    "ADE local Blob Storage, SQL, and session-pool emulator are stopped",
+  );
 }
 
 export { downLocalDependencies, readLocalDependencyLogs, upLocalDependencies };

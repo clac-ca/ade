@@ -7,6 +7,7 @@ const localBlobContainerName = "documents";
 const localBlobPort = 10000;
 const localComposeProjectName = "ade-local";
 const localSessionPoolPort = 8014;
+const localSessionPoolBearerToken = "ade-local-session-token";
 const localSessionPoolSecret = "ade-local-session-secret";
 const localSqlPassword = "AdeLocal1!adeclean";
 const localSqlPort = 8013;
@@ -72,6 +73,7 @@ export {
   localBlobContainerName,
   localBlobPort,
   localComposeProjectName,
+  localSessionPoolBearerToken,
   localSessionPoolPort,
   localSessionPoolSecret,
   localSqlPassword,

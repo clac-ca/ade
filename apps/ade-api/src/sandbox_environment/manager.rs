@@ -259,6 +259,7 @@ impl SandboxEnvironmentManager {
     pub fn from_paths(
         app_url: &str,
         endpoint: &str,
+        bearer_token: Option<&str>,
         sandbox_secret: &str,
         environment_archive: PathBuf,
     ) -> Result<Self, AppError> {
@@ -274,11 +275,18 @@ impl SandboxEnvironmentManager {
         )]
         .into_iter()
         .collect();
-        let pool_env = [(
-            "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
-            endpoint.to_string(),
-        )]
+        let pool_env = [
+            (
+                "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT".to_string(),
+                endpoint.to_string(),
+            ),
+            (
+                "ADE_SESSION_POOL_BEARER_TOKEN".to_string(),
+                bearer_token.unwrap_or_default().to_string(),
+            ),
+        ]
         .into_iter()
+        .filter(|(_, value)| !value.is_empty())
         .collect();
         Self::new(
             app_url,

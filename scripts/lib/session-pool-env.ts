@@ -5,11 +5,13 @@ import {
   createLocalContainerSessionPoolManagementEndpoint,
   createLocalSessionPoolManagementEndpoint,
   localContainerAppUrl,
+  localSessionPoolBearerToken,
   localSessionPoolSecret,
 } from "./dev-config";
 import { readOptionalTrimmedString } from "./runtime";
 
 const appUrlEnvName = "ADE_PUBLIC_API_URL";
+const bearerTokenEnvName = "ADE_SESSION_POOL_BEARER_TOKEN";
 const managementEndpointEnvName = "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT";
 const legacySessionSecretEnvName = "ADE_SCOPE_SESSION_SECRET";
 const sessionSecretEnvName = "ADE_SANDBOX_ENVIRONMENT_SECRET";
@@ -40,11 +42,17 @@ function readRequiredEnv(env: NodeJS.ProcessEnv, name: string): string {
 
 function createSessionPoolValues(options: {
   appUrl: string;
+  bearerToken?: string;
   managementEndpoint: string;
   sessionSecret: string;
 }): Record<string, string> {
   return {
     [appUrlEnvName]: options.appUrl,
+    ...(options.bearerToken
+      ? {
+          [bearerTokenEnvName]: options.bearerToken,
+        }
+      : {}),
     [managementEndpointEnvName]: options.managementEndpoint,
     [sessionSecretEnvName]: options.sessionSecret,
   };
@@ -59,6 +67,7 @@ function createHostSessionPoolEnv(
 
   return createSessionPoolValues({
     appUrl: options.appUrl ?? localContainerAppUrl,
+    bearerToken: localSessionPoolBearerToken,
     managementEndpoint: createLocalSessionPoolManagementEndpoint(),
     sessionSecret: localSessionPoolSecret,
   });
@@ -87,11 +96,14 @@ function createContainerSessionPoolEnv(
       usesManagedLocalSessionPool: true,
       values: createSessionPoolValues({
         appUrl,
+        bearerToken: localSessionPoolBearerToken,
         managementEndpoint: createLocalContainerSessionPoolManagementEndpoint(),
         sessionSecret: localSessionPoolSecret,
       }),
     };
   }
+
+  const bearerToken = readOptionalTrimmedString(env, bearerTokenEnvName);
 
   return {
     usesManagedLocalSessionPool: false,
@@ -99,6 +111,7 @@ function createContainerSessionPoolEnv(
       appUrl,
       managementEndpoint: configuredManagementEndpoint,
       sessionSecret: readRequiredEnv(env, sessionSecretEnvName),
+      ...(bearerToken ? { bearerToken } : {}),
     }),
   };
 }

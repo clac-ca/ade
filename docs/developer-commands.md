@@ -62,7 +62,7 @@ pnpm deps:up
 pnpm deps:down
 ```
 
-`pnpm deps:up` reuses the existing local infrastructure stack when it is already running and does not force a session-pool image rebuild.
+`pnpm deps:up` reuses the existing local infrastructure stack when it is already running and does not force a session-pool-emulator image rebuild.
 
 `pnpm clean` removes local build output, Python virtualenvs and locks, ADE local containers, Compose state, and the `ade-platform:local` image.
 
@@ -91,7 +91,7 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 - `pnpm dev` exports the local shared sandbox-environment tarball to `.package/sandbox-environment.tar.gz` for the host API.
 - `pnpm build` assembles the same sandbox-environment tarball inside the platform image instead of writing it to `.package/`.
 - Local host and managed-local runtime commands also stage emulator config mounts under `.package/configs`.
-- ADE uses Azure session pools only when the Azure session-pool settings are explicitly configured; otherwise it falls back to the local emulator.
+- The app always talks to `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT`; local commands inject the emulator endpoint and bearer token when you have not configured Azure.
 - See [runtime-config.md](runtime-config.md) for the full connection string and hosted runtime rules.
 
 ## Standard Runtime Endpoints

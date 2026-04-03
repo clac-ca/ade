@@ -1,9 +1,8 @@
 services:
-  sessionpool:
-    build:
-      context: ../..
-      dockerfile: infra/local/sessionpool/Dockerfile
+  session-pool-emulator:
+    image: ${ADE_SESSION_POOL_EMULATOR_IMAGE:?ADE_SESSION_POOL_EMULATOR_IMAGE must be set}
     platform: linux/amd64
+    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

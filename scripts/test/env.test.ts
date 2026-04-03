@@ -19,6 +19,7 @@ import {
   localBlobPort,
   localContainerAppUrl,
   localComposeProjectName,
+  localSessionPoolBearerToken,
   localSessionPoolPort,
   localSessionPoolSecret,
   localSqlPassword,
@@ -43,6 +44,7 @@ test("local development defaults are fixed and predictable", () => {
   assert.equal(localComposeProjectName, "ade-local");
   assert.equal(localContainerAppUrl, "http://host.docker.internal:8000");
   assert.equal(localSessionPoolPort, 8014);
+  assert.equal(localSessionPoolBearerToken, "ade-local-session-token");
   assert.equal(localSessionPoolSecret, "ade-local-session-secret");
   assert.equal(localSqlPort, 8013);
   assert.equal(localSqlPassword, "AdeLocal1!adeclean");
@@ -109,6 +111,7 @@ test("configured session pool env keeps the app url fallback boring and local", 
   assert.deepEqual(
     createContainerSessionPoolEnv(
       {
+        ADE_SESSION_POOL_BEARER_TOKEN: "ade-local-session-token",
         ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
           "https://example.dynamicsessions.io",
         ADE_SANDBOX_ENVIRONMENT_SECRET: "secret",
@@ -119,6 +122,7 @@ test("configured session pool env keeps the app url fallback boring and local", 
       usesManagedLocalSessionPool: false,
       values: {
         ADE_PUBLIC_API_URL: "http://host.docker.internal:8000",
+        ADE_SESSION_POOL_BEARER_TOKEN: "ade-local-session-token",
         ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
           "https://example.dynamicsessions.io",
         ADE_SANDBOX_ENVIRONMENT_SECRET: "secret",

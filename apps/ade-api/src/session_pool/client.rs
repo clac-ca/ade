@@ -17,7 +17,8 @@ use crate::{
 
 pub(crate) const AZURE_SHELL_API_VERSION: &str = "2025-10-02-preview";
 const DEFAULT_AZURE_SESSION_AUDIENCE: &str = "https://dynamicsessions.io";
-const DEFAULT_LOCAL_SESSION_POOL_BEARER_TOKEN: &str = "ade-local-session-token";
+const SESSION_POOL_BEARER_TOKEN_ENV_NAME: &str = "ADE_SESSION_POOL_BEARER_TOKEN";
+const SESSION_POOL_MANAGEMENT_ENDPOINT_ENV_NAME: &str = "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT";
 const SESSION_POOL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_POOL_DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const SESSION_POOL_EXECUTION_TIMEOUT_BUFFER_SECONDS: u64 = 30;
@@ -57,20 +58,18 @@ pub(crate) struct SessionOperationResult<T> {
 pub(crate) struct SessionPoolClient {
     client: Client,
     pool_management_endpoint: Url,
-    uses_azure_auth: bool,
+    bearer_token_override: Option<String>,
 }
 
 impl SessionPoolClient {
     pub(crate) fn from_env(env: &EnvBag) -> Result<Self, AppError> {
         let pool_management_endpoint =
-            read_optional_trimmed_string(env, "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT").ok_or_else(
-                || {
-                    AppError::config(
-                "Missing required environment variable: ADE_SESSION_POOL_MANAGEMENT_ENDPOINT"
-                    .to_string(),
-            )
-                },
-            )?;
+            read_optional_trimmed_string(env, SESSION_POOL_MANAGEMENT_ENDPOINT_ENV_NAME)
+                .ok_or_else(|| {
+                    AppError::config(format!(
+                        "Missing required environment variable: {SESSION_POOL_MANAGEMENT_ENDPOINT_ENV_NAME}"
+                    ))
+                })?;
 
         let mut endpoint = Url::parse(&format!(
             "{}/",
@@ -85,9 +84,6 @@ impl SessionPoolClient {
         endpoint.path_segments_mut().map_err(|()| {
             AppError::config("Session pool endpoint cannot be used as a base URL.".to_string())
         })?;
-        let uses_azure_auth = endpoint.host_str().is_some_and(|host| {
-            host == "dynamicsessions.io" || host.ends_with(".dynamicsessions.io")
-        });
 
         Ok(Self {
             client: Client::builder()
@@ -100,7 +96,10 @@ impl SessionPoolClient {
                     )
                 })?,
             pool_management_endpoint: endpoint,
-            uses_azure_auth,
+            bearer_token_override: read_optional_trimmed_string(
+                env,
+                SESSION_POOL_BEARER_TOKEN_ENV_NAME,
+            ),
         })
     }
 
@@ -211,9 +210,9 @@ impl SessionPoolClient {
             query_pairs,
         );
         let request = self.client.request(method, url);
-        let bearer_token = match self.uses_azure_auth {
-            true => data_plane_token().await?,
-            false => DEFAULT_LOCAL_SESSION_POOL_BEARER_TOKEN.to_string(),
+        let bearer_token = match &self.bearer_token_override {
+            Some(token) => token.clone(),
+            None => data_plane_token().await?,
         };
 
         Ok(request.bearer_auth(bearer_token))
@@ -488,7 +487,12 @@ mod tests {
     use axum::response::IntoResponse;
     use reqwest::{StatusCode as ReqwestStatusCode, Url};
 
-    use super::{map_session_pool_http_error, session_pool_url};
+    use crate::config::EnvBag;
+
+    use super::{
+        SESSION_POOL_BEARER_TOKEN_ENV_NAME, SessionPoolClient, map_session_pool_http_error,
+        session_pool_url,
+    };
 
     #[test]
     fn session_pool_http_errors_preserve_upstream_status_codes() {
@@ -529,5 +533,37 @@ mod tests {
             url.as_str(),
             "https://example.com/session-pool/files?identifier=cfg-123&api-version=2025-10-02-preview&recursive=true"
         );
+    }
+
+    fn env(entries: &[(&str, &str)]) -> EnvBag {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn explicit_bearer_token_override_is_used_without_host_inspection() {
+        let client = SessionPoolClient::from_env(&env(&[
+            (
+                "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT",
+                "https://example.dynamicsessions.io",
+            ),
+            (SESSION_POOL_BEARER_TOKEN_ENV_NAME, "local-token"),
+        ]))
+        .unwrap();
+
+        assert_eq!(client.bearer_token_override.as_deref(), Some("local-token"));
+    }
+
+    #[test]
+    fn session_pool_client_defaults_to_azure_credentials_when_no_override_is_set() {
+        let client = SessionPoolClient::from_env(&env(&[(
+            "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT",
+            "http://127.0.0.1:8014",
+        )]))
+        .unwrap();
+
+        assert_eq!(client.bearer_token_override, None);
     }
 }

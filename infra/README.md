@@ -3,6 +3,12 @@
 ADE uses one Azure template: [`main.bicep`](main.bicep).
 Local laptop and CI dependency services live separately in [`local/compose.yaml`](local/compose.yaml); that file is not part of the Azure deployment model, but it mirrors the production storage, SQL, and session-pool split with Azurite, SQL Server, and the local session-pool emulator.
 
+The running app is configured with one provider boundary only:
+
+- `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT`
+
+In Azure that value comes from the session pool's `poolManagementEndpoint`. Locally it points at the session-pool emulator, which mirrors the same management-endpoint contract.
+
 The template deploys:
 
 - one deployment user-assigned managed identity

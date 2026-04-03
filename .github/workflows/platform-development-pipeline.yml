@@ -34,7 +34,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   IMAGE_NAME: ${{ github.repository_owner }}/ade-platform
   REGISTRY: ghcr.io
-  SESSIONPOOL_IMAGE_NAME: ${{ github.repository_owner }}/ade-sessionpool
 
 jobs:
   commit_stage:
@@ -177,18 +176,19 @@ jobs:
           ADE_SERVICE_VERSION: ${{ steps.version.outputs.release_version }}
         run: pnpm build
 
-      - name: Build acceptance session-pool image
+      - name: Build acceptance session-pool-emulator image
         if: matrix.task == 'build'
         env:
-          SESSIONPOOL_IMAGE: ${{ format('{0}/{1}:sha-{2}', env.REGISTRY, env.SESSIONPOOL_IMAGE_NAME, github.sha) }}
+          SESSION_POOL_EMULATOR_IMAGE: ade-session-pool-emulator:acceptance-${{ github.sha }}
         run: |
+          mkdir -p "${RUNNER_TEMP}/session-pool-emulator-image"
           docker buildx build \
             --platform linux/amd64 \
-            --cache-from "type=registry,ref=${{ env.REGISTRY }}/${{ env.SESSIONPOOL_IMAGE_NAME }}:buildcache" \
-            --cache-to "type=registry,ref=${{ env.REGISTRY }}/${{ env.SESSIONPOOL_IMAGE_NAME }}:buildcache,mode=max" \
+            --cache-from "type=gha,scope=session-pool-emulator" \
+            --cache-to "type=gha,scope=session-pool-emulator,mode=max" \
             --file infra/local/sessionpool/Dockerfile \
-            --push \
-            --tag "${SESSIONPOOL_IMAGE}" \
+            --output "type=docker,dest=${RUNNER_TEMP}/session-pool-emulator-image/session-pool-emulator-image.tar" \
+            --tag "${SESSION_POOL_EMULATOR_IMAGE}" \
             .
 
       - name: Prepare acceptance fixtures
@@ -220,13 +220,10 @@ jobs:
         if: matrix.task == 'build'
         env:
           IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-          SESSIONPOOL_IMAGE_TAG: ${{ format('{0}/{1}:sha-{2}', env.REGISTRY, env.SESSIONPOOL_IMAGE_NAME, github.sha) }}
         run: |
           digest="$(docker buildx imagetools inspect "${IMAGE_REF}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          sessionpool_digest="$(docker buildx imagetools inspect "${SESSIONPOOL_IMAGE_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
           {
             echo "RELEASE_CANDIDATE_IMAGE=${IMAGE_REF}@${digest}"
-            echo "SESSIONPOOL_IMAGE=${SESSIONPOOL_IMAGE_TAG}@${sessionpool_digest}"
             echo "RELEASE_TAG=${{ steps.version.outputs.release_tag }}"
             echo "RELEASE_TITLE=${{ steps.version.outputs.release_title }}"
             echo "RELEASE_VERSION=${{ steps.version.outputs.release_version }}"
@@ -246,6 +243,14 @@ jobs:
         with:
           name: acceptance-fixtures
           path: .package/configs
+          if-no-files-found: error
+
+      - name: Upload acceptance session-pool-emulator image
+        if: matrix.task == 'build'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: acceptance-session-pool-emulator-image
+          path: ${{ runner.temp }}/session-pool-emulator-image/session-pool-emulator-image.tar
           if-no-files-found: error
 
   acceptance_stage:
@@ -296,18 +301,24 @@ jobs:
           name: acceptance-fixtures
           path: .package/configs
 
+      - name: Download acceptance session-pool-emulator image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: acceptance-session-pool-emulator-image
+          path: ${{ runner.temp }}/session-pool-emulator-image
+
       - name: Load release candidate metadata
         run: cat "${{ runner.temp }}/release-candidate/release-candidate.env" >> "${GITHUB_ENV}"
 
       - name: Pull release candidate
         run: docker pull "${RELEASE_CANDIDATE_IMAGE}"
 
-      - name: Pull acceptance session-pool image
-        run: docker pull "${SESSIONPOOL_IMAGE}"
+      - name: Load acceptance session-pool-emulator image
+        run: docker load --input "${{ runner.temp }}/session-pool-emulator-image/session-pool-emulator-image.tar"
 
       - name: Run acceptance tests
         env:
-          ADE_SESSIONPOOL_IMAGE: ${{ env.SESSIONPOOL_IMAGE }}
+          ADE_SESSION_POOL_EMULATOR_IMAGE: ade-session-pool-emulator:acceptance-${{ github.sha }}
         run: pnpm test:acceptance --image "${RELEASE_CANDIDATE_IMAGE}"
 
   release_stage:

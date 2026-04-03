@@ -19,7 +19,7 @@ ADE’s runtime is split into five responsibilities:
 - sandbox environment preparation: whether setup has already been applied for the current revision
 - config installation: what must be installed for the selected config
 - run execution: what command runs, what gets staged, and how outputs/logs are collected
-- provider adapter: how ADE talks to Azure session pools and the local emulator
+- provider adapter: how ADE talks to the session-pool management endpoint provided by Azure or the local emulator
 
 ## Environment Definition
 
@@ -62,3 +62,9 @@ ADE maps that provider runtime into its own concept:
 - ADE runtime concept: `sandbox environment`
 
 That keeps Azure terminology accurate at the boundary without making ADE’s internal model provider-led.
+
+The API only knows one provider boundary:
+
+- `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT`
+
+That endpoint can point at Azure's `poolManagementEndpoint` or the local session-pool emulator. The API does not switch between separate local and Azure modes.

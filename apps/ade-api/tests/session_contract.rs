@@ -597,6 +597,10 @@ fn app_with_session_and_url_and_run_limit(
             endpoint.to_string(),
         ),
         (
+            "ADE_SESSION_POOL_BEARER_TOKEN".to_string(),
+            LOCAL_SESSION_POOL_BEARER_TOKEN.to_string(),
+        ),
+        (
             "ADE_SANDBOX_ENVIRONMENT_SECRET".to_string(),
             "test-session-secret".to_string(),
         ),
@@ -624,6 +628,7 @@ fn app_with_session_and_url_and_run_limit(
         SandboxEnvironmentManager::from_paths(
             app_url,
             endpoint,
+            Some(LOCAL_SESSION_POOL_BEARER_TOKEN),
             "test-session-secret",
             environment_archive,
         )

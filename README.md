@@ -87,7 +87,7 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 
 `pnpm start` and managed `pnpm test:acceptance` use `ade-platform:local` by default, so build first unless you pass `--image`.
 
-`pnpm dev` does not read `.env`. `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local Azurite Blob Storage, local SQL, and the local session-pool emulator themselves. For connection string and hosted runtime details, see [docs/runtime-config.md](docs/runtime-config.md).
+`pnpm dev` does not read `.env`. `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local Azurite Blob Storage, local SQL, and the local session-pool emulator themselves. The app always uses `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT`; local commands inject the emulator endpoint and bearer token when Azure is not configured. For connection string and hosted runtime details, see [docs/runtime-config.md](docs/runtime-config.md).
 
 ## Requirements
 
