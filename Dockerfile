@@ -40,9 +40,9 @@ COPY packages/reverse-connect ./packages/reverse-connect
 ARG SERVICE_VERSION=0.1.0
 ENV ADE_PLATFORM_VERSION="${SERVICE_VERSION}"
 
-RUN --mount=type=cache,id=ade-rust-target,target=/build/target \
-    --mount=type=cache,id=ade-rust-cargo-git,target=/usr/local/cargo/git/db \
-    --mount=type=cache,id=ade-rust-cargo-registry,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,id=ade-rust-target,target=/build/target,sharing=locked \
+    --mount=type=cache,id=ade-rust-cargo-git,target=/usr/local/cargo/git/db,sharing=locked \
+    --mount=type=cache,id=ade-rust-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --locked --release -p ade-api --bin ade-api --bin ade-migrate \
     && install -Dm755 /build/target/release/ade-api /build/bin/ade-api \
     && install -Dm755 /build/target/release/ade-migrate /build/bin/ade-migrate
@@ -59,9 +59,9 @@ COPY apps/ade-api ./apps/ade-api
 COPY infra/local/sessionpool ./infra/local/sessionpool
 COPY packages/reverse-connect ./packages/reverse-connect
 
-RUN --mount=type=cache,id=ade-rust-target,target=/build/target \
-    --mount=type=cache,id=ade-rust-cargo-git,target=/usr/local/cargo/git/db \
-    --mount=type=cache,id=ade-rust-cargo-registry,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,id=ade-rust-target,target=/build/target,sharing=locked \
+    --mount=type=cache,id=ade-rust-cargo-git,target=/usr/local/cargo/git/db,sharing=locked \
+    --mount=type=cache,id=ade-rust-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --locked --release -p reverse-connect --bin reverse-connect \
     && install -Dm755 /build/target/release/reverse-connect /build/bin/reverse-connect
 
