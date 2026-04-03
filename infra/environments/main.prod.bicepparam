@@ -13,11 +13,11 @@ param virtualNetworkName = 'vnet-ade-prod-canadacentral-002'
 param sqlServerName = 'sql-ade-prod-cc-002'
 param sqlDatabaseName = 'sqldb-ade-prod-cc-002'
 param storageAccountName = 'stadeprodcc002'
+param keyVaultName = 'kv-ade-prod-cc-002'
 param blobContainerName = 'documents'
 param tags = {
   environment: 'prod'
 }
 param appMinReplicas = 0
 param appName = 'ca-ade-prod-canadacentral-002'
-param sandboxEnvironmentSecret = 'replace-at-deploy-time'
 param sessionPoolName = 'sp-ade-prod-canadacentral-002'

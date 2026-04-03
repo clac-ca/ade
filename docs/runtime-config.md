@@ -70,7 +70,7 @@ The steady-state hosted runtime settings are:
 | -------------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------- |
 | `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` | Yes      | API     | Base URL for the session-pool data-plane routes.                                            |
 | `ADE_SESSION_POOL_BEARER_TOKEN`        | No       | API     | Optional explicit bearer token override. Local dev and the emulator use this instead of Azure credential acquisition. |
-| `ADE_SANDBOX_ENVIRONMENT_SECRET`       | Yes      | API     | Secret used to derive deterministic sandbox identifiers from `workspaceId:configVersionId`. |
+| `ADE_SANDBOX_ENVIRONMENT_SECRET`       | No       | API     | Stable secret used to derive deterministic sandbox identifiers from `workspaceId:configVersionId`. Hosted environments should provide it through the Container App secret store. |
 
 ADE does not discover or build Python wheels at runtime. It relies on one fixed shared runtime artifact:
 
@@ -80,6 +80,8 @@ ADE does not discover or build Python wheels at runtime. It relies on one fixed 
 The sandbox-environment tarball contains the shared connector binary, `setup.sh`, the pinned Python runtime already laid out under `/app/ade/python/current`, and the base wheelhouse used to satisfy `ade-config` dependencies such as `ade-engine`. `setup.sh` does not fetch Python from the internet.
 
 ADE prepares the shared sandbox environment first, then installs the selected config as a separate runtime step. The API uploads the tarball, extracts it, starts `reverse-connect`, runs `setup.sh`, installs the mounted config wheel directly from `/mnt/data/ade/configs/<workspaceId>/<configVersionId>/`, and executes `ade process` directly.
+
+If `ADE_SANDBOX_ENVIRONMENT_SECRET` is missing at startup, ADE logs one warning and generates a process-local fallback secret. That keeps local ad hoc runs simple, but hosted environments should still provide one stable shared secret so multiple replicas derive the same sandbox identifiers and reverse-connect tokens.
 
 ADE does not support a migration-on-startup toggle. `ade-api` never runs migrations on startup, and `ade-migrate` is the only supported migration entrypoint.
 
@@ -133,9 +135,9 @@ Managed local blob settings are injected as:
   - `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT=http://host.docker.internal:8014`
   - `ADE_SESSION_POOL_BEARER_TOKEN=ade-local-session-token`
   - `ADE_SANDBOX_ENVIRONMENT_SECRET=ade-local-session-secret`
-- If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they require `ADE_SANDBOX_ENVIRONMENT_SECRET` to already be configured in `.env`.
+- If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they pass through `ADE_SANDBOX_ENVIRONMENT_SECRET` when configured and otherwise let the app generate a fallback secret at startup.
 
-Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, a lifecycle policy that tiers scoped block blobs to Cool after 30 days and Archive after 180 days, and one shared session-pool endpoint. Hosted environments leave `ADE_SESSION_POOL_BEARER_TOKEN` unset so the app acquires Azure bearer tokens for the session-pool audience. The running app gets Blob Storage RBAC so it can mint user delegation SAS, but the session runtime does not receive broad storage access.
+Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, a lifecycle policy that tiers scoped block blobs to Cool after 30 days and Archive after 180 days, one shared session-pool endpoint, and a Key Vault that stores the sandbox environment secret. The Container App reads `ADE_SANDBOX_ENVIRONMENT_SECRET` from that Key Vault secret reference, hosted environments leave `ADE_SESSION_POOL_BEARER_TOKEN` unset so the app acquires Azure bearer tokens for the session-pool audience, and the running app gets Blob Storage RBAC so it can mint user delegation SAS. The session runtime does not receive broad storage access.
 
 ## Public Runtime API
 

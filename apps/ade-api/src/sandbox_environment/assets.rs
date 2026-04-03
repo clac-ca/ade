@@ -5,6 +5,7 @@ use std::{
 
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::{
     config::{EnvBag, read_optional_trimmed_string},
@@ -13,7 +14,6 @@ use crate::{
 };
 
 const DEFAULT_SANDBOX_ENVIRONMENT_ARCHIVE_PATH: &str = ".package/sandbox-environment.tar.gz";
-const LEGACY_SANDBOX_SECRET_ENV_NAME: &str = "ADE_SCOPE_SESSION_SECRET";
 const SANDBOX_CONFIG_ROOT_PATH: &str = "/mnt/data/ade/configs";
 const PYTHON_EXECUTABLE_PATH: &str = "/app/ade/python/current/bin/python3";
 const ADE_EXECUTABLE_PATH: &str = "/app/ade/python/current/bin/ade";
@@ -129,13 +129,17 @@ struct FileArtifact {
 }
 
 fn read_sandbox_secret(env: &EnvBag) -> Result<String, AppError> {
-    read_optional_trimmed_string(env, SANDBOX_SECRET_ENV_NAME)
-        .or_else(|| read_optional_trimmed_string(env, LEGACY_SANDBOX_SECRET_ENV_NAME))
-        .ok_or_else(|| {
-            AppError::config(format!(
-                "Missing required environment variable: {SANDBOX_SECRET_ENV_NAME}"
-            ))
-        })
+    Ok(read_optional_trimmed_string(env, SANDBOX_SECRET_ENV_NAME).unwrap_or_else(|| {
+        tracing::warn!(
+            environment_variable = SANDBOX_SECRET_ENV_NAME,
+            "Sandbox environment secret is not configured; generating a process-local fallback."
+        );
+        generate_sandbox_secret()
+    }))
+}
+
+fn generate_sandbox_secret() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 fn resolve_file_from_path(
@@ -278,5 +282,21 @@ mod tests {
             "/mnt/data/ade/configs/workspace-a/config-v1"
         );
         assert!(!assets.environment_revision().is_empty());
+    }
+
+    #[test]
+    fn missing_secret_generates_process_local_fallback() {
+        let tempdir = tempdir().unwrap();
+        let archive_path = tempdir.path().join("sandbox-environment.tar.gz");
+        write_archive(&archive_path);
+
+        let first = SandboxAssets::from_paths(archive_path.clone(), &Default::default()).unwrap();
+        let second = SandboxAssets::from_paths(archive_path, &Default::default()).unwrap();
+
+        assert_eq!(first.sandbox_secret().len(), 64);
+        assert_eq!(second.sandbox_secret().len(), 64);
+        assert_ne!(first.sandbox_secret(), second.sandbox_secret());
+        assert!(first.sandbox_secret().chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert!(second.sandbox_secret().chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 }

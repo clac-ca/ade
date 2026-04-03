@@ -31,7 +31,7 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
   assert.doesNotMatch(workflow, /acceptance_stage:[\s\S]*pnpm build/);
 });
 
-test("release stage only runs when its deployment secret is configured", () => {
+test("release stage deploys without carrying the sandbox secret in GitHub", () => {
   const workflow = readFileSync(
     join(
       repoRoot,
@@ -40,17 +40,17 @@ test("release stage only runs when its deployment secret is configured", () => {
     "utf8",
   );
 
-  assert.match(
+  assert.doesNotMatch(
     workflow,
     /ADE_SANDBOX_ENVIRONMENT_SECRET: \$\{\{ secrets\.ADE_SANDBOX_ENVIRONMENT_SECRET \}\}/,
   );
-  assert.match(
+  assert.doesNotMatch(
     workflow,
     /Skip release when sandbox secret is not configured/,
   );
-  assert.match(
+  assert.doesNotMatch(
     workflow,
-    /if: env\.ADE_SANDBOX_ENVIRONMENT_SECRET != ''/,
+    /--parameters sandboxEnvironmentSecret=/,
   );
 });
 

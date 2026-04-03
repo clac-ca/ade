@@ -16,6 +16,7 @@ The template deploys:
 - one VNet with a delegated Container Apps subnet
 - one Azure SQL logical server and database
 - one Blob Storage account and blob container for durable ADE artifacts
+- one Azure Key Vault for long-lived ADE runtime secrets
 - one Log Analytics workspace
 - one VNet-integrated Azure Container Apps environment
 - one shared Azure Container Apps session pool for hosted ADE document processing and admin executions
@@ -52,6 +53,7 @@ The migration job is the only Azure resource that overrides its command, and it 
 - Azure SQL logical server: `sql-ade-prod-cc-002`
 - Azure SQL database: `sqldb-ade-prod-cc-002`
 - Storage account: `stadeprodcc002`
+- Key Vault: `kv-ade-prod-cc-002`
 - Blob container: `documents`
 - Region: `canadacentral`
 
@@ -67,6 +69,7 @@ Lock these assumptions in:
 - the Container Apps subnet uses service endpoints for `Microsoft.Sql` and same-region `Microsoft.Storage`
 - Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a virtual network rule
 - the running app authenticates to Blob Storage with its system-assigned managed identity and mints user delegation SAS for exact blobs only
+- the running app reads `ADE_SANDBOX_ENVIRONMENT_SECRET` from an Azure Key Vault secret reference
 - Blob Storage is the durable store for uploaded scope files, persisted run outputs, and archived run logs
 - browser file upload and download go directly to Blob Storage with short-lived exact-blob SAS URLs returned by the API
 - the session pool does not receive Blob Storage RBAC and does not choose blob paths
@@ -120,6 +123,7 @@ az account show --query '{tenantId:tenantId,subscriptionId:id,name:name}' --outp
 
 ```sh
 az provider register --namespace Microsoft.App
+az provider register --namespace Microsoft.KeyVault
 az provider register --namespace Microsoft.ManagedIdentity
 az provider register --namespace Microsoft.Network
 az provider register --namespace Microsoft.OperationalInsights
@@ -153,11 +157,13 @@ image=<image-ref>
 
 ### 6. Run the first manual deployment
 
-Choose a strong runtime session secret and keep it as a shell-local variable:
+Choose a strong sandbox environment secret and keep it as a shell-local variable:
 
 ```sh
 sandboxEnvironmentSecret="$(openssl rand -hex 32)"
 ```
+
+Passing `sandboxEnvironmentSecret` seeds the Key Vault secret during deployment and applies that same value to the app for that deployment. If you pass it again later, the deployment overwrites the stored Key Vault value. If you omit it on later deployments, the existing Key Vault secret is reused and the app reads it by Key Vault reference.
 
 ```sh
 az deployment group validate \
@@ -173,6 +179,16 @@ az deployment group create \
   --resource-group rg-ade-prod-canadacentral-002 \
   --parameters infra/environments/main.prod.bicepparam \
   --parameters image="$image" sandboxEnvironmentSecret="$sandboxEnvironmentSecret"
+```
+
+Later deployments can omit `sandboxEnvironmentSecret` entirely:
+
+```sh
+az deployment group create \
+  --name ade-prod-update \
+  --resource-group rg-ade-prod-canadacentral-002 \
+  --parameters infra/environments/main.prod.bicepparam \
+  --parameters image="$image"
 ```
 
 ### 7. Grant the deployment identity the minimum Azure RBAC it needs

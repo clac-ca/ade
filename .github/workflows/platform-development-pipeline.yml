@@ -336,22 +336,14 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    env:
-      ADE_SANDBOX_ENVIRONMENT_SECRET: ${{ secrets.ADE_SANDBOX_ENVIRONMENT_SECRET }}
     steps:
-      - name: Skip release when sandbox secret is not configured
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET == ''
-        run: echo "ADE_SANDBOX_ENVIRONMENT_SECRET is not configured; skipping release."
-
       - name: Checkout
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != ''
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
 
       - name: Log in to Azure
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != ''
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -359,30 +351,25 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
 
       - name: Download release candidate metadata
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != ''
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-candidate-metadata
           path: ${{ runner.temp }}/release-candidate
 
       - name: Load release candidate metadata
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != ''
         run: cat "${{ runner.temp }}/release-candidate/release-candidate.env" >> "${GITHUB_ENV}"
 
       - name: Validate release candidate deployment
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != ''
         run: |
           az deployment group validate \
             --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-validate" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --parameters infra/environments/main.prod.bicepparam \
             --parameters image="${RELEASE_CANDIDATE_IMAGE}" \
-            --parameters sandboxEnvironmentSecret="${ADE_SANDBOX_ENVIRONMENT_SECRET}" \
             --validation-level Provider \
             --output none
 
       - name: Deploy release candidate
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != ''
         id: deploy_release_candidate
         run: |
           migration_job_name="$(
@@ -391,7 +378,6 @@ jobs:
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
               --parameters infra/environments/main.prod.bicepparam \
               --parameters image="${RELEASE_CANDIDATE_IMAGE}" \
-              --parameters sandboxEnvironmentSecret="${ADE_SANDBOX_ENVIRONMENT_SECRET}" \
               --query properties.outputs.migrationJobName.value \
               --output tsv
           )"
@@ -399,7 +385,6 @@ jobs:
           echo "migration_job_name=${migration_job_name}" >> "${GITHUB_OUTPUT}"
 
       - name: Run database migrations
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != ''
         env:
           ADE_MIGRATION_JOB_NAME: ${{ steps.deploy_release_candidate.outputs.migration_job_name }}
         run: |
@@ -414,7 +399,6 @@ jobs:
           echo "Started migration job execution: ${execution_name}"
 
       - name: Detect existing platform release tag
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != ''
         id: tag
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
@@ -426,7 +410,7 @@ jobs:
           fi
 
       - name: Create and push platform release tag
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != '' && steps.tag.outputs.exists == 'false'
+        if: steps.tag.outputs.exists == 'false'
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
           RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
@@ -437,7 +421,6 @@ jobs:
           git push origin "refs/tags/${RELEASE_TAG}"
 
       - name: Create GitHub release
-        if: env.ADE_SANDBOX_ENVIRONMENT_SECRET != ''
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}

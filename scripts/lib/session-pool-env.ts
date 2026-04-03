@@ -13,7 +13,6 @@ import { readOptionalTrimmedString } from "./runtime";
 const appUrlEnvName = "ADE_PUBLIC_API_URL";
 const bearerTokenEnvName = "ADE_SESSION_POOL_BEARER_TOKEN";
 const managementEndpointEnvName = "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT";
-const legacySessionSecretEnvName = "ADE_SCOPE_SESSION_SECRET";
 const sessionSecretEnvName = "ADE_SANDBOX_ENVIRONMENT_SECRET";
 
 function ensureLocalSessionArtifacts(): void {
@@ -28,23 +27,11 @@ function ensureLocalSessionArtifacts(): void {
   }
 }
 
-function readRequiredEnv(env: NodeJS.ProcessEnv, name: string): string {
-  const value =
-    readOptionalTrimmedString(env, name) ??
-    (name === sessionSecretEnvName
-      ? readOptionalTrimmedString(env, legacySessionSecretEnvName)
-      : undefined);
-  if (value === undefined) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
 function createSessionPoolValues(options: {
   appUrl: string;
   bearerToken?: string;
   managementEndpoint: string;
-  sessionSecret: string;
+  sessionSecret?: string;
 }): Record<string, string> {
   return {
     [appUrlEnvName]: options.appUrl,
@@ -54,7 +41,11 @@ function createSessionPoolValues(options: {
         }
       : {}),
     [managementEndpointEnvName]: options.managementEndpoint,
-    [sessionSecretEnvName]: options.sessionSecret,
+    ...(options.sessionSecret
+      ? {
+          [sessionSecretEnvName]: options.sessionSecret,
+        }
+      : {}),
   };
 }
 
@@ -104,14 +95,15 @@ function createContainerSessionPoolEnv(
   }
 
   const bearerToken = readOptionalTrimmedString(env, bearerTokenEnvName);
+  const sessionSecret = readOptionalTrimmedString(env, sessionSecretEnvName);
 
   return {
     usesManagedLocalSessionPool: false,
     values: createSessionPoolValues({
       appUrl,
       managementEndpoint: configuredManagementEndpoint,
-      sessionSecret: readRequiredEnv(env, sessionSecretEnvName),
       ...(bearerToken ? { bearerToken } : {}),
+      ...(sessionSecret ? { sessionSecret } : {}),
     }),
   };
 }

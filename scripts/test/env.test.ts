@@ -114,7 +114,6 @@ test("configured session pool env keeps the app url fallback boring and local", 
         ADE_SESSION_POOL_BEARER_TOKEN: "ade-local-session-token",
         ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
           "https://example.dynamicsessions.io",
-        ADE_SANDBOX_ENVIRONMENT_SECRET: "secret",
       },
       {},
     ),
@@ -123,6 +122,27 @@ test("configured session pool env keeps the app url fallback boring and local", 
       values: {
         ADE_PUBLIC_API_URL: "http://host.docker.internal:8000",
         ADE_SESSION_POOL_BEARER_TOKEN: "ade-local-session-token",
+        ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
+          "https://example.dynamicsessions.io",
+      },
+    },
+  );
+});
+
+test("configured session pool env forwards an explicit sandbox secret when provided", () => {
+  assert.deepEqual(
+    createContainerSessionPoolEnv(
+      {
+        ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
+          "https://example.dynamicsessions.io",
+        ADE_SANDBOX_ENVIRONMENT_SECRET: "secret",
+      },
+      {},
+    ),
+    {
+      usesManagedLocalSessionPool: false,
+      values: {
+        ADE_PUBLIC_API_URL: "http://host.docker.internal:8000",
         ADE_SESSION_POOL_MANAGEMENT_ENDPOINT:
           "https://example.dynamicsessions.io",
         ADE_SANDBOX_ENVIRONMENT_SECRET: "secret",

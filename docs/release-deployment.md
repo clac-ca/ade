@@ -19,6 +19,7 @@ Key rules:
 - If multiple qualifying pushes land on `main` while a production release is already running, GitHub keeps the active release running and only the newest pending platform release. Intermediate pending platform releases are intentionally dropped.
 - The running app container never performs schema migrations on startup.
 - Release passes the release candidate image to Bicep as an explicit parameter override.
+- Long-lived runtime secrets are seeded manually during environment bootstrap and then reused from Azure Key Vault.
 - The one-time runtime SQL user bootstrap is manual and documented in [infra/README.md](../infra/README.md).
 
 GitHub environment variables required for release:

@@ -51,6 +51,9 @@ param sqlDatabaseName string = 'sqldb-${prefix}'
 @description('Name for the Azure Storage account.')
 param storageAccountName string
 
+@description('Name for the Azure Key Vault.')
+param keyVaultName string
+
 @description('Name for the Blob container.')
 param blobContainerName string = 'documents'
 
@@ -59,7 +62,7 @@ param sessionPoolName string = '${prefix}-sessions'
 
 @description('Secret used to derive deterministic ADE runtime session identifiers.')
 @secure()
-param sandboxEnvironmentSecret string
+param sandboxEnvironmentSecret string = ''
 
 @description('CPU allocation for the ADE container app.')
 param appCpu string = '0.25'
@@ -91,6 +94,26 @@ var mergedTags = union({
 var githubOidcSubject = 'repo:${githubOrganization}/${githubRepository}:environment:${githubEnvironmentName}'
 var sessionExecutorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0fb8eba5-a2bb-4abe-b1c1-49dfad359bb0')
 var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+var keyVaultSecretsUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+var sandboxEnvironmentSecretName = 'ade-sandbox-environment-secret'
+var sandboxEnvironmentSecretKeyVaultUrl = 'https://${keyVaultName}${environment().suffixes.keyvaultDns}/secrets/${sandboxEnvironmentSecretName}'
+var keyVaultReferencedAppSecrets = empty(sandboxEnvironmentSecret)
+  ? [
+      {
+        name: sandboxEnvironmentSecretName
+        keyVaultUrl: sandboxEnvironmentSecretKeyVaultUrl
+        identity: 'system'
+      }
+    ]
+  : []
+var inlineAppSecrets = !empty(sandboxEnvironmentSecret)
+  ? [
+      {
+        name: sandboxEnvironmentSecretName
+        value: sandboxEnvironmentSecret
+      }
+    ]
+  : []
 var appPublicUrl = 'https://${appName}.${platform.outputs.defaultDomain}'
 
 resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -160,6 +183,30 @@ module storage 'modules/storage-account.bicep' = {
   }
 }
 
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: keyVaultName
+  location: location
+  tags: mergedTags
+  properties: {
+    tenantId: subscription().tenantId
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    enablePurgeProtection: true
+  }
+}
+
+resource sandboxEnvironmentSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(sandboxEnvironmentSecret)) {
+  parent: keyVault
+  name: sandboxEnvironmentSecretName
+  properties: {
+    value: sandboxEnvironmentSecret
+  }
+}
+
 module sessionPool 'modules/session-pool.bicep' = {
   name: 'sessionPool'
   params: {
@@ -191,7 +238,7 @@ module app 'modules/container-app.bicep' = {
       }
       {
         name: 'ADE_SANDBOX_ENVIRONMENT_SECRET'
-        secretRef: 'ade-runtime-session-secret'
+        secretRef: sandboxEnvironmentSecretName
       }
       {
         name: 'ADE_SESSION_POOL_MANAGEMENT_ENDPOINT'
@@ -262,14 +309,12 @@ module app 'modules/container-app.bicep' = {
     memory: appMemory
     minReplicas: appMinReplicas
     name: appName
-    secrets: [
-      {
-        name: 'ade-runtime-session-secret'
-        value: sandboxEnvironmentSecret
-      }
-    ]
+    secrets: concat(keyVaultReferencedAppSecrets, inlineAppSecrets)
     tags: mergedTags
   }
+  dependsOn: [
+    sandboxEnvironmentSecretResource
+  ]
 }
 
 resource appSessionPoolExecutorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -289,6 +334,16 @@ resource appStorageBlobDataContributorRoleAssignment 'Microsoft.Authorization/ro
     principalId: app.outputs.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: storageBlobDataContributorRoleDefinitionId
+  }
+}
+
+resource appKeyVaultSecretsUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, appName, keyVaultSecretsUserRoleDefinitionId)
+  scope: keyVault
+  properties: {
+    principalId: app.outputs.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
   }
 }
 
