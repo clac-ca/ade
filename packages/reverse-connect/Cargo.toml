@@ -18,6 +18,3 @@ tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"]
 [dependencies.clap]
 version = "4.5.48"
 features = ["derive"]
-
-[dev-dependencies]
-axum = { version = "0.8.7", features = ["ws"] }

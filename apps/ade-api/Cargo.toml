@@ -7,8 +7,8 @@ edition = "2024"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 axum = { version = "0.8.7", features = ["multipart", "ws"] }
-azure_core = { version = "0.33.0", features = ["tokio"] }
-azure_identity = { version = "0.33.0", features = ["tokio"] }
+azure_core = { version = "0.33.0", default-features = false, features = ["reqwest", "reqwest_deflate", "reqwest_gzip", "tokio"] }
+azure_identity = { version = "0.33.0", default-features = false, features = ["tokio"] }
 base64 = "0.22.1"
 bb8 = "0.9.0"
 bb8-tiberius = { version = "0.16.0", default-features = false, features = ["tds73", "tls", "with-tokio"] }
@@ -19,7 +19,6 @@ hex = "0.4.3"
 hmac = "0.12.1"
 httpdate = "1.0.3"
 mime_guess = "2.0.5"
-native-tls = { version = "0.2.18", features = ["vendored"] }
 quick-xml = { version = "0.38.3", features = ["serialize"] }
 refinery = { version = "0.9.0", features = ["tiberius"] }
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
