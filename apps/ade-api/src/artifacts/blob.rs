@@ -47,7 +47,6 @@ pub(crate) struct BlobArtifactStore {
     client: Client,
     container: String,
     managed_identity_client_id: Option<String>,
-    public_account_url: Url,
     shared_key: Option<String>,
     local_cors_allowed_origins: Vec<String>,
     local_setup_complete: Mutex<bool>,
@@ -57,7 +56,6 @@ pub(crate) struct BlobArtifactStore {
 impl BlobArtifactStore {
     pub(super) fn new(
         account_url: String,
-        public_account_url: Option<String>,
         container: String,
         shared_key: Option<String>,
         local_cors_allowed_origins: Vec<String>,
@@ -69,15 +67,6 @@ impl BlobArtifactStore {
                 error,
             )
         })?;
-        let public_account_url = match public_account_url {
-            Some(public_account_url) => Url::parse(&public_account_url).map_err(|error| {
-                AppError::config_with_source(
-                    "ADE_BLOB_PUBLIC_ACCOUNT_URL is not a valid URL.".to_string(),
-                    error,
-                )
-            })?,
-            None => account_url.clone(),
-        };
         let account_name = storage_account_name(&account_url)?;
         let auth_mode = if shared_key.is_some() {
             BlobAuthMode::SharedKey
@@ -101,12 +90,25 @@ impl BlobArtifactStore {
                 })?,
             container,
             managed_identity_client_id,
-            public_account_url,
             shared_key,
             local_cors_allowed_origins,
             local_setup_complete: Mutex::new(false),
             user_delegation_key: Mutex::new(None),
         })
+    }
+
+    fn browser_blob_base_url(&self) -> Url {
+        let mut url = self.account_url.clone();
+
+        if url.host_str() == Some("host.docker.internal") {
+            // Managed local Azurite runs on the host. The app container reaches it
+            // through host.docker.internal, but browser-direct SAS URLs need a
+            // host-reachable address on the developer machine.
+            url.set_host(Some("127.0.0.1"))
+                .expect("127.0.0.1 is a valid host");
+        }
+
+        url
     }
 
     fn blob_url_from_base(&self, base_url: &Url, key: &str) -> Result<Url, AppError> {
@@ -631,7 +633,8 @@ impl BlobArtifactStore {
         expires_at: OffsetDateTime,
     ) -> Result<ArtifactAccessGrant, AppError> {
         self.ensure_local_blob_ready().await?;
-        self.create_access_grant(&self.public_account_url, path, "r", "GET", None, expires_at)
+        let browser_blob_base_url = self.browser_blob_base_url();
+        self.create_access_grant(&browser_blob_base_url, path, "r", "GET", None, expires_at)
             .await
     }
 
@@ -642,8 +645,9 @@ impl BlobArtifactStore {
         expires_at: OffsetDateTime,
     ) -> Result<ArtifactAccessGrant, AppError> {
         self.ensure_local_blob_ready().await?;
+        let browser_blob_base_url = self.browser_blob_base_url();
         self.create_access_grant(
-            &self.public_account_url,
+            &browser_blob_base_url,
             path,
             "cw",
             "PUT",
@@ -1264,7 +1268,6 @@ mod tests {
     async fn browser_grants_use_the_runtime_blob_base_url() {
         let store = BlobArtifactStore::new(
             "https://internal.example.com".to_string(),
-            Some("https://runtime.example.com".to_string()),
             "documents".to_string(),
             Some("c2hhcmVkLWtleQ==".to_string()),
             Vec::new(),
@@ -1272,10 +1275,11 @@ mod tests {
         )
         .unwrap();
         let expires_at = OffsetDateTime::UNIX_EPOCH + TimeDuration::minutes(15);
+        let browser_blob_base_url = store.browser_blob_base_url();
 
         let upload = store
             .create_access_grant(
-                &store.public_account_url,
+                &browser_blob_base_url,
                 "workspaces/a/configs/b/uploads/u/input.csv",
                 "cw",
                 "PUT",
@@ -1285,7 +1289,7 @@ mod tests {
             .await
             .unwrap();
         let upload_url = Url::parse(&upload.url).unwrap();
-        assert_eq!(upload_url.host_str(), Some("runtime.example.com"));
+        assert_eq!(upload_url.host_str(), Some("internal.example.com"));
         assert_eq!(
             upload_url.query_pairs().find(|(name, _)| name == "sp"),
             Some(("sp".into(), "cw".into()))
@@ -1293,7 +1297,7 @@ mod tests {
 
         let download = store
             .create_access_grant(
-                &store.public_account_url,
+                &browser_blob_base_url,
                 "workspaces/a/configs/b/runs/run_1/logs/events.ndjson",
                 "r",
                 "GET",
@@ -1303,7 +1307,7 @@ mod tests {
             .await
             .unwrap();
         let download_url = Url::parse(&download.url).unwrap();
-        assert_eq!(download_url.host_str(), Some("runtime.example.com"));
+        assert_eq!(download_url.host_str(), Some("internal.example.com"));
         assert_eq!(
             download_url.query_pairs().find(|(name, _)| name == "sp"),
             Some(("sp".into(), "r".into()))
@@ -1314,7 +1318,6 @@ mod tests {
     fn blob_store_keeps_the_runtime_azure_client_id_when_configured() {
         let store = BlobArtifactStore::new(
             "https://runtime.example.com".to_string(),
-            None,
             "documents".to_string(),
             None,
             Vec::new(),
@@ -1329,10 +1332,9 @@ mod tests {
     }
 
     #[test]
-    fn blob_store_defaults_public_blob_base_url_to_the_runtime_blob_base_url() {
+    fn browser_blob_base_url_rewrites_managed_local_azurite_host_for_browser_access() {
         let store = BlobArtifactStore::new(
-            "https://runtime.example.com".to_string(),
-            None,
+            "http://host.docker.internal:10000/devstoreaccount1".to_string(),
             "documents".to_string(),
             Some("c2hhcmVkLWtleQ==".to_string()),
             Vec::new(),
@@ -1340,6 +1342,23 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(store.public_account_url, store.account_url);
+        assert_eq!(
+            store.browser_blob_base_url(),
+            Url::parse("http://127.0.0.1:10000/devstoreaccount1").unwrap()
+        );
+    }
+
+    #[test]
+    fn browser_blob_base_url_leaves_normal_blob_endpoints_unchanged() {
+        let store = BlobArtifactStore::new(
+            "https://runtime.example.com".to_string(),
+            "documents".to_string(),
+            Some("c2hhcmVkLWtleQ==".to_string()),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(store.browser_blob_base_url(), store.account_url);
     }
 }

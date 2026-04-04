@@ -35,8 +35,7 @@ Supported SQL auth modes:
 
 | Name                            | Required | Used by | Notes                                                                    |
 | ------------------------------- | -------- | ------- | ------------------------------------------------------------------------ |
-| `ADE_BLOB_ACCOUNT_URL`          | Yes      | API     | App-facing Blob base URL used for durable artifact reads and writes.     |
-| `ADE_BLOB_PUBLIC_ACCOUNT_URL`   | Optional | API     | Caller-facing Blob base URL used when the API returns direct upload/download URLs. Defaults to `ADE_BLOB_ACCOUNT_URL`. |
+| `ADE_BLOB_ACCOUNT_URL`          | Yes      | API     | Blob base URL used for artifact reads, writes, and returned direct upload/download links. |
 | `ADE_BLOB_CONTAINER`            | Yes      | API     | Private blob container that stores scoped uploads and run outputs.       |
 | `ADE_BLOB_CORS_ALLOWED_ORIGINS` | Local    | API     | Comma-separated origins for managed local Azurite setup.                 |
 | `ADE_BLOB_ACCOUNT_KEY`          | Local    | API     | Shared key used only for local Azurite management and local SAS minting. |
@@ -67,6 +66,8 @@ If `ADE_SANDBOX_ENVIRONMENT_SECRET` is missing, ADE logs one warning and generat
 - local SQL connection string
 - local session-pool endpoint and bearer token
 - local sandbox secret
+
+Managed local container runs keep `ADE_BLOB_ACCOUNT_URL` on `host.docker.internal` for the app, and ADE rewrites direct browser Azurite links to `127.0.0.1` internally so the browser can use them on the host.
 
 ## Runtime Notes
 

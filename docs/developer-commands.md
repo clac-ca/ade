@@ -91,6 +91,7 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 - `pnpm dev` exports the local shared sandbox-environment tarball to `.package/sandbox-environment.tar.gz` for the host API.
 - `pnpm build` assembles the same sandbox-environment tarball inside the platform image instead of writing it to `.package/`.
 - Local host and managed-local runtime commands also stage emulator config mounts under `.package/configs`.
+- Managed local container runs keep Azurite on `host.docker.internal` for the app and rewrite direct browser Azurite links to `127.0.0.1` inside the API.
 - The app always talks to `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT`; local commands inject the emulator endpoint and bearer token when you have not configured Azure.
 - See [runtime-config.md](runtime-config.md) for the full connection string and hosted runtime rules.
 
