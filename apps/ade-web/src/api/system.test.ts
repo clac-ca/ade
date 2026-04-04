@@ -2,9 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./client";
 import { getVersion, type VersionClient } from "./system";
 
-function mockClient(
-  result: Awaited<ReturnType<VersionClient["GET"]>>,
-): {
+function mockClient(result: Awaited<ReturnType<VersionClient["GET"]>>): {
   client: VersionClient;
   get: ReturnType<typeof vi.fn>;
 } {

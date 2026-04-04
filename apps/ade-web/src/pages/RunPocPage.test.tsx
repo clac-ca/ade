@@ -379,70 +379,68 @@ describe("RunPocPage", () => {
   });
 
   it("loads final run details instead of opening SSE for an already completed run", async () => {
-    const fetchMock = vi.fn(
-      async (input: RequestInfo | URL) => {
-        const url = requestFrom(input).url;
-        if (url.endsWith("/uploads")) {
-          return new Response(
-            JSON.stringify({
-              filePath:
-                "workspaces/workspace-a/configs/config-v1/uploads/upl_123/alpha.csv",
-              upload: {
-                expiresAt: "2026-03-30T12:00:00Z",
-                headers: { "content-type": "text/csv" },
-                method: "PUT",
-                url: "https://blob.example.com/alpha.csv?sas",
-              },
-            }),
-            {
-              headers: { "Content-Type": "application/json" },
-              status: 200,
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestFrom(input).url;
+      if (url.endsWith("/uploads")) {
+        return new Response(
+          JSON.stringify({
+            filePath:
+              "workspaces/workspace-a/configs/config-v1/uploads/upl_123/alpha.csv",
+            upload: {
+              expiresAt: "2026-03-30T12:00:00Z",
+              headers: { "content-type": "text/csv" },
+              method: "PUT",
+              url: "https://blob.example.com/alpha.csv?sas",
             },
-          );
-        }
+          }),
+          {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          },
+        );
+      }
 
-        if (url.endsWith("/runs") && !url.includes("/downloads")) {
-          return new Response(
-            JSON.stringify({
-              runId: "run-1",
-              status: "succeeded",
-            }),
-            {
-              headers: { "Content-Type": "application/json" },
-              status: 202,
-            },
-          );
-        }
+      if (url.endsWith("/runs") && !url.includes("/downloads")) {
+        return new Response(
+          JSON.stringify({
+            runId: "run-1",
+            status: "succeeded",
+          }),
+          {
+            headers: { "Content-Type": "application/json" },
+            status: 202,
+          },
+        );
+      }
 
-        if (url.endsWith("/runs/run-1")) {
-          return new Response(
-            JSON.stringify({
-              errorMessage: null,
-              inputPath:
-                "workspaces/workspace-a/configs/config-v1/uploads/upl_123/alpha.csv",
-              logPath:
-                "workspaces/workspace-a/configs/config-v1/runs/run-1/logs/events.ndjson",
-              outputPath:
-                "workspaces/workspace-a/configs/config-v1/runs/run-1/output/normalized.xlsx",
-              phase: null,
-              runId: "run-1",
-              status: "succeeded",
-              validationIssues: [],
-            }),
-            {
-              headers: { "Content-Type": "application/json" },
-              status: 200,
-            },
-          );
-        }
+      if (url.endsWith("/runs/run-1")) {
+        return new Response(
+          JSON.stringify({
+            errorMessage: null,
+            inputPath:
+              "workspaces/workspace-a/configs/config-v1/uploads/upl_123/alpha.csv",
+            logPath:
+              "workspaces/workspace-a/configs/config-v1/runs/run-1/logs/events.ndjson",
+            outputPath:
+              "workspaces/workspace-a/configs/config-v1/runs/run-1/output/normalized.xlsx",
+            phase: null,
+            runId: "run-1",
+            status: "succeeded",
+            validationIssues: [],
+          }),
+          {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          },
+        );
+      }
 
-        if (url.startsWith("https://blob.example.com/")) {
-          return new Response(null, { status: 201 });
-        }
+      if (url.startsWith("https://blob.example.com/")) {
+        return new Response(null, { status: 201 });
+      }
 
-        throw new Error(`Unhandled fetch: ${url}`);
-      },
-    );
+      throw new Error(`Unhandled fetch: ${url}`);
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(

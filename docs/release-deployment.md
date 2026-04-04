@@ -8,23 +8,22 @@ The release pipeline has three stages:
 2. Acceptance stage
 3. Release stage
 
-Key rules:
+Release rules:
 
 - The release candidate image is built once and reused.
-- Acceptance runs against local SQL only.
-- Migrations run through the separate `ade-migrate` binary and Azure Container App Job.
-- Release order is explicit: validate the deployment inputs, deploy the release candidate, then start the migration job, then observe the job result.
+- Acceptance runs against the local stack, not Azure.
+- The release stage validates `infra/main.bicep`, deploys it with the release candidate image, and then starts the fixed migration job.
+- Migrations run through the separate `ade-migrate` binary and Azure Container Apps Job.
+- The running app container never performs schema migrations on startup.
 - The platform release creates a Git tag and GitHub Release only after deployment and migrations succeed.
 - Platform release versions use the qualifying commit timestamp converted to `America/Vancouver` for the `YYYY.M.D` calendar date and `github.run_number` for the suffix. Reruns reuse the same release version.
 - If multiple qualifying pushes land on `main` while a production release is already running, GitHub keeps the active release running and only the newest pending platform release. Intermediate pending platform releases are intentionally dropped.
-- The running app container never performs schema migrations on startup.
-- Release passes the release candidate image to Bicep as an explicit parameter override.
-- Long-lived runtime secrets are seeded manually during environment bootstrap and then reused from Azure Key Vault.
-- The one-time runtime SQL user bootstrap is manual and documented in [infra/README.md](../infra/README.md).
 
-GitHub environment variables required for release:
+GitHub `production` environment variables required for release:
 
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
+
+The first-time Azure bootstrap, Key Vault secret seeding, one-time SQL Entra admin setup, and one-time SQL user setup are manual and documented in [infra/README.md](../infra/README.md).

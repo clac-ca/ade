@@ -1,125 +1,43 @@
 # ADE Infrastructure
 
-ADE uses one Azure template: [`main.bicep`](main.bicep).
-Local laptop and CI dependency services live separately in [`local/compose.yaml`](local/compose.yaml); that file is not part of the Azure deployment model, but it mirrors the production storage, SQL, and session-pool split with Azurite, SQL Server, and the local session-pool emulator.
+## Overview
 
-The running app is configured with one provider boundary only:
+Production uses two Bicep templates:
 
-- `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT`
+- [`bootstrap.bicep`](bootstrap.bicep): one-time Azure prerequisites
+- [`main.bicep`](main.bicep): normal deploys
 
-In Azure that value comes from the session pool's `poolManagementEndpoint`. Locally it points at the session-pool emulator, which mirrors the same management-endpoint contract.
+ADE manages two user-assigned identities directly:
 
-The template deploys:
+| Identity            | Used by                       | Purpose                                    |
+| ------------------- | ----------------------------- | ------------------------------------------ |
+| Deployment identity | GitHub Actions, migration job | Azure deploys, SQL migrations              |
+| App identity        | Container App                 | Key Vault, SQL, Blob Storage, session pool |
 
-- one deployment user-assigned managed identity
-- one GitHub OIDC federated credential on that deployment identity
-- one VNet with a delegated Container Apps subnet
-- one Azure SQL logical server and database
-- one Blob Storage account and blob container for durable ADE artifacts
-- one Azure Key Vault for long-lived ADE runtime secrets
-- one Log Analytics workspace
-- one VNet-integrated Azure Container Apps environment
-- one shared Azure Container Apps session pool for hosted ADE document processing and admin executions
-- one public Container App for the API/web host
-- one manual Azure Container Apps Job for schema migrations
+```sh
+RESOURCE_GROUP=rg-ade-prod-canadacentral-002
+LOCATION=canadacentral
+KEY_VAULT_NAME=kv-ade-prod-cc-002
+DEPLOYMENT_IDENTITY_NAME=id-ade-deploy-prod-canadacentral-002
+APP_IDENTITY_NAME=id-ade-app-prod-canadacentral-002
+APP_NAME=ca-ade-prod-canadacentral-002
+MIGRATION_JOB_NAME=job-ade-migrate-prod-cc-002
+SQL_SERVER_NAME=sql-ade-prod-cc-002
+SQL_DATABASE_NAME=sqldb-ade-prod-cc-002
+SQL_BOOTSTRAP_FIREWALL_RULE_NAME=ade-bootstrap-operator-ip
+```
 
-## Terminology Mapping
+## Once Per Subscription Or Tenant
 
-Keep Azure and ADE terms separate:
-
-- Azure `session pool` is the provider resource that allocates execution capacity.
-- Azure `session` is the provider’s allocated runtime instance.
-- ADE treats that allocated provider runtime as a `sandbox environment`.
-
-Infrastructure docs should keep Azure’s provider terms accurate, while application docs should describe ADE in terms of sandbox environments, configs, and runs.
-
-The running Container App uses a system-assigned managed identity.
-The manual migration job reuses the deployment managed identity.
-
-`infra/main.bicep` defines the migration job resource, but it does not run migrations by itself.
-The public Container App uses the image's default startup command and never runs schema migrations on startup.
-The migration job is the only Azure resource that overrides its command, and it does so with `./bin/ade-migrate`.
-
-## Production names
-
-- Resource group: `rg-ade-prod-canadacentral-002`
-- Deployment managed identity: `id-ade-deploy-prod-canadacentral-002`
-- Log Analytics workspace: `log-ade-prod-canadacentral-002`
-- Container Apps environment: `cae-ade-prod-canadacentral-002`
-- Container App: `ca-ade-prod-canadacentral-002`
-- Migration job: `job-ade-migrate-prod-cc-002`
-- Session pool: `sp-ade-prod-canadacentral-002`
-- Virtual network: `vnet-ade-prod-canadacentral-002`
-- Azure SQL logical server: `sql-ade-prod-cc-002`
-- Azure SQL database: `sqldb-ade-prod-cc-002`
-- Storage account: `stadeprodcc002`
-- Key Vault: `kv-ade-prod-cc-002`
-- Blob container: `documents`
-- Region: `canadacentral`
-
-## Production security model
-
-Lock these assumptions in:
-
-- the running app authenticates to Azure SQL with its system-assigned managed identity
-- the running app authenticates to the Azure Container Apps session-pool data plane with its system-assigned managed identity
-- the migration job authenticates to Azure SQL with the deployment managed identity
-- the deployment managed identity is also the Azure SQL logical server's Microsoft Entra admin
-- the SQL logical server itself has a system-assigned managed identity
-- the Container Apps subnet uses service endpoints for `Microsoft.Sql` and same-region `Microsoft.Storage`
-- Azure SQL public network access stays enabled, but access is restricted to the Container Apps subnet with a virtual network rule
-- the running app authenticates to Blob Storage with its system-assigned managed identity and mints user delegation SAS for exact blobs only
-- the running app reads `ADE_SANDBOX_ENVIRONMENT_SECRET` from an Azure Key Vault secret reference
-- Blob Storage is the durable store for uploaded scope files, persisted run outputs, and archived run logs
-- browser file upload and download go directly to Blob Storage with short-lived exact-blob SAS URLs returned by the API
-- the session pool does not receive Blob Storage RBAC and does not choose blob paths
-- Blob Storage public network access stays enabled because browser clients upload directly to the blob endpoint, but the container stays private and access is still SAS-gated
-- Blob Storage shared-key auth stays disabled
-- Blob Storage CORS allows only the ADE app origin and only the headers and methods required for browser PUT/GET/HEAD/OPTIONS traffic
-- the Azure SQL database uses the General Purpose serverless compute tier with auto-pause enabled
-- the shared Azure session pool uses the built-in `Shell` container type
-
-The storage account is intentionally boring:
-
-- `StorageV2` with the Standard locally redundant SKU
-- TLS 1.2 minimum and HTTPS-only
-- no public blob access
-- shared-key auth disabled in Azure
-- one private `documents` container
-- blob CORS configured in Bicep for the ADE app origin only
-- scoped block blobs tier to Cool after 30 days and Archive after 180 days
-- RBAC grants that let the running app mint user delegation SAS without giving the session runtime broad storage permissions
-
-## Prerequisites
-
-- Azure CLI installed and authenticated
-- GitHub CLI installed and authenticated with admin access to `clac-ca/ade`
-- PowerShell 7+ for the Microsoft Graph bootstrap step
-- Permission to create resource groups, managed identities, federated credentials, Container Apps resources, network resources, Azure SQL resources, and Storage resources in the target subscription
-- Microsoft Entra `Privileged Role Administrator` or higher for the one-time SQL server identity bootstrap step
-- An Entra-aware SQL client for the one-time runtime-user bootstrap step
-
-## First-time setup
-
-### 1. Sign in to Azure
+### Sign in and select the subscription
 
 ```sh
 az login
-```
-
-### 2. Select the target subscription
-
-```sh
 az account set --subscription <subscription-id>
-```
-
-Confirm the active account:
-
-```sh
 az account show --query '{tenantId:tenantId,subscriptionId:id,name:name}' --output table
 ```
 
-### 3. Register the required providers
+### Register the required resource providers
 
 ```sh
 az provider register --namespace Microsoft.App
@@ -131,223 +49,170 @@ az provider register --namespace Microsoft.Sql
 az provider register --namespace Microsoft.Storage
 ```
 
-### 4. Create the production resource group
+## Once Per Environment
+
+### Create the resource group
 
 ```sh
 az group create \
-  --name rg-ade-prod-canadacentral-002 \
-  --location canadacentral
+  --name "$RESOURCE_GROUP" \
+  --location "$LOCATION"
 ```
 
-### 5. Choose a published image for the first deployment
+### Choose the release image
 
-Use a published ADE Platform image from public GHCR.
-
-The deployment pipeline publishes a per-commit SHA tag and then promotes the immutable digest for acceptance and release. For manual deployment, prefer the immutable digest form:
+Use an immutable image digest:
 
 ```text
 ghcr.io/clac-ca/ade-platform@sha256:<digest>
 ```
 
-Keep it as a shell-local variable:
-
 ```sh
-image=<image-ref>
+IMAGE=<image-ref>
 ```
 
-### 6. Run the first manual deployment
-
-Choose a strong sandbox environment secret and keep it as a shell-local variable:
-
-```sh
-sandboxEnvironmentSecret="$(openssl rand -hex 32)"
-```
-
-Passing `sandboxEnvironmentSecret` seeds the Key Vault secret during deployment and applies that same value to the app for that deployment. If you pass it again later, the deployment overwrites the stored Key Vault value. If you omit it on later deployments, the existing Key Vault secret is reused and the app reads it by Key Vault reference.
-
-```sh
-az deployment group validate \
-  --name ade-prod-initial-validate \
-  --resource-group rg-ade-prod-canadacentral-002 \
-  --parameters infra/environments/main.prod.bicepparam \
-  --parameters image="$image" sandboxEnvironmentSecret="$sandboxEnvironmentSecret"
-```
+### Run the bootstrap template
 
 ```sh
 az deployment group create \
-  --name ade-prod-initial \
-  --resource-group rg-ade-prod-canadacentral-002 \
-  --parameters infra/environments/main.prod.bicepparam \
-  --parameters image="$image" sandboxEnvironmentSecret="$sandboxEnvironmentSecret"
+  --name ade-prod-bootstrap \
+  --resource-group "$RESOURCE_GROUP" \
+  --template-file infra/bootstrap.bicep \
+  --output none
 ```
 
-Later deployments can omit `sandboxEnvironmentSecret` entirely:
+This creates the deployment identity, the app identity, the GitHub OIDC credential, the Key Vault, and the required RBAC assignments.
+
+### Seed the sandbox secret in Key Vault
+
+The operator running this step needs a role that can write Key Vault secrets, such as `Key Vault Secrets Officer` on the vault.
 
 ```sh
-az deployment group create \
-  --name ade-prod-update \
-  --resource-group rg-ade-prod-canadacentral-002 \
-  --parameters infra/environments/main.prod.bicepparam \
-  --parameters image="$image"
+SANDBOX_ENVIRONMENT_SECRET="$(openssl rand -hex 32)"
+
+az keyvault secret set \
+  --vault-name "$KEY_VAULT_NAME" \
+  --name ade-sandbox-environment-secret \
+  --value "$SANDBOX_ENVIRONMENT_SECRET" \
+  --output none
+
+unset SANDBOX_ENVIRONMENT_SECRET
 ```
 
-### 7. Grant the deployment identity the minimum Azure RBAC it needs
+This writes the secret once. Later deploys only reference the existing Key Vault value.
 
-The deployment identity needs two Azure RBAC grants:
+### Set the GitHub `production` environment variables
 
-- `Contributor` on the production resource group
-- `Managed Identity Operator` on its own user-assigned identity resource so it can attach that identity to the migration job resource during future deployments
-
-Resolve the reusable values first:
+Set the deployment identity client ID for `azure/login`:
 
 ```sh
-export ADE_RG_ID="$(
-  az group show \
-    --name rg-ade-prod-canadacentral-002 \
-    --query id \
+gh variable set AZURE_CLIENT_ID \
+  --env production \
+  --repo clac-ca/ade \
+  --body "$(
+    az identity show \
+      --name "$DEPLOYMENT_IDENTITY_NAME" \
+      --resource-group "$RESOURCE_GROUP" \
+      --query clientId \
+      --output tsv
+  )"
+```
+
+Set the other required variables:
+
+```sh
+gh variable set AZURE_TENANT_ID --env production --repo clac-ca/ade --body "<tenant-id>"
+gh variable set AZURE_SUBSCRIPTION_ID --env production --repo clac-ca/ade --body "<subscription-id>"
+gh variable set AZURE_RESOURCE_GROUP --env production --repo clac-ca/ade --body "$RESOURCE_GROUP"
+```
+
+### Run the main template
+
+```sh
+APP_URL="$(
+  az deployment group create \
+    --name ade-prod-main \
+    --resource-group "$RESOURCE_GROUP" \
+    --template-file infra/main.bicep \
+    --parameters image="$IMAGE" \
+    --query properties.outputs.appUrl.value \
     --output tsv
 )"
+```
 
-export ADE_DEPLOYMENT_IDENTITY_ID="$(
+This creates the network, SQL, storage, session pool, Container App, and migration job. The app attaches only the app identity and reads `ADE_SANDBOX_ENVIRONMENT_SECRET` from Key Vault.
+
+### Set the SQL server Entra admin once
+
+For the manual SQL bootstrap, set the logical server's Microsoft Entra admin to the operator running the one-time setup. If you want shared operator access, use a group instead of your user.
+
+```sh
+SQL_ADMIN_DISPLAY_NAME="$(az account show --query user.name --output tsv)"
+SQL_ADMIN_OBJECT_ID="$(az ad signed-in-user show --query id --output tsv)"
+
+az sql server ad-admin create \
+  --resource-group "$RESOURCE_GROUP" \
+  --server "$SQL_SERVER_NAME" \
+  --display-name "$SQL_ADMIN_DISPLAY_NAME" \
+  --object-id "$SQL_ADMIN_OBJECT_ID" \
+  --output none
+
+az sql server ad-only-auth enable \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$SQL_SERVER_NAME" \
+  --output none
+```
+
+### Open your current IP long enough to run the SQL bootstrap
+
+```sh
+SQL_OPERATOR_IP="$(curl -fsS https://api.ipify.org)"
+
+az sql server firewall-rule create \
+  --resource-group "$RESOURCE_GROUP" \
+  --server "$SQL_SERVER_NAME" \
+  --name "$SQL_BOOTSTRAP_FIREWALL_RULE_NAME" \
+  --start-ip-address "$SQL_OPERATOR_IP" \
+  --end-ip-address "$SQL_OPERATOR_IP" \
+  --output none
+```
+
+### Create the database users once
+
+ADE uses Azure SQL Database's documented "without validation" user-creation path, so this bootstrap does not require Microsoft Graph permissions on the SQL server. The reference syntax is in [CREATE USER (Transact-SQL)](https://learn.microsoft.com/en-us/sql/t-sql/statements/create-user-transact-sql?tabs=sqlserver&view=sql-server-2017).
+
+Resolve the app and deployment identity client IDs:
+
+```sh
+ADE_APP_UAMI_CLIENT_ID="$(
   az identity show \
-    --name id-ade-deploy-prod-canadacentral-002 \
-    --resource-group rg-ade-prod-canadacentral-002 \
-    --query id \
+    --name "$APP_IDENTITY_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query clientId \
     --output tsv
 )"
 
-export ADE_DEPLOYMENT_IDENTITY_PRINCIPAL_ID="$(
+ADE_DEPLOY_UAMI_CLIENT_ID="$(
   az identity show \
-    --name id-ade-deploy-prod-canadacentral-002 \
-    --resource-group rg-ade-prod-canadacentral-002 \
-    --query principalId \
+    --name "$DEPLOYMENT_IDENTITY_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query clientId \
     --output tsv
 )"
-```
 
-Grant `Contributor` on the resource group:
+cat <<SQL >/tmp/ade-bootstrap.sql
+DECLARE @appClientId UNIQUEIDENTIFIER = '${ADE_APP_UAMI_CLIENT_ID}';
+DECLARE @appSid NVARCHAR(MAX) = CONVERT(VARCHAR(MAX), CONVERT(VARBINARY(16), @appClientId), 1);
+DECLARE @deployClientId UNIQUEIDENTIFIER = '${ADE_DEPLOY_UAMI_CLIENT_ID}';
+DECLARE @deploySid NVARCHAR(MAX) = CONVERT(VARCHAR(MAX), CONVERT(VARBINARY(16), @deployClientId), 1);
 
-```sh
-az role assignment create \
-  --assignee-object-id "${ADE_DEPLOYMENT_IDENTITY_PRINCIPAL_ID}" \
-  --assignee-principal-type ServicePrincipal \
-  --role Contributor \
-  --scope "${ADE_RG_ID}"
-```
-
-Grant `Managed Identity Operator` on the deployment identity resource itself:
-
-```sh
-az role assignment create \
-  --assignee-object-id "${ADE_DEPLOYMENT_IDENTITY_PRINCIPAL_ID}" \
-  --assignee-principal-type ServicePrincipal \
-  --role "Managed Identity Operator" \
-  --scope "${ADE_DEPLOYMENT_IDENTITY_ID}"
-```
-
-### 8. Validate the deployment identity grants
-
-List the deployment identity role assignments on the production resource group:
-
-```sh
-az role assignment list \
-  --assignee-object-id "${ADE_DEPLOYMENT_IDENTITY_PRINCIPAL_ID}" \
-  --scope "${ADE_RG_ID}" \
-  --output table
-```
-
-Confirm the output includes:
-
-- `Contributor`
-
-List the deployment identity role assignments on the deployment identity resource itself:
-
-```sh
-az role assignment list \
-  --assignee-object-id "${ADE_DEPLOYMENT_IDENTITY_PRINCIPAL_ID}" \
-  --scope "${ADE_DEPLOYMENT_IDENTITY_ID}" \
-  --output table
-```
-
-Confirm the output includes:
-
-- `Managed Identity Operator`
-
-### 9. Grant the SQL logical server identity Microsoft Entra query permissions
-
-The Azure SQL logical server uses a system-assigned managed identity.
-
-That identity must be able to resolve Microsoft Entra principals for `CREATE USER ... FROM EXTERNAL PROVIDER` to work.
-
-Grant it the Directory Readers role, or the documented lower-level Microsoft Graph permissions:
-
-- `User.Read.All`
-- `GroupMember.Read.All`
-- `Application.Read.All`
-
-This is a tenant-level bootstrap step. It is not handled by Bicep.
-
-The most direct first-time path is the Microsoft Graph PowerShell flow from the Azure SQL documentation. Run it as a Microsoft Entra `Privileged Role Administrator` or higher:
-
-```powershell
-$TenantId = "<tenant-id>"
-$ServerName = "sql-ade-prod-cc-002"
-
-Connect-MgGraph -TenantId $TenantId -Scopes "RoleManagement.ReadWrite.Directory","Application.Read.All"
-
-$roleName = "Directory Readers"
-$role = Get-MgDirectoryRole -Filter "DisplayName eq '$roleName'"
-if ($null -eq $role) {
-    $roleTemplate = Get-MgDirectoryRoleTemplate -Filter "DisplayName eq '$roleName'"
-    New-MgDirectoryRoleTemplate -RoleTemplateId $roleTemplate.Id
-    $role = Get-MgDirectoryRole -Filter "DisplayName eq '$roleName'"
-}
-
-$roleMember = Get-MgServicePrincipal -Filter "DisplayName eq '$ServerName'"
-if ($null -eq $roleMember) {
-    throw "No service principal found for SQL server '$ServerName'."
-}
-
-if ($roleMember.Count -ne 1) {
-    throw "Multiple service principals found for SQL server '$ServerName'."
-}
-
-$isMember = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -Filter "Id eq '$($roleMember.Id)'"
-if ($null -eq $isMember) {
-    New-MgDirectoryRoleMemberByRef `
-      -DirectoryRoleId $role.Id `
-      -BodyParameter @{
-        '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$($roleMember.Id)"
-      }
-}
-```
-
-### 10. Bootstrap runtime SQL access once
-
-Resolve the app managed identity object ID:
-
-```sh
-export ADE_APP_PRINCIPAL_ID="$(
-  az containerapp show \
-    --name ca-ade-prod-canadacentral-002 \
-    --resource-group rg-ade-prod-canadacentral-002 \
-    --query identity.principalId \
-    --output tsv
-)"
-```
-
-Connect to `sqldb-ade-prod-cc-002` as the deployment identity with your normal Entra-aware SQL client, then run:
-
-```sql
 IF NOT EXISTS (
   SELECT 1
   FROM sys.database_principals
-  WHERE name = N'ca-ade-prod-canadacentral-002'
+  WHERE name = N'id-ade-app-prod-canadacentral-002'
 )
 BEGIN
-  CREATE USER [ca-ade-prod-canadacentral-002]
-  FROM EXTERNAL PROVIDER
-  WITH OBJECT_ID = 'REPLACE_WITH_ADE_APP_PRINCIPAL_ID';
+  EXEC(N'CREATE USER [id-ade-app-prod-canadacentral-002] WITH SID = ' + @appSid + ', TYPE = E;');
 END;
 
 IF NOT EXISTS (
@@ -356,10 +221,10 @@ IF NOT EXISTS (
   INNER JOIN sys.database_principals AS role_principals ON role_principals.principal_id = role_members.role_principal_id
   INNER JOIN sys.database_principals AS member_principals ON member_principals.principal_id = role_members.member_principal_id
   WHERE role_principals.name = N'db_datareader'
-    AND member_principals.name = N'ca-ade-prod-canadacentral-002'
+    AND member_principals.name = N'id-ade-app-prod-canadacentral-002'
 )
 BEGIN
-  ALTER ROLE [db_datareader] ADD MEMBER [ca-ade-prod-canadacentral-002];
+  ALTER ROLE [db_datareader] ADD MEMBER [id-ade-app-prod-canadacentral-002];
 END;
 
 IF NOT EXISTS (
@@ -368,141 +233,103 @@ IF NOT EXISTS (
   INNER JOIN sys.database_principals AS role_principals ON role_principals.principal_id = role_members.role_principal_id
   INNER JOIN sys.database_principals AS member_principals ON member_principals.principal_id = role_members.member_principal_id
   WHERE role_principals.name = N'db_datawriter'
-    AND member_principals.name = N'ca-ade-prod-canadacentral-002'
+    AND member_principals.name = N'id-ade-app-prod-canadacentral-002'
 )
 BEGIN
-  ALTER ROLE [db_datawriter] ADD MEMBER [ca-ade-prod-canadacentral-002];
+  ALTER ROLE [db_datawriter] ADD MEMBER [id-ade-app-prod-canadacentral-002];
 END;
+
+IF NOT EXISTS (
+  SELECT 1
+  FROM sys.database_principals
+  WHERE name = N'id-ade-deploy-prod-canadacentral-002'
+)
+BEGIN
+  EXEC(N'CREATE USER [id-ade-deploy-prod-canadacentral-002] WITH SID = ' + @deploySid + ', TYPE = E;');
+END;
+
+IF NOT EXISTS (
+  SELECT 1
+  FROM sys.database_role_members AS role_members
+  INNER JOIN sys.database_principals AS role_principals ON role_principals.principal_id = role_members.role_principal_id
+  INNER JOIN sys.database_principals AS member_principals ON member_principals.principal_id = role_members.member_principal_id
+  WHERE role_principals.name = N'db_owner'
+    AND member_principals.name = N'id-ade-deploy-prod-canadacentral-002'
+)
+BEGIN
+  ALTER ROLE [db_owner] ADD MEMBER [id-ade-deploy-prod-canadacentral-002];
+END;
+SQL
+
+sqlcmd \
+  -S "${SQL_SERVER_NAME}.database.windows.net" \
+  -d "$SQL_DATABASE_NAME" \
+  -G \
+  -C \
+  -i /tmp/ade-bootstrap.sql
+
+rm /tmp/ade-bootstrap.sql
+
+az sql server firewall-rule delete \
+  --resource-group "$RESOURCE_GROUP" \
+  --server "$SQL_SERVER_NAME" \
+  --name "$SQL_BOOTSTRAP_FIREWALL_RULE_NAME" \
+  --yes
 ```
 
-Verify the user exists:
-
-```sql
-SELECT name, type_desc
-FROM sys.database_principals
-WHERE name = N'ca-ade-prod-canadacentral-002';
-```
-
-Verify role membership:
-
-```sql
-SELECT role_principals.name AS role_name
-FROM sys.database_role_members AS role_members
-INNER JOIN sys.database_principals AS role_principals ON role_principals.principal_id = role_members.role_principal_id
-INNER JOIN sys.database_principals AS member_principals ON member_principals.principal_id = role_members.member_principal_id
-WHERE member_principals.name = N'ca-ade-prod-canadacentral-002';
-```
-
-Confirm the output includes:
-
-- `db_datareader`
-- `db_datawriter`
-
-### 11. Set the GitHub `production` environment variables
-
-Set the deployment identity client ID:
-
-```sh
-gh variable set AZURE_CLIENT_ID \
-  --env production \
-  --repo clac-ca/ade \
-  --body "$(
-    az identity show \
-      --name id-ade-deploy-prod-canadacentral-002 \
-      --resource-group rg-ade-prod-canadacentral-002 \
-      --query clientId \
-      --output tsv
-  )"
-```
-
-Set the tenant ID:
-
-```sh
-gh variable set AZURE_TENANT_ID \
-  --env production \
-  --repo clac-ca/ade \
-  --body "<tenant-id>"
-```
-
-Set the subscription ID:
-
-```sh
-gh variable set AZURE_SUBSCRIPTION_ID \
-  --env production \
-  --repo clac-ca/ade \
-  --body "<subscription-id>"
-```
-
-Set the resource group:
-
-```sh
-gh variable set AZURE_RESOURCE_GROUP \
-  --env production \
-  --repo clac-ca/ade \
-  --body "rg-ade-prod-canadacentral-002"
-```
-
-List the environment variables to confirm:
-
-```sh
-gh variable list --env production --repo clac-ca/ade
-```
-
-### 12. Run the initial migration job manually
-
-The first manual deployment defines the migration job, but it does not execute it.
-
-Run it once manually after the SQL runtime user exists:
+### Run the first migration and verify readiness
 
 ```sh
 az containerapp job start \
-  --name job-ade-migrate-prod-cc-002 \
-  --resource-group rg-ade-prod-canadacentral-002
+  --name "$MIGRATION_JOB_NAME" \
+  --resource-group "$RESOURCE_GROUP"
 ```
 
-Inspect recent executions:
-
 ```sh
-az containerapp job execution list \
-  --name job-ade-migrate-prod-cc-002 \
-  --resource-group rg-ade-prod-canadacentral-002 \
-  --output table
+curl -fsS "${APP_URL}/api/readyz"
 ```
 
-Verify the deployed app reaches readiness:
+## Every Deploy
+
+### Deploy the new image
 
 ```sh
-curl -fsS https://<app-fqdn>/api/readyz
-```
-
-At steady state, the same start-and-poll sequence is handled by `release_stage` in the deployment pipeline.
-
-## Re-running the deployment
-
-After the bootstrap is complete, future pushes to `main` should use the deployment pipeline.
-
-If you need to reconcile production manually, re-run the template directly with a published image:
-
-```sh
-image=<image-ref>
-
-az deployment group validate \
-  --name ade-prod-reconcile-validate \
-  --resource-group rg-ade-prod-canadacentral-002 \
-  --parameters infra/environments/main.prod.bicepparam \
-  --parameters image="$image"
+IMAGE=<image-ref>
 
 az deployment group create \
-  --name ade-prod-reconcile \
-  --resource-group rg-ade-prod-canadacentral-002 \
-  --parameters infra/environments/main.prod.bicepparam \
-  --parameters image="$image"
+  --name ade-prod-update \
+  --resource-group "$RESOURCE_GROUP" \
+  --template-file infra/main.bicep \
+  --parameters image="$IMAGE" \
+  --output none
 ```
 
-If that deployment changes the migration job or the application image in a way that requires schema changes, start the migration job explicitly afterward.
+### Run migrations when the release changes the schema
 
-## Operational notes
+```sh
+az containerapp job start \
+  --name "$MIGRATION_JOB_NAME" \
+  --resource-group "$RESOURCE_GROUP"
+```
 
-- The Container Apps environment is VNet-integrated. Azure does not let you switch an environment from the default network mode to VNet integration in place, so treat the current environment shape as intentional.
-- The release workflow validates the deployment inputs, deploys the release candidate, and then starts the migration job. Keep schema changes backward-compatible and use expand/contract migrations by default.
-- The app readiness endpoint must remain process-level. Do not turn `/api/readyz` into a "latest schema is present" gate.
+### Verify readiness
+
+```sh
+APP_URL="$(
+  az containerapp show \
+    --name "$APP_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query properties.configuration.ingress.fqdn \
+    --output tsv
+)"
+
+curl -fsS "https://${APP_URL}/api/readyz"
+```
+
+## Steady-State Rules
+
+- `bootstrap.bicep` never writes secrets.
+- `main.bicep` never writes secrets.
+- SQL server Entra admin and database user creation are one-time operator bootstrap steps.
+- Migrations run separately through the Container Apps job.
+- Normal releases only deploy `infra/main.bicep` and start the migration job when needed.

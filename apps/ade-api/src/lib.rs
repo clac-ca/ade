@@ -1,5 +1,6 @@
 pub mod api;
 pub mod artifacts;
+mod azure_auth;
 pub mod config;
 pub mod db;
 pub mod error;

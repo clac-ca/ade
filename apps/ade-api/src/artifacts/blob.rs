@@ -1,7 +1,5 @@
 use std::{collections::BTreeMap, path::Path, sync::Mutex, time::Duration};
 
-use azure_core::credentials::TokenCredential;
-use azure_identity::{DeveloperToolsCredential, ManagedIdentityCredential};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hmac::{Hmac, Mac};
 use quick_xml::de::from_str as xml_from_str;
@@ -14,12 +12,11 @@ use sha2::Sha256;
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio_util::io::ReaderStream;
 
-use crate::error::AppError;
+use crate::{azure_auth::access_token_with_developer_fallback, error::AppError};
 
 use super::{
     ArtifactAccessGrant, ArtifactMetadata, BLOB_ACCOUNT_KEY_ENV_NAME, BLOB_ACCOUNT_URL_ENV_NAME,
-    BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME, artifact_content_type, format_iso_8601,
-    normalize_artifact_path,
+    artifact_content_type, format_iso_8601, normalize_artifact_path,
 };
 
 const BLOB_CORS_MAX_AGE_SECONDS: u64 = 3600;
@@ -49,20 +46,20 @@ pub(crate) struct BlobArtifactStore {
     auth_mode: BlobAuthMode,
     client: Client,
     container: String,
+    managed_identity_client_id: Option<String>,
     shared_key: Option<String>,
     local_cors_allowed_origins: Vec<String>,
     local_setup_complete: Mutex<bool>,
-    public_account_url: Url,
     user_delegation_key: Mutex<Option<CachedUserDelegationKey>>,
 }
 
 impl BlobArtifactStore {
     pub(super) fn new(
         account_url: String,
-        public_account_url: Option<String>,
         container: String,
         shared_key: Option<String>,
         local_cors_allowed_origins: Vec<String>,
+        managed_identity_client_id: Option<String>,
     ) -> Result<Self, AppError> {
         let account_url = Url::parse(&account_url).map_err(|error| {
             AppError::config_with_source(
@@ -76,9 +73,6 @@ impl BlobArtifactStore {
         } else {
             BlobAuthMode::UserDelegation
         };
-        let public_account_url =
-            parse_optional_blob_base_url(BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME, public_account_url)?
-                .unwrap_or_else(|| account_url.clone());
 
         Ok(Self {
             account_name,
@@ -95,10 +89,10 @@ impl BlobArtifactStore {
                     )
                 })?,
             container,
+            managed_identity_client_id,
             shared_key,
             local_cors_allowed_origins,
             local_setup_complete: Mutex::new(false),
-            public_account_url,
             user_delegation_key: Mutex::new(None),
         })
     }
@@ -289,7 +283,8 @@ impl BlobArtifactStore {
 
         match self.auth_mode {
             BlobAuthMode::UserDelegation => {
-                builder = builder.bearer_auth(blob_access_token().await?);
+                builder = builder
+                    .bearer_auth(blob_access_token(self.managed_identity_client_id.clone()).await?);
             }
             BlobAuthMode::SharedKey => {
                 let body_len = body.as_ref().map(Vec::len);
@@ -337,7 +332,8 @@ impl BlobArtifactStore {
 
         match self.auth_mode {
             BlobAuthMode::UserDelegation => {
-                builder = builder.bearer_auth(blob_access_token().await?);
+                builder = builder
+                    .bearer_auth(blob_access_token(self.managed_identity_client_id.clone()).await?);
             }
             BlobAuthMode::SharedKey => {
                 let authorization =
@@ -478,7 +474,7 @@ impl BlobArtifactStore {
         signed_start: OffsetDateTime,
         signed_expiry: OffsetDateTime,
     ) -> Result<UserDelegationKey, AppError> {
-        let token = blob_access_token().await?;
+        let token = blob_access_token(self.managed_identity_client_id.clone()).await?;
         let request_body = format!(
             r#"<?xml version="1.0" encoding="utf-8"?><KeyInfo><Start>{}</Start><Expiry>{}</Expiry></KeyInfo>"#,
             format_iso_8601(signed_start)?,
@@ -623,7 +619,7 @@ impl BlobArtifactStore {
         expires_at: OffsetDateTime,
     ) -> Result<ArtifactAccessGrant, AppError> {
         self.ensure_local_blob_ready().await?;
-        self.create_access_grant(&self.public_account_url, path, "r", "GET", None, expires_at)
+        self.create_access_grant(&self.account_url, path, "r", "GET", None, expires_at)
             .await
     }
 
@@ -635,7 +631,7 @@ impl BlobArtifactStore {
     ) -> Result<ArtifactAccessGrant, AppError> {
         self.ensure_local_blob_ready().await?;
         self.create_access_grant(
-            &self.public_account_url,
+            &self.account_url,
             path,
             "cw",
             "PUT",
@@ -810,23 +806,14 @@ fn blob_request_headers(content_type: Option<&str>) -> Result<HeaderMap, AppErro
     Ok(headers)
 }
 
-async fn blob_access_token() -> Result<String, AppError> {
-    if let Ok(credential) = ManagedIdentityCredential::new(None)
-        && let Ok(token) = credential.get_token(&[STORAGE_AUDIENCE_SCOPE], None).await
-    {
-        return Ok(token.token.secret().to_string());
-    }
-
-    let credential = DeveloperToolsCredential::new(None).map_err(|error| {
-        AppError::internal_with_source("Failed to initialize Azure developer credentials.", error)
-    })?;
-    credential
-        .get_token(&[STORAGE_AUDIENCE_SCOPE], None)
-        .await
-        .map(|token| token.token.secret().to_string())
-        .map_err(|error| {
-            AppError::internal_with_source("Failed to get an Azure Blob access token.", error)
-        })
+async fn blob_access_token(client_id: Option<String>) -> Result<String, AppError> {
+    access_token_with_developer_fallback(
+        STORAGE_AUDIENCE_SCOPE,
+        client_id,
+        "Failed to initialize Azure developer credentials.",
+        "Failed to get an Azure Blob access token.",
+    )
+    .await
 }
 
 fn storage_account_name(account_url: &Url) -> Result<String, AppError> {
@@ -848,17 +835,11 @@ fn storage_account_name(account_url: &Url) -> Result<String, AppError> {
     Ok(host.split('.').next().unwrap_or_default().to_string())
 }
 
-fn parse_optional_blob_base_url(
-    env_name: &str,
-    value: Option<String>,
-) -> Result<Option<Url>, AppError> {
-    value
-        .map(|value| {
-            Url::parse(&value).map_err(|error| {
-                AppError::config_with_source(format!("{env_name} is not a valid URL."), error)
-            })
-        })
-        .transpose()
+#[cfg(test)]
+impl BlobArtifactStore {
+    fn managed_identity_client_id(&self) -> Option<&str> {
+        self.managed_identity_client_id.as_deref()
+    }
 }
 
 fn canonicalized_headers(headers: &HeaderMap) -> Result<String, AppError> {
@@ -1268,20 +1249,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn browser_grants_use_the_public_blob_base_url() {
+    async fn browser_grants_use_the_runtime_blob_base_url() {
         let store = BlobArtifactStore::new(
             "https://runtime.example.com".to_string(),
-            Some("https://public.example.com".to_string()),
             "documents".to_string(),
             Some("c2hhcmVkLWtleQ==".to_string()),
             Vec::new(),
+            None,
         )
         .unwrap();
         let expires_at = OffsetDateTime::UNIX_EPOCH + TimeDuration::minutes(15);
 
         let upload = store
             .create_access_grant(
-                &store.public_account_url,
+                &store.account_url,
                 "workspaces/a/configs/b/uploads/u/input.csv",
                 "cw",
                 "PUT",
@@ -1291,7 +1272,7 @@ mod tests {
             .await
             .unwrap();
         let upload_url = Url::parse(&upload.url).unwrap();
-        assert_eq!(upload_url.host_str(), Some("public.example.com"));
+        assert_eq!(upload_url.host_str(), Some("runtime.example.com"));
         assert_eq!(
             upload_url.query_pairs().find(|(name, _)| name == "sp"),
             Some(("sp".into(), "cw".into()))
@@ -1299,7 +1280,7 @@ mod tests {
 
         let download = store
             .create_access_grant(
-                &store.public_account_url,
+                &store.account_url,
                 "workspaces/a/configs/b/runs/run_1/logs/events.ndjson",
                 "r",
                 "GET",
@@ -1309,10 +1290,27 @@ mod tests {
             .await
             .unwrap();
         let download_url = Url::parse(&download.url).unwrap();
-        assert_eq!(download_url.host_str(), Some("public.example.com"));
+        assert_eq!(download_url.host_str(), Some("runtime.example.com"));
         assert_eq!(
             download_url.query_pairs().find(|(name, _)| name == "sp"),
             Some(("sp".into(), "r".into()))
+        );
+    }
+
+    #[test]
+    fn blob_store_keeps_the_runtime_azure_client_id_when_configured() {
+        let store = BlobArtifactStore::new(
+            "https://runtime.example.com".to_string(),
+            "documents".to_string(),
+            None,
+            Vec::new(),
+            Some("runtime-client-id".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.managed_identity_client_id(),
+            Some("runtime-client-id")
         );
     }
 }

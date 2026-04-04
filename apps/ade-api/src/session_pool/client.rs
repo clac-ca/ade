@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use azure_core::credentials::TokenCredential;
-use azure_identity::{DeveloperToolsCredential, ManagedIdentityCredential};
 use reqwest::{
     Client, Method, Url,
     multipart::{Form, Part},
@@ -10,6 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use utoipa::ToSchema;
 
 use crate::{
+    azure_auth::{access_token_with_developer_fallback, read_azure_client_id},
     config::{EnvBag, read_optional_trimmed_string},
     error::AppError,
     runs::RunTimings,
@@ -57,19 +56,22 @@ pub(crate) struct SessionOperationResult<T> {
 #[derive(Clone)]
 pub(crate) struct SessionPoolClient {
     client: Client,
+    managed_identity_client_id: Option<String>,
     pool_management_endpoint: Url,
     bearer_token_override: Option<String>,
 }
 
 impl SessionPoolClient {
     pub(crate) fn from_env(env: &EnvBag) -> Result<Self, AppError> {
-        let pool_management_endpoint =
-            read_optional_trimmed_string(env, SESSION_POOL_MANAGEMENT_ENDPOINT_ENV_NAME)
-                .ok_or_else(|| {
-                    AppError::config(format!(
-                        "Missing required environment variable: {SESSION_POOL_MANAGEMENT_ENDPOINT_ENV_NAME}"
-                    ))
-                })?;
+        let pool_management_endpoint = read_optional_trimmed_string(
+            env,
+            SESSION_POOL_MANAGEMENT_ENDPOINT_ENV_NAME,
+        )
+        .ok_or_else(|| {
+            AppError::config(format!(
+                "Missing required environment variable: {SESSION_POOL_MANAGEMENT_ENDPOINT_ENV_NAME}"
+            ))
+        })?;
 
         let mut endpoint = Url::parse(&format!(
             "{}/",
@@ -95,6 +97,7 @@ impl SessionPoolClient {
                         error,
                     )
                 })?,
+            managed_identity_client_id: read_azure_client_id(env),
             pool_management_endpoint: endpoint,
             bearer_token_override: read_optional_trimmed_string(
                 env,
@@ -212,7 +215,7 @@ impl SessionPoolClient {
         let request = self.client.request(method, url);
         let bearer_token = match &self.bearer_token_override {
             Some(token) => token.clone(),
-            None => data_plane_token().await?,
+            None => data_plane_token(self.managed_identity_client_id.clone()).await?,
         };
 
         Ok(request.bearer_auth(bearer_token))
@@ -263,31 +266,16 @@ struct ShellExecutionRequest {
     timeout_in_seconds: Option<u64>,
 }
 
-async fn data_plane_token() -> Result<String, AppError> {
+async fn data_plane_token(client_id: Option<String>) -> Result<String, AppError> {
     let scope = format!("{DEFAULT_AZURE_SESSION_AUDIENCE}/.default");
 
-    if let Ok(credential) = ManagedIdentityCredential::new(None)
-        && let Ok(token) = credential.get_token(&[scope.as_str()], None).await
-    {
-        return Ok(token.token.secret().to_string());
-    }
-
-    let credential = DeveloperToolsCredential::new(None).map_err(|error| {
-        AppError::internal_with_source(
-            "Failed to create the Azure developer credential.".to_string(),
-            error,
-        )
-    })?;
-    let token = credential
-        .get_token(&[scope.as_str()], None)
-        .await
-        .map_err(|error| {
-            AppError::internal_with_source(
-                "Failed to acquire an Azure access token for session pool calls.".to_string(),
-                error,
-            )
-        })?;
-    Ok(token.token.secret().to_string())
+    access_token_with_developer_fallback(
+        scope.as_str(),
+        client_id,
+        "Failed to create the Azure developer credential.",
+        "Failed to acquire an Azure access token for session pool calls.",
+    )
+    .await
 }
 
 fn session_pool_url(
@@ -565,5 +553,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(client.bearer_token_override, None);
+        assert_eq!(client.managed_identity_client_id, None);
+    }
+
+    #[test]
+    fn session_pool_client_uses_the_runtime_azure_client_id_when_present() {
+        let client = SessionPoolClient::from_env(&env(&[
+            (
+                "ADE_SESSION_POOL_MANAGEMENT_ENDPOINT",
+                "https://example.dynamicsessions.io",
+            ),
+            ("AZURE_CLIENT_ID", "runtime-client-id"),
+        ]))
+        .unwrap();
+
+        assert_eq!(
+            client.managed_identity_client_id.as_deref(),
+            Some("runtime-client-id")
+        );
     }
 }

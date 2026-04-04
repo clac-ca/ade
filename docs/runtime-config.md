@@ -1,110 +1,56 @@
 # Runtime Config
 
-ADE has two runtime concerns:
+This document only covers runtime environment and behavior. For the production deploy sequence, see [infra/README.md](../infra/README.md).
 
-- SQL connectivity
-- artifact storage for uploads and run outputs
-- the hosted ADE sandbox-environment backend
+## Production Runtime Model
 
-For the canonical concept model and terminology, see:
+Production is intentionally simple:
 
-- [architecture/glossary.md](architecture/glossary.md)
-- [architecture/sandbox-environment.md](architecture/sandbox-environment.md)
+- the app runs with one user-assigned managed identity
+- `main.bicep` injects that identity through the standard Azure env var `AZURE_CLIENT_ID`
+- the app uses that same identity for SQL, Blob Storage, and session-pool access
+- `ADE_SANDBOX_ENVIRONMENT_SECRET` comes from a Key Vault reference
 
-## SQL Runtime Config
+## Runtime Environment Variables
 
-| Name                         | Required | Used by                        | Notes                                                        |
-| ---------------------------- | -------- | ------------------------------ | ------------------------------------------------------------ |
-| `AZURE_SQL_CONNECTIONSTRING` | Yes      | API, migrations, app container | The application fails fast if SQL is missing or unreachable. |
+### SQL
 
-ADE keeps SQL authentication inside that connection string. Supported values are:
+| Name                         | Required | Used by         | Notes                                                                                                                                                                            |
+| ---------------------------- | -------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AZURE_SQL_CONNECTIONSTRING` | Yes      | API, migrations | Production uses `Authentication=ActiveDirectoryManagedIdentity` with `User ID=<app-uami-client-id>` for the app and `User ID=<deployment-uami-client-id>` for the migration job. |
 
-- `SqlPassword` for local SQL Server development.
-- `ActiveDirectoryManagedIdentity` for explicit managed identity authentication. `User ID` is the optional user-assigned managed identity client ID.
-- `ActiveDirectoryDefault` for ADE's passwordless fallback chain. ADE tries `WorkloadIdentityCredential`, then `ManagedIdentityCredential`, then `DeveloperToolsCredential`. When present, `User ID` is used as the client ID for workload and managed identity resolution.
+Supported SQL auth modes:
 
-ADE does not add any extra runtime environment variables of its own for that chain, and production infra still uses explicit managed identity mode rather than `ActiveDirectoryDefault`.
+- `SqlPassword` for local SQL Server development
+- `ActiveDirectoryManagedIdentity` for explicit managed identity auth
+- `ActiveDirectoryDefault` for the broader Azure credential chain when needed
 
-## Artifact Storage Config
+### Shared Azure Identity Selector
 
-ADE stores user uploads, persisted run outputs, and archived run logs in one durable blob container per environment.
+| Name              | Required | Used by | Notes                                                                                                                                                       |
+| ----------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AZURE_CLIENT_ID` | Hosted   | API     | Standard Azure Identity env var. In production it is set to the app UAMI client ID so Blob and session-pool token acquisition use the same identity as SQL. |
 
-The running API is the trusted component. It chooses blob paths, validates scoped input paths, and mints short-lived exact-blob access grants.
+### Artifact Storage
 
-The runtime storage settings are:
+| Name                            | Required | Used by | Notes                                                                    |
+| ------------------------------- | -------- | ------- | ------------------------------------------------------------------------ |
+| `ADE_BLOB_ACCOUNT_URL`          | Yes      | API     | Blob service endpoint used for durable artifact reads and writes.        |
+| `ADE_BLOB_CONTAINER`            | Yes      | API     | Private blob container that stores scoped uploads and run outputs.       |
+| `ADE_BLOB_CORS_ALLOWED_ORIGINS` | Local    | API     | Comma-separated origins for managed local Azurite setup.                 |
+| `ADE_BLOB_ACCOUNT_KEY`          | Local    | API     | Shared key used only for local Azurite management and local SAS minting. |
 
-| Name                            | Required | Used by | Notes                                                                                                                       |
-| ------------------------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `ADE_BLOB_ACCOUNT_URL`          | Yes      | API     | Blob service endpoint used by the API for container management and durable artifact reads and writes.                       |
-| `ADE_BLOB_CONTAINER`            | Yes      | API     | Private blob container that stores scoped uploads and run outputs.                                                          |
-| `ADE_BLOB_PUBLIC_ACCOUNT_URL`   | No       | API     | Optional browser-facing blob endpoint used when browser upload and download SAS URLs must differ from the API/runtime host. |
-| `ADE_BLOB_CORS_ALLOWED_ORIGINS` | No       | API     | Comma-separated browser origins to allow on the blob service. Used for managed local Azurite setup.                         |
-| `ADE_BLOB_ACCOUNT_KEY`          | Local    | API     | Shared key used only for local Azurite management and local exact-blob SAS minting.                                         |
+Hosted environments use Azure Blob Storage with user delegation SAS. Local development uses Azurite and falls back to its shared key because Azurite does not support user delegation SAS.
 
-ADE has no filesystem artifact mode. If blob settings are missing or invalid, the API fails fast.
+### Session Pool and Sandbox Secret
 
-Deployed environments use Azure Blob Storage with user delegation SAS:
+| Name                                   | Required | Used by | Notes                                                                                                                                                 |
+| -------------------------------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` | Yes      | API     | Base URL for the session-pool data-plane routes.                                                                                                      |
+| `ADE_SESSION_POOL_BEARER_TOKEN`        | Local    | API     | Local override used for the emulator path. Hosted environments leave it unset so the app uses Azure credentials.                                      |
+| `ADE_SANDBOX_ENVIRONMENT_SECRET`       | Hosted   | API     | Stable secret used to derive deterministic sandbox identifiers. Hosted production gets it through the Container App secret store backed by Key Vault. |
 
-- browser upload grants are exact-blob `PUT` URLs
-- browser download grants are exact-blob `GET` URLs
-- the browser and session never receive container-wide credentials
-- the API proxies sandbox input and output bytes during run execution
-
-Local development uses Azurite instead of Azure Blob Storage. Azurite does not support user delegation SAS, so ADE uses the Azurite shared key only for the local emulator path. The browser and session still receive exact-blob SAS URLs, and the API still owns path selection and container setup.
-
-## Sandbox Environment Config
-
-ADE uses one shared Azure Container Apps Shell session-pool resource per environment. Local development uses a Dockerized session-pool emulator that exposes the same management-endpoint contract.
-
-The ADE API requires that session-pool config to be present at startup. The session-pool client always uses the pinned Shell data-plane API version `2025-10-02-preview`, always sends a Bearer header, and only knows about one provider boundary: the session-pool management endpoint.
-
-ADE intentionally follows the observed Shell pool behavior rather than the broader code-interpreter documentation when they diverge:
-
-- uploads with no `path` land in the session root under `/mnt/data`
-- uploads with an explicit `app/...` or `mnt/data/...` path land under that sandbox root
-- shell commands always start in `/mnt/data`
-
-The steady-state hosted runtime settings are:
-
-| Name                                   | Required | Used by | Notes                                                                                       |
-| -------------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------- |
-| `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` | Yes      | API     | Base URL for the session-pool data-plane routes.                                            |
-| `ADE_SESSION_POOL_BEARER_TOKEN`        | No       | API     | Optional explicit bearer token override. Local dev and the emulator use this instead of Azure credential acquisition. |
-| `ADE_SANDBOX_ENVIRONMENT_SECRET`       | No       | API     | Stable secret used to derive deterministic sandbox identifiers from `workspaceId:configVersionId`. Hosted environments should provide it through the Container App secret store. |
-
-ADE does not discover or build Python wheels at runtime. It relies on one fixed shared runtime artifact:
-
-- local host development: `.package/sandbox-environment.tar.gz`
-- container image runtime: `/app/runtime/sandbox-environment.tar.gz`
-
-The sandbox-environment tarball contains the shared connector binary, `setup.sh`, the pinned Python runtime already laid out under `/app/ade/python/current`, and the base wheelhouse used to satisfy `ade-config` dependencies such as `ade-engine`. `setup.sh` does not fetch Python from the internet.
-
-ADE prepares the shared sandbox environment first, then installs the selected config as a separate runtime step. The API uploads the tarball, extracts it, starts `reverse-connect`, runs `setup.sh`, installs the mounted config wheel directly from `/mnt/data/ade/configs/<workspaceId>/<configVersionId>/`, and executes `ade process` directly.
-
-If `ADE_SANDBOX_ENVIRONMENT_SECRET` is missing at startup, ADE logs one warning and generates a process-local fallback secret. That keeps local ad hoc runs simple, but hosted environments should still provide one stable shared secret so multiple replicas derive the same sandbox identifiers and reverse-connect tokens.
-
-ADE does not support a migration-on-startup toggle. `ade-api` never runs migrations on startup, and `ade-migrate` is the only supported migration entrypoint.
-
-ADE keeps runtime HTTP metadata intentionally small:
-
-- `/api/version` returns only `{ service, version }`
-- released ADE Platform builds report the injected platform CalVer; local builds fall back to the app package version when no release version is injected
-
-Build provenance such as image creation time and source revision is stored in OCI image metadata rather than the runtime API.
-
-The server listen address is not environment-driven.
-
-- Local development runs the API on `127.0.0.1:8000`.
-- The container image runs the API on `0.0.0.0:8000`.
-- If you need a different listen address, pass `--host` and `--port` to `./bin/ade-api`.
-
-## Run Scheduler Config
-
-ADE queues run execution inside the API and starts at most a small bounded number of runs at once.
-
-| Name                     | Required | Used by | Notes                                                              |
-| ------------------------ | -------- | ------- | ------------------------------------------------------------------ |
-| `ADE_RUN_MAX_CONCURRENT` | No       | API     | Maximum concurrent run executions per API instance. Defaults to 4. |
+If `ADE_SANDBOX_ENVIRONMENT_SECRET` is missing, ADE logs one warning and generates a process-local fallback secret. That is acceptable for local ad hoc work, not for hosted production.
 
 ## Local Defaults
 
@@ -113,154 +59,17 @@ ADE queues run execution inside the API and starts at most a small bounded numbe
 - local Azurite Blob Storage on `http://127.0.0.1:10000/devstoreaccount1`
 - local SQL on `127.0.0.1:8013`
 - local session-pool emulator on `http://127.0.0.1:8014`
-- local sandbox-environment assets under:
-  - `.package/sandbox-environment.tar.gz`
-  - `.package/configs/`
 
-Local config wheels are staged under `.package/configs/<workspaceId>/<configVersionId>/` only so the local session-pool emulator can mount them into `/mnt/data/ade/configs/<workspaceId>/<configVersionId>/`. The API does not read that host directory directly.
+`pnpm start` and `pnpm test:acceptance` load `.env` when present. If the core runtime variables are missing, they synthesize a local stack:
 
-Managed local blob settings are injected as:
+- local Azurite settings for Blob Storage
+- local SQL connection string
+- local session-pool endpoint and bearer token
+- local sandbox secret
 
-- `ADE_BLOB_ACCOUNT_URL=http://127.0.0.1:10000/devstoreaccount1`
-- `ADE_BLOB_CONTAINER=documents`
-- `ADE_BLOB_ACCOUNT_KEY=<Azurite devstoreaccount1 key>`
-- `ADE_BLOB_PUBLIC_ACCOUNT_URL=http://127.0.0.1:10000/devstoreaccount1`
-- `ADE_BLOB_CORS_ALLOWED_ORIGINS=http://127.0.0.1:<web-port>,http://localhost:<web-port>`
+## Runtime Notes
 
-`pnpm start` and `pnpm test:acceptance` load `.env` when present.
-
-- If `ADE_BLOB_ACCOUNT_URL` is absent, they start local Azurite and inject the same managed local blob settings, except `ADE_BLOB_ACCOUNT_URL` is set to `http://host.docker.internal:10000/devstoreaccount1` so the app container can reach the emulator.
-- If `AZURE_SQL_CONNECTIONSTRING` is absent, they start local SQL and synthesize the container-safe connection string.
-- If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is absent, they start the local session-pool emulator and inject:
-  - `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT=http://host.docker.internal:8014`
-  - `ADE_SESSION_POOL_BEARER_TOKEN=ade-local-session-token`
-  - `ADE_SANDBOX_ENVIRONMENT_SECRET=ade-local-session-secret`
-- If `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT` is present, they pass through `ADE_SANDBOX_ENVIRONMENT_SECRET` when configured and otherwise let the app generate a fallback secret at startup.
-
-Deployed environments follow the same pattern. Bicep provisions the storage account, private `documents` container, blob CORS rules, a lifecycle policy that tiers scoped block blobs to Cool after 30 days and Archive after 180 days, one shared session-pool endpoint, and a Key Vault that stores the sandbox environment secret. The Container App reads `ADE_SANDBOX_ENVIRONMENT_SECRET` from that Key Vault secret reference, hosted environments leave `ADE_SESSION_POOL_BEARER_TOKEN` unset so the app acquires Azure bearer tokens for the session-pool audience, and the running app gets Blob Storage RBAC so it can mint user delegation SAS. The session runtime does not receive broad storage access.
-
-## Public Runtime API
-
-The public runtime routes are workspace/config scoped:
-
-- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/uploads`
-- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/uploads/batches`
-- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/runs`
-- `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}`
-- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/downloads`
-- `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/events`
-- `POST /api/workspaces/{workspaceId}/configs/{configVersionId}/runs/{runId}/cancel`
-- `GET /api/workspaces/{workspaceId}/configs/{configVersionId}/terminal`
-
-`POST /uploads` is the only public upload entrypoint. It returns a server-chosen scoped file path plus direct upload instructions:
-
-```json
-{
-  "filePath": "workspaces/workspace-a/configs/config-v1/uploads/upl_123/input.xlsx",
-  "upload": {
-    "method": "PUT",
-    "url": "https://<account>.blob.core.windows.net/<container>/workspaces/workspace-a/configs/config-v1/uploads/upl_123/input.xlsx?<sas>",
-    "headers": {
-      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "x-ms-blob-type": "BlockBlob",
-      "x-ms-version": "<version>"
-    },
-    "expiresAt": "2026-03-29T21:15:00Z"
-  }
-}
-```
-
-`POST /uploads/batches` returns one exact-blob upload grant per file while keeping path selection server-owned:
-
-```json
-{
-  "batchId": "bat_123",
-  "items": [
-    {
-      "fileId": "fil_123",
-      "filePath": "workspaces/workspace-a/configs/config-v1/uploads/batches/bat_123/fil_123/input-a.xlsx",
-      "upload": {
-        "method": "PUT",
-        "url": "https://<account>.blob.core.windows.net/<container>/workspaces/workspace-a/configs/config-v1/uploads/batches/bat_123/fil_123/input-a.xlsx?<sas>",
-        "headers": {
-          "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          "x-ms-blob-type": "BlockBlob",
-          "x-ms-version": "<version>"
-        },
-        "expiresAt": "2026-03-29T21:30:00Z"
-      }
-    }
-  ]
-}
-```
-
-`POST /runs` is always async and returns `202 Accepted` with a `Location` header:
-
-```json
-{
-  "runId": "run_123",
-  "status": "pending"
-}
-```
-
-`POST /runs/{runId}/downloads` mints a short-lived exact-blob `GET` grant for the requested artifact:
-
-```json
-{
-  "artifact": "log"
-}
-```
-
-```json
-{
-  "filePath": "workspaces/workspace-a/configs/config-v1/runs/run_123/logs/events.ndjson",
-  "download": {
-    "method": "GET",
-    "url": "https://<account>.blob.core.windows.net/<container>/workspaces/workspace-a/configs/config-v1/runs/run_123/logs/events.ndjson?<sas>",
-    "headers": {},
-    "expiresAt": "2026-03-29T21:15:00Z"
-  }
-}
-```
-
-`GET /runs/{runId}/events` returns `text/event-stream` for the active in-memory event feed. SSE event ids are per-run sequence numbers, so clients can resume with `Last-Event-ID` or the `after` query parameter while the run is still active on the current API instance. Durable history is archived as `events.ndjson` and downloaded through `POST /runs/{runId}/downloads`. The terminal `run.completed` event includes the final `outputPath` and `logPath`, so the browser does not need an extra detail fetch just to discover artifact locations.
-
-`GET /terminal` is the only public WebSocket route. Terminal traffic is bidirectional. Run events are not multiplexed onto the terminal socket.
-
-The product flow is:
-
-1. Request upload instructions through `POST /uploads`.
-2. Upload the file directly to Blob Storage with the returned `PUT` URL and headers.
-3. Run ADE against that uploaded blob-backed file through:
-
-```json
-{
-  "inputPath": "workspaces/workspace-a/configs/config-v1/uploads/upl_123/input.xlsx",
-  "timeoutInSeconds": 900
-}
-```
-
-4. Poll `GET /runs/{runId}` for current state or reconnect safety.
-5. Stream logs and lifecycle changes from `GET /runs/{runId}/events` over SSE while the run is active.
-6. Read the final `outputPath` and `logPath` from the terminal `run.completed` event or `GET /runs/{runId}`.
-7. Download the output or archived NDJSON log directly from Blob Storage through `POST /runs/{runId}/downloads`.
-
-The bulk flow is the same model, just repeated with bounded fanout:
-
-1. Request one batch of exact-blob upload grants through `POST /uploads/batches`.
-2. Upload each file directly to Blob Storage from the browser with a bounded worker pool.
-3. Call `POST /runs` once per successfully uploaded file.
-4. Let the API scheduler hold excess runs in `pending` until a slot is free.
-5. Poll `GET /runs/{runId}` for each active bulk row.
-
-Public `/files` and `/executions` routes are removed. The session-pool `/files` and `/executions` endpoints remain internal implementation details for wheel staging and Python bootstrap execution.
-
-## Network Egress
-
-Session-pool egress is enabled by default.
-
-That is a deliberate product choice because ADE config packages may need to call external APIs during processing.
-
-The local emulator does not try to block outbound access either.
-
-Any config code running in a session can reach external networks unless a future policy adds narrower controls.
+- `ade-api` never runs migrations on startup.
+- `ade-migrate` is the only supported migration entrypoint.
+- The app listens on `127.0.0.1:8000` in local host mode and `0.0.0.0:8000` in the container image.
+- The runtime API keeps metadata intentionally small. Build provenance stays in OCI image metadata rather than the runtime API.

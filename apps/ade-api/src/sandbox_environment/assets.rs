@@ -129,13 +129,15 @@ struct FileArtifact {
 }
 
 fn read_sandbox_secret(env: &EnvBag) -> Result<String, AppError> {
-    Ok(read_optional_trimmed_string(env, SANDBOX_SECRET_ENV_NAME).unwrap_or_else(|| {
-        tracing::warn!(
-            environment_variable = SANDBOX_SECRET_ENV_NAME,
-            "Sandbox environment secret is not configured; generating a process-local fallback."
-        );
-        generate_sandbox_secret()
-    }))
+    Ok(
+        read_optional_trimmed_string(env, SANDBOX_SECRET_ENV_NAME).unwrap_or_else(|| {
+            tracing::warn!(
+                environment_variable = SANDBOX_SECRET_ENV_NAME,
+                "Sandbox environment secret is not configured; generating a process-local fallback."
+            );
+            generate_sandbox_secret()
+        }),
+    )
 }
 
 fn generate_sandbox_secret() -> String {
@@ -296,7 +298,17 @@ mod tests {
         assert_eq!(first.sandbox_secret().len(), 64);
         assert_eq!(second.sandbox_secret().len(), 64);
         assert_ne!(first.sandbox_secret(), second.sandbox_secret());
-        assert!(first.sandbox_secret().chars().all(|ch| ch.is_ascii_hexdigit()));
-        assert!(second.sandbox_secret().chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert!(
+            first
+                .sandbox_secret()
+                .chars()
+                .all(|ch| ch.is_ascii_hexdigit())
+        );
+        assert!(
+            second
+                .sandbox_secret()
+                .chars()
+                .all(|ch| ch.is_ascii_hexdigit())
+        );
     }
 }

@@ -1,387 +1,476 @@
 targetScope = 'resourceGroup'
 
-@description('Location for all deployed resources.')
-param location string = resourceGroup().location
-
-@description('Short prefix used for shared infrastructure resource names.')
-param prefix string = 'ade'
-
-@description('Tags applied to all resources.')
-param tags object = {}
-
-@description('Container image reference for the deployed ADE app and migration job.')
 param image string
 
-@description('Name for the deployment user-assigned managed identity.')
-param deploymentManagedIdentityName string
-
-@description('GitHub organization used in the deployment-identity federated credential subject.')
-param githubOrganization string
-
-@description('GitHub repository used in the deployment-identity federated credential subject.')
-param githubRepository string
-
-@description('GitHub environment name used in the deployment-identity federated credential subject.')
-param githubEnvironmentName string
-
-@description('Name for the Log Analytics workspace.')
-param logAnalyticsWorkspaceName string = '${prefix}-logs'
-
-@description('Name for the Container Apps environment.')
-param containerAppsEnvironmentName string = '${prefix}-env'
-
-@description('Name for the public ADE container app.')
-param appName string = prefix
-
-@description('Name for the manual migration job.')
-param migrationJobName string = '${prefix}-migrate'
-
-@description('Name for the virtual network.')
-param virtualNetworkName string = '${prefix}-vnet'
-
-@description('Name for the Container Apps infrastructure subnet.')
-param containerAppsSubnetName string = 'aca-infra'
-
-@description('Name for the Azure SQL logical server.')
-param sqlServerName string = '${prefix}-sql'
-
-@description('Name for the Azure SQL database.')
-param sqlDatabaseName string = 'sqldb-${prefix}'
-
-@description('Name for the Azure Storage account.')
-param storageAccountName string
-
-@description('Name for the Azure Key Vault.')
-param keyVaultName string
-
-@description('Name for the Blob container.')
-param blobContainerName string = 'documents'
-
-@description('Name for the Azure Container Apps session pool.')
-param sessionPoolName string = '${prefix}-sessions'
-
-@description('Secret used to derive deterministic ADE runtime session identifiers.')
-@secure()
-param sandboxEnvironmentSecret string = ''
-
-@description('CPU allocation for the ADE container app.')
-param appCpu string = '0.25'
-
-@description('Memory allocation for the ADE container app.')
-param appMemory string = '0.5Gi'
-
-@description('Minimum replica count for the ADE container app.')
-param appMinReplicas int = 1
-
-@description('Maximum replica count for the ADE container app.')
-param appMaxReplicas int = 1
-
-@description('CPU allocation for the migration job.')
-param jobCpu string = '0.25'
-
-@description('Memory allocation for the migration job.')
-param jobMemory string = '0.5Gi'
-
-@description('Address prefix for the ADE virtual network.')
-param virtualNetworkAddressPrefix string = '10.42.0.0/16'
-
-@description('Address prefix for the Container Apps subnet.')
-param containerAppsSubnetAddressPrefix string = '10.42.0.0/27'
-
-var mergedTags = union({
+var location = resourceGroup().location
+var mergedTags = {
   project: 'ade'
-}, tags)
-var githubOidcSubject = 'repo:${githubOrganization}/${githubRepository}:environment:${githubEnvironmentName}'
+  environment: 'prod'
+}
+var deploymentManagedIdentityName = 'id-ade-deploy-prod-canadacentral-002'
+var appManagedIdentityName = 'id-ade-app-prod-canadacentral-002'
+var logAnalyticsWorkspaceName = 'log-ade-prod-canadacentral-002'
+var containerAppsEnvironmentName = 'cae-ade-prod-canadacentral-002'
+var appName = 'ca-ade-prod-canadacentral-002'
+var migrationJobName = 'job-ade-migrate-prod-cc-002'
+var virtualNetworkName = 'vnet-ade-prod-canadacentral-002'
+var containerAppsSubnetName = 'aca-infra'
+var sqlServerName = 'sql-ade-prod-cc-002'
+var sqlDatabaseName = 'sqldb-ade-prod-cc-002'
+var storageAccountName = 'stadeprodcc002'
+var keyVaultName = 'kv-ade-prod-cc-002'
+var blobContainerName = 'documents'
+var sessionPoolName = 'spadeprodcc002'
+var appCpu = '0.25'
+var appMemory = '0.5Gi'
+var appMinReplicas = 0
+var appMaxReplicas = 1
+var jobCpu = '0.25'
+var jobMemory = '0.5Gi'
+var virtualNetworkAddressPrefix = '10.42.0.0/16'
+var containerAppsSubnetAddressPrefix = '10.42.0.0/27'
 var sessionExecutorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0fb8eba5-a2bb-4abe-b1c1-49dfad359bb0')
 var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-var keyVaultSecretsUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var sandboxEnvironmentSecretName = 'ade-sandbox-environment-secret'
-var sandboxEnvironmentSecretKeyVaultUrl = 'https://${keyVaultName}${environment().suffixes.keyvaultDns}/secrets/${sandboxEnvironmentSecretName}'
-var keyVaultReferencedAppSecrets = empty(sandboxEnvironmentSecret)
-  ? [
-      {
-        name: sandboxEnvironmentSecretName
-        keyVaultUrl: sandboxEnvironmentSecretKeyVaultUrl
-        identity: 'system'
-      }
-    ]
-  : []
-var inlineAppSecrets = !empty(sandboxEnvironmentSecret)
-  ? [
-      {
-        name: sandboxEnvironmentSecretName
-        value: sandboxEnvironmentSecret
-      }
-    ]
-  : []
-var appPublicUrl = 'https://${appName}.${platform.outputs.defaultDomain}'
 
-resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: deploymentManagedIdentityName
-  location: location
-  tags: mergedTags
 }
 
-resource deploymentManagedIdentityFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2024-11-30' = {
-  parent: deploymentManagedIdentity
-  name: 'github-${githubEnvironmentName}'
-  properties: {
-    audiences: [
-      'api://AzureADTokenExchange'
-    ]
-    issuer: 'https://token.actions.githubusercontent.com'
-    subject: githubOidcSubject
-  }
+resource appManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: appManagedIdentityName
 }
 
-module network 'modules/network.bicep' = {
-  name: 'adeNetwork'
-  params: {
-    containerAppsSubnetAddressPrefix: containerAppsSubnetAddressPrefix
-    containerAppsSubnetName: containerAppsSubnetName
-    location: location
-    tags: mergedTags
-    virtualNetworkAddressPrefix: virtualNetworkAddressPrefix
-    virtualNetworkName: virtualNetworkName
-  }
-}
-
-module platform 'modules/container-app-platform.bicep' = {
-  name: 'containerAppPlatform'
-  params: {
-    containerAppsEnvironmentName: containerAppsEnvironmentName
-    infrastructureSubnetId: network.outputs.containerAppsSubnetId
-    location: location
-    logAnalyticsWorkspaceName: logAnalyticsWorkspaceName
-    tags: mergedTags
-  }
-}
-
-module sql 'modules/sql-database.bicep' = {
-  name: 'sqlDatabase'
-  params: {
-    databaseName: sqlDatabaseName
-    deploymentManagedIdentityName: deploymentManagedIdentity.name
-    deploymentManagedIdentityPrincipalId: deploymentManagedIdentity.properties.principalId
-    location: location
-    serverName: sqlServerName
-    tags: mergedTags
-    virtualNetworkSubnetId: network.outputs.containerAppsSubnetId
-  }
-}
-
-module storage 'modules/storage-account.bicep' = {
-  name: 'storageAccount'
-  params: {
-    accountName: storageAccountName
-    blobContainerName: blobContainerName
-    corsAllowedOrigins: [
-      appPublicUrl
-    ]
-    location: location
-    tags: mergedTags
-  }
-}
-
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
+}
+
+var sandboxEnvironmentSecretKeyVaultUrl = '${keyVault.properties.vaultUri}secrets/${sandboxEnvironmentSecretName}'
+
+resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-05-01' = {
+  name: virtualNetworkName
   location: location
   tags: mergedTags
   properties: {
-    tenantId: subscription().tenantId
-    sku: {
-      family: 'A'
-      name: 'standard'
+    addressSpace: {
+      addressPrefixes: [
+        virtualNetworkAddressPrefix
+      ]
     }
-    enableRbacAuthorization: true
-    enableSoftDelete: true
-    enablePurgeProtection: true
   }
 }
 
-resource sandboxEnvironmentSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(sandboxEnvironmentSecret)) {
-  parent: keyVault
-  name: sandboxEnvironmentSecretName
+resource containerAppsSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
+  parent: virtualNetwork
+  name: containerAppsSubnetName
   properties: {
-    value: sandboxEnvironmentSecret
+    addressPrefix: containerAppsSubnetAddressPrefix
+    delegations: [
+      {
+        name: 'containerAppsDelegation'
+        properties: {
+          serviceName: 'Microsoft.App/environments'
+        }
+      }
+    ]
+    serviceEndpoints: [
+      {
+        service: 'Microsoft.Sql'
+        locations: [
+          location
+        ]
+      }
+    ]
   }
 }
 
-module sessionPool 'modules/session-pool.bicep' = {
-  name: 'sessionPool'
-  params: {
-    location: location
-    name: sessionPoolName
-    tags: mergedTags
+resource workspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
+  name: logAnalyticsWorkspaceName
+  location: location
+  tags: mergedTags
+  properties: {
+    features: {
+      disableLocalAuth: false
+      enableLogAccessUsingOnlyResourcePermissions: true
+    }
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
+    retentionInDays: 30
+    sku: {
+      name: 'PerGB2018'
+    }
+    workspaceCapping: {
+      dailyQuotaGb: -1
+    }
   }
 }
 
-resource sessionPoolResource 'Microsoft.App/sessionPools@2025-10-02-preview' existing = {
-  name: sessionPoolName
+resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
+  name: containerAppsEnvironmentName
+  location: location
+  tags: mergedTags
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: workspace.properties.customerId
+        sharedKey: workspace.listKeys().primarySharedKey
+      }
+    }
+    vnetConfiguration: {
+      infrastructureSubnetId: containerAppsSubnet.id
+      internal: false
+    }
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
+  }
 }
 
-resource storageAccountResource 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {
+resource sqlServer 'Microsoft.Sql/servers@2023-02-01-preview' = {
+  name: sqlServerName
+  location: location
+  tags: mergedTags
+  properties: {
+    minimalTlsVersion: '1.2'
+    publicNetworkAccess: 'Enabled'
+    version: '12.0'
+  }
+}
+
+resource sqlDatabase 'Microsoft.Sql/servers/databases@2023-08-01' = {
+  parent: sqlServer
+  name: sqlDatabaseName
+  location: location
+  sku: {
+    name: 'GP_S_Gen5'
+    tier: 'GeneralPurpose'
+    family: 'Gen5'
+    capacity: 2
+  }
+  tags: mergedTags
+  properties: {
+    autoPauseDelay: 60
+    minCapacity: json('0.5')
+  }
+}
+
+resource virtualNetworkRule 'Microsoft.Sql/servers/virtualNetworkRules@2023-08-01' = {
+  parent: sqlServer
+  name: 'aca'
+  properties: {
+    ignoreMissingVnetServiceEndpoint: false
+    virtualNetworkSubnetId: containerAppsSubnet.id
+  }
+}
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   name: storageAccountName
+  location: location
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  tags: mergedTags
+  properties: {
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    publicNetworkAccess: 'Enabled'
+    supportsHttpsTrafficOnly: true
+  }
 }
 
-var appSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
-var migrationSqlConnectionString = 'Data Source=tcp:${sql.outputs.fullyQualifiedDomainName},1433;Initial Catalog=${sql.outputs.databaseName};User ID=${deploymentManagedIdentity.properties.clientId};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
-module app 'modules/container-app.bicep' = {
-  name: 'appContainerApp'
-  params: {
-    containerPort: 8000
-    cpu: appCpu
-    env: [
-      {
-        name: 'AZURE_SQL_CONNECTIONSTRING'
-        value: appSqlConnectionString
-      }
-      {
-        name: 'ADE_SANDBOX_ENVIRONMENT_SECRET'
-        secretRef: sandboxEnvironmentSecretName
-      }
-      {
-        name: 'ADE_SESSION_POOL_MANAGEMENT_ENDPOINT'
-        value: sessionPool.outputs.poolManagementEndpoint
-      }
-      {
-        name: 'ADE_PUBLIC_API_URL'
-        value: appPublicUrl
-      }
-      {
-        name: 'ADE_BLOB_ACCOUNT_URL'
-        value: storage.outputs.blobEndpoint
-      }
-      {
-        name: 'ADE_BLOB_PUBLIC_ACCOUNT_URL'
-        value: storage.outputs.blobEndpoint
-      }
-      {
-        name: 'ADE_BLOB_CONTAINER'
-        value: storage.outputs.blobContainerName
-      }
-    ]
-    probes: [
-      {
-        type: 'Startup'
-        httpGet: {
-          path: '/api/healthz'
-          port: 8000
-          scheme: 'HTTP'
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2024-01-01' = {
+  parent: storageAccount
+  name: 'default'
+  properties: {
+    cors: {
+      corsRules: [
+        {
+          allowedHeaders: [
+            '*'
+          ]
+          allowedMethods: [
+            'GET'
+            'HEAD'
+            'OPTIONS'
+            'PUT'
+          ]
+          allowedOrigins: [
+            'https://${appName}.${containerAppsEnvironment.properties.defaultDomain}'
+          ]
+          exposedHeaders: [
+            'etag'
+            'x-ms-*'
+          ]
+          maxAgeInSeconds: 3600
         }
-        initialDelaySeconds: 1
-        periodSeconds: 5
-        timeoutSeconds: 3
-        failureThreshold: 24
-        successThreshold: 1
-      }
-      {
-        type: 'Readiness'
-        httpGet: {
-          path: '/api/readyz'
-          port: 8000
-          scheme: 'HTTP'
-        }
-        initialDelaySeconds: 1
-        periodSeconds: 5
-        timeoutSeconds: 3
-        failureThreshold: 3
-        successThreshold: 1
-      }
-      {
-        type: 'Liveness'
-        httpGet: {
-          path: '/api/healthz'
-          port: 8000
-          scheme: 'HTTP'
-        }
-        initialDelaySeconds: 10
-        periodSeconds: 30
-        timeoutSeconds: 3
-        failureThreshold: 3
-        successThreshold: 1
-      }
-    ]
-    externalIngress: true
-    image: image
-    managedEnvironmentId: platform.outputs.containerAppsEnvironmentId
-    maxReplicas: appMaxReplicas
-    memory: appMemory
-    minReplicas: appMinReplicas
-    name: appName
-    secrets: concat(keyVaultReferencedAppSecrets, inlineAppSecrets)
-    tags: mergedTags
+      ]
+    }
   }
-  dependsOn: [
-    sandboxEnvironmentSecretResource
-  ]
+}
+
+resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2024-01-01' = {
+  parent: blobService
+  name: blobContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource managementPolicy 'Microsoft.Storage/storageAccounts/managementPolicies@2024-01-01' = {
+  parent: storageAccount
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          enabled: true
+          name: 'tierScopedArtifacts'
+          type: 'Lifecycle'
+          definition: {
+            actions: {
+              baseBlob: {
+                tierToArchive: {
+                  daysAfterModificationGreaterThan: 180
+                }
+                tierToCool: {
+                  daysAfterModificationGreaterThan: 30
+                }
+              }
+            }
+            filters: {
+              blobTypes: [
+                'blockBlob'
+              ]
+              prefixMatch: [
+                '${blobContainerName}/workspaces/'
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
+resource sessionPool 'Microsoft.App/sessionPools@2025-10-02-preview' = {
+  name: sessionPoolName
+  location: location
+  tags: mergedTags
+  properties: {
+    containerType: 'Shell'
+    dynamicPoolConfiguration: {
+      lifecycleConfiguration: {
+        lifecycleType: 'Timed'
+        cooldownPeriodInSeconds: 3600
+      }
+    }
+    poolManagementType: 'Dynamic'
+    scaleConfiguration: {
+      maxConcurrentSessions: 5
+    }
+    sessionNetworkConfiguration: {
+      status: 'EgressEnabled'
+    }
+  }
+}
+
+var appPublicUrl = 'https://${appName}.${containerAppsEnvironment.properties.defaultDomain}'
+var appSqlConnectionString = 'Data Source=tcp:${sqlServer.properties.fullyQualifiedDomainName},1433;Initial Catalog=${sqlDatabase.name};User ID=${appManagedIdentity.properties.clientId};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
+var migrationSqlConnectionString = 'Data Source=tcp:${sqlServer.properties.fullyQualifiedDomainName},1433;Initial Catalog=${sqlDatabase.name};User ID=${deploymentManagedIdentity.properties.clientId};Authentication=ActiveDirectoryManagedIdentity;Encrypt=True;TrustServerCertificate=False'
+
+resource app 'Microsoft.App/containerApps@2024-03-01' = {
+  name: appName
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${appManagedIdentity.id}': {}
+    }
+  }
+  tags: mergedTags
+  properties: {
+    managedEnvironmentId: containerAppsEnvironment.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        allowInsecure: false
+        external: true
+        targetPort: 8000
+        traffic: [
+          {
+            latestRevision: true
+            weight: 100
+          }
+        ]
+        transport: 'auto'
+      }
+      secrets: [
+        {
+          name: sandboxEnvironmentSecretName
+          keyVaultUrl: sandboxEnvironmentSecretKeyVaultUrl
+          identity: appManagedIdentity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          env: [
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: appManagedIdentity.properties.clientId
+            }
+            {
+              name: 'AZURE_SQL_CONNECTIONSTRING'
+              value: appSqlConnectionString
+            }
+            {
+              name: 'ADE_SANDBOX_ENVIRONMENT_SECRET'
+              secretRef: sandboxEnvironmentSecretName
+            }
+            {
+              name: 'ADE_SESSION_POOL_MANAGEMENT_ENDPOINT'
+              value: sessionPool.properties.poolManagementEndpoint
+            }
+            {
+              name: 'ADE_PUBLIC_API_URL'
+              value: appPublicUrl
+            }
+            {
+              name: 'ADE_BLOB_ACCOUNT_URL'
+              value: storageAccount.properties.primaryEndpoints.blob
+            }
+            {
+              name: 'ADE_BLOB_CONTAINER'
+              value: blobContainer.name
+            }
+          ]
+          image: image
+          name: appName
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/api/healthz'
+                port: 8000
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 1
+              periodSeconds: 5
+              timeoutSeconds: 3
+              failureThreshold: 24
+              successThreshold: 1
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/api/readyz'
+                port: 8000
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 1
+              periodSeconds: 5
+              timeoutSeconds: 3
+              failureThreshold: 3
+              successThreshold: 1
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/api/healthz'
+                port: 8000
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 30
+              timeoutSeconds: 3
+              failureThreshold: 3
+              successThreshold: 1
+            }
+          ]
+          resources: {
+            cpu: json(appCpu)
+            memory: appMemory
+          }
+        }
+      ]
+      scale: {
+        maxReplicas: appMaxReplicas
+        minReplicas: appMinReplicas
+      }
+    }
+  }
 }
 
 resource appSessionPoolExecutorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(sessionPoolResource.id, appName, sessionExecutorRoleDefinitionId)
-  scope: sessionPoolResource
+  name: guid(sessionPool.id, appManagedIdentity.id, sessionExecutorRoleDefinitionId)
+  scope: sessionPool
   properties: {
-    principalId: app.outputs.principalId
+    principalId: appManagedIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: sessionExecutorRoleDefinitionId
   }
 }
 
 resource appStorageBlobDataContributorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccountResource.id, appName, storageBlobDataContributorRoleDefinitionId)
-  scope: storageAccountResource
+  name: guid(storageAccount.id, appManagedIdentity.id, storageBlobDataContributorRoleDefinitionId)
+  scope: storageAccount
   properties: {
-    principalId: app.outputs.principalId
+    principalId: appManagedIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: storageBlobDataContributorRoleDefinitionId
   }
 }
 
-resource appKeyVaultSecretsUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, appName, keyVaultSecretsUserRoleDefinitionId)
-  scope: keyVault
+resource migrationJob 'Microsoft.App/jobs@2025-01-01' = {
+  name: migrationJobName
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${deploymentManagedIdentity.id}': {}
+    }
+  }
+  tags: mergedTags
   properties: {
-    principalId: app.outputs.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
-  }
-}
-
-module migrationJob 'modules/container-app-job.bicep' = {
-  name: 'migrationJob'
-  params: {
-    command: [
-      './bin/ade-migrate'
-    ]
-    cpu: jobCpu
-    deploymentManagedIdentityResourceId: deploymentManagedIdentity.id
-    env: [
-      {
-        name: 'AZURE_SQL_CONNECTIONSTRING'
-        value: migrationSqlConnectionString
+    configuration: {
+      manualTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
       }
-    ]
-    image: image
-    managedEnvironmentId: platform.outputs.containerAppsEnvironmentId
-    memory: jobMemory
-    name: migrationJobName
-    tags: mergedTags
+      replicaRetryLimit: 0
+      replicaTimeout: 1800
+      triggerType: 'Manual'
+    }
+    environmentId: containerAppsEnvironment.id
+    template: {
+      containers: [
+        {
+          command: [
+            './bin/ade-migrate'
+          ]
+          env: [
+            {
+              name: 'AZURE_SQL_CONNECTIONSTRING'
+              value: migrationSqlConnectionString
+            }
+          ]
+          image: image
+          name: migrationJobName
+          resources: {
+            cpu: json(jobCpu)
+            memory: jobMemory
+          }
+        }
+      ]
+    }
   }
 }
 
-output appFqdn string = app.outputs.fqdn
-output appName string = appName
-output appPrincipalId string = app.outputs.principalId
-output appUrl string = app.outputs.url
-output containerAppsEnvironmentId string = platform.outputs.containerAppsEnvironmentId
-output deploymentManagedIdentityClientId string = deploymentManagedIdentity.properties.clientId
-output deploymentManagedIdentityName string = deploymentManagedIdentity.name
-output deploymentManagedIdentityPrincipalId string = deploymentManagedIdentity.properties.principalId
-output migrationJobName string = migrationJobName
-output sqlDatabaseName string = sql.outputs.databaseName
-output sessionPoolId string = sessionPool.outputs.id
-output sessionPoolName string = sessionPool.outputs.name
-output sessionPoolPoolManagementEndpoint string = sessionPool.outputs.poolManagementEndpoint
-output sqlServerIdentityPrincipalId string = sql.outputs.serverIdentityPrincipalId
-output sqlServerName string = sql.outputs.serverName
-output storageAccountName string = storageAccountName
+output appUrl string = appPublicUrl

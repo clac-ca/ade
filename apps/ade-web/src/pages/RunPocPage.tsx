@@ -308,7 +308,9 @@ function mapRunStatusToBulkStatus(status: RunStatus): BulkItemStatus {
 }
 
 function isRunTerminalStatus(status: RunStatus): boolean {
-  return status === "cancelled" || status === "failed" || status === "succeeded";
+  return (
+    status === "cancelled" || status === "failed" || status === "succeeded"
+  );
 }
 
 function shouldPollBulkItem(item: BulkItem): boolean {
@@ -969,7 +971,9 @@ export function RunPocPage() {
     } catch (error) {
       setRunStatus(
         "error",
-        error instanceof Error ? error.message : "Failed to create upload link.",
+        error instanceof Error
+          ? error.message
+          : "Failed to create upload link.",
       );
       return;
     }

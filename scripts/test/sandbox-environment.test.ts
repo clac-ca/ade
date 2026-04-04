@@ -25,7 +25,9 @@ test("sandbox environment stays app-owned and does not become a package", () => 
     false,
   );
   assert.ok(
-    existsSync(join(repoRoot, "apps/ade-api/crates/reverse-connect/Cargo.toml")),
+    existsSync(
+      join(repoRoot, "apps/ade-api/crates/reverse-connect/Cargo.toml"),
+    ),
   );
   assert.equal(
     existsSync(join(repoRoot, "packages/reverse-connect/Cargo.toml")),
@@ -61,13 +63,22 @@ test("sandbox environment build stays focused on the shared runtime tarball", ()
   assert.match(buildSource, /buildx",\s*"build/);
   assert.match(buildSource, /--platform",\s*readSandboxBuildPlatform/);
   assert.match(buildSource, /--target",\s*"sandbox-environment-artifact/);
-  assert.match(dockerfileSource, /FROM scratch AS sandbox-environment-artifact/);
+  assert.match(
+    dockerfileSource,
+    /FROM scratch AS sandbox-environment-artifact/,
+  );
   assert.match(
     dockerfileSource,
     /COPY --from=sandbox-environment-builder \/out\/sandbox-environment\.tar\.gz \/sandbox-environment\.tar\.gz/,
   );
   assert.match(dockerfileSource, /--mount=type=cache,id=ade-rust-target/);
-  assert.doesNotMatch(dockerfileSource, /packages\/reverse-connect\/Dockerfile\.build/);
-  assert.doesNotMatch(dockerfileSource, /COPY --chown=ade:ade \.package\/sandbox-environment\.tar\.gz/);
+  assert.doesNotMatch(
+    dockerfileSource,
+    /packages\/reverse-connect\/Dockerfile\.build/,
+  );
+  assert.doesNotMatch(
+    dockerfileSource,
+    /COPY --chown=ade:ade \.package\/sandbox-environment\.tar\.gz/,
+  );
   assert.match(buildSource, /sandbox-environment\.tar\.gz/);
 });

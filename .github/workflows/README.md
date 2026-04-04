@@ -13,20 +13,19 @@ Both use the same three-stage shape:
 
 ## ADE Platform Development Pipeline
 
-This is the canonical platform pipeline for `clac-ca/ade`.
+This is the production platform pipeline for `clac-ca/ade`.
 
 Operating model:
 
-- Pushes to `main` run all three stages when deployable platform paths change.
+- Pushes to `main` run the pipeline when deployable platform paths change.
 - Release versions use the qualifying commit timestamp converted to `America/Vancouver` for the `YYYY.M.D` calendar date and `github.run_number` for the suffix. Reruns keep the same release version.
-- Workflow concurrency keeps one active platform release running on `main` and only the newest pending qualifying push behind it; intermediate pending platform releases are intentionally dropped.
-- The commit stage is one matrix job with two parallel legs: `pnpm test` validates source, and `pnpm build` produces the candidate.
-- `pnpm build` is the only platform build path. It compiles the Bicep template and params and builds the platform image in one Docker build graph that also assembles the sandbox-environment tarball carried by that image.
-- On push, that same `pnpm build` path publishes the candidate image to `ghcr.io/<org>/ade-platform`, and the build leg publishes the exact image ref/digest metadata for later stages.
-- Acceptance reuses that exact immutable digest. The build leg also uploads the prebuilt local session-pool-emulator image as a workflow artifact and uploads the local config-mount fixtures that acceptance needs.
-- Acceptance downloads those already-built artifacts, runs `pnpm test:acceptance --image <release-candidate-image>`, starts the same release candidate, points it at the prebuilt session-pool-emulator management endpoint, waits for readiness, runs the full upload -> run -> SSE -> output checks, and tears the environment down. It does not rebuild the platform image, publish a separate emulator package, or compile the session-pool emulator.
-- Release reuses that exact immutable digest, validates the Bicep deployment inputs first, passes the image to Bicep as an explicit `image=` parameter override, starts the separate migration job explicitly after deployment, tags the commit as `ade-platform-v...`, and creates the GitHub Release. Long-lived runtime secrets are seeded manually during the first environment bootstrap and then reused from Azure Key Vault on later releases.
-- The app container never runs schema migrations on startup.
+- Workflow concurrency keeps one active platform release running on `main` and only the newest pending qualifying push behind it. Intermediate pending platform releases are intentionally dropped.
+- The commit stage runs `pnpm test` and `pnpm build`.
+- `pnpm build` is the only platform build path. It builds the platform image and validates the Bicep templates used by production.
+- Acceptance reuses that exact immutable image digest, runs `pnpm test:acceptance --image <release-candidate-image>`, and verifies the local stack end to end.
+- Release reuses that exact immutable digest, validates and deploys `infra/main.bicep` with `image=<release-candidate-image>`, then starts the fixed migration job.
+- The running app never performs schema migrations on startup.
+- The one-time Azure bootstrap, Key Vault secret seed, and first manual SQL bootstrap are documented in [infra/README.md](../../infra/README.md).
 
 ## Required GitHub environment variables
 
@@ -37,7 +36,7 @@ Create a `production` environment and set:
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
 
-For the one-time Azure bootstrap, Key Vault seed, and first manual deployment, follow [infra/README.md](../../infra/README.md).
+For the one-time Azure bootstrap, Key Vault secret seed, and manual SQL bootstrap, follow [infra/README.md](../../infra/README.md).
 
 ## Local equivalents
 
@@ -58,8 +57,8 @@ Operating model:
 
 - Pushes to `main` run the workflow only when the engine/config package paths or engine release helper paths change.
 - Release versions use the qualifying commit timestamp converted to `America/Vancouver` for the `YYYY.M.D` calendar date and `github.run_number` for the suffix. Reruns keep the same release version.
-- The commit stage computes one coordinated CalVer release version for `ade-engine` and `ade-config`, rewrites a temporary release snapshot, then runs Python lint, tests, and builds.
-- Acceptance rebuilds the same release snapshot and smoke-installs the built distributions in a fresh virtualenv.
+- Commit computes one coordinated CalVer release version for `ade-engine` and `ade-config`, rewrites a temporary release snapshot, then runs Python lint, tests, and builds.
+- Acceptance rebuilds the same release snapshot and smoke-installs the distributions in a fresh virtualenv.
 - Release creates a release snapshot commit on detached HEAD, tags that commit as `ade-engine-v...`, smoke-installs from the published tag, then creates the GitHub Release.
 - The workflow never writes version bumps back to `main`; release metadata exists only in the tagged snapshot commit.
 - Recovery is by rerunning the failed workflow run. Manual dispatch is intentionally disabled to avoid accidental duplicate publications from the same SHA.

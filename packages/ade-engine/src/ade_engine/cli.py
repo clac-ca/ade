@@ -13,6 +13,7 @@ CONFIG_IMPORT_PACKAGE = "ade_config"
 CONFIG_DISTRIBUTION = "ade-config"
 ENGINE_DISTRIBUTION = "ade-engine"
 
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ade", description="ADE CLI.")
     subparsers = parser.add_subparsers(dest="command", required=True)

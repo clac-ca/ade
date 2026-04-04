@@ -8,10 +8,7 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 test("acceptance stage reuses prebuilt candidate and fixtures", () => {
   const workflow = readFileSync(
-    join(
-      repoRoot,
-      ".github/workflows/platform-development-pipeline.yml",
-    ),
+    join(repoRoot, ".github/workflows/platform-development-pipeline.yml"),
     "utf8",
   );
 
@@ -26,17 +23,17 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
   assert.match(workflow, /ADE_SESSION_POOL_EMULATOR_IMAGE/);
   assert.match(workflow, /uses: docker\/build-push-action@/);
   assert.match(workflow, /context: infra\/local\/session-pool-emulator/);
-  assert.match(workflow, /file: infra\/local\/session-pool-emulator\/Dockerfile/);
+  assert.match(
+    workflow,
+    /file: infra\/local\/session-pool-emulator\/Dockerfile/,
+  );
   assert.doesNotMatch(workflow, /ghcr\.io\/.*ade-sessionpool/);
   assert.doesNotMatch(workflow, /acceptance_stage:[\s\S]*pnpm build/);
 });
 
 test("release stage deploys without carrying the sandbox secret in GitHub", () => {
   const workflow = readFileSync(
-    join(
-      repoRoot,
-      ".github/workflows/platform-development-pipeline.yml",
-    ),
+    join(repoRoot, ".github/workflows/platform-development-pipeline.yml"),
     "utf8",
   );
 
@@ -48,14 +45,24 @@ test("release stage deploys without carrying the sandbox secret in GitHub", () =
     workflow,
     /Skip release when sandbox secret is not configured/,
   );
+  assert.doesNotMatch(workflow, /--parameters sandboxEnvironmentSecret=/);
   assert.doesNotMatch(
     workflow,
-    /--parameters sandboxEnvironmentSecret=/,
+    /--parameters initialSandboxEnvironmentSecret=/,
+  );
+  assert.doesNotMatch(workflow, /main\.prod\.bicepparam/);
+  assert.doesNotMatch(workflow, /outputs\.migrationJobName/);
+  assert.match(
+    workflow,
+    /PRODUCTION_MIGRATION_JOB_NAME: job-ade-migrate-prod-cc-002/,
   );
 });
 
 test("local dependency launcher chooses session-pool-emulator compose mode from env", () => {
-  const localDeps = readFileSync(join(repoRoot, "scripts/local-deps.ts"), "utf8");
+  const localDeps = readFileSync(
+    join(repoRoot, "scripts/local-deps.ts"),
+    "utf8",
+  );
   const buildCompose = readFileSync(
     join(repoRoot, "infra/local/compose.session-pool-emulator.build.yaml"),
     "utf8",

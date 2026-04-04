@@ -33,6 +33,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   IMAGE_NAME: ${{ github.repository_owner }}/ade-platform
+  PRODUCTION_MIGRATION_JOB_NAME: job-ade-migrate-prod-cc-002
   REGISTRY: ghcr.io
 
 jobs:
@@ -364,33 +365,25 @@ jobs:
           az deployment group validate \
             --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-validate" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-            --parameters infra/environments/main.prod.bicepparam \
+            --template-file infra/main.bicep \
             --parameters image="${RELEASE_CANDIDATE_IMAGE}" \
             --validation-level Provider \
             --output none
 
       - name: Deploy release candidate
-        id: deploy_release_candidate
         run: |
-          migration_job_name="$(
-            az deployment group create \
-              --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-              --parameters infra/environments/main.prod.bicepparam \
-              --parameters image="${RELEASE_CANDIDATE_IMAGE}" \
-              --query properties.outputs.migrationJobName.value \
-              --output tsv
-          )"
-
-          echo "migration_job_name=${migration_job_name}" >> "${GITHUB_OUTPUT}"
+          az deployment group create \
+            --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file infra/main.bicep \
+            --parameters image="${RELEASE_CANDIDATE_IMAGE}" \
+            --output none
 
       - name: Run database migrations
-        env:
-          ADE_MIGRATION_JOB_NAME: ${{ steps.deploy_release_candidate.outputs.migration_job_name }}
         run: |
           execution_name="$(
             az containerapp job start \
-              --name "${ADE_MIGRATION_JOB_NAME}" \
+              --name "${PRODUCTION_MIGRATION_JOB_NAME}" \
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
               --query name \
               --output tsv

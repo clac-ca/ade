@@ -23,11 +23,9 @@ test("root package keeps one fast test command and one acceptance command", () =
     /uv run --directory packages\/ade-engine --group test pytest/,
   );
   assert.match(testScript, /az bicep lint --file infra\/main\.bicep/);
+  assert.match(testScript, /az bicep lint --file infra\/bootstrap\.bicep/);
   assert.doesNotMatch(testScript, /az bicep build --file infra\/main\.bicep/);
-  assert.doesNotMatch(
-    testScript,
-    /az bicep build-params --file infra\/environments\/main\.prod\.bicepparam/,
-  );
+  assert.doesNotMatch(testScript, /build-params --file infra\//);
   assert.doesNotMatch(testScript, /build:python-artifacts/);
 
   assert.equal(scripts["test:acceptance"], "tsx scripts/acceptance.ts");

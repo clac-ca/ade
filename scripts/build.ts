@@ -146,13 +146,7 @@ async function buildInfrastructureArtifacts(): Promise<void> {
   );
   await runCommand(
     "az",
-    [
-      "bicep",
-      "build-params",
-      "--file",
-      "infra/environments/main.prod.bicepparam",
-      "--stdout",
-    ],
+    ["bicep", "build", "--file", "infra/bootstrap.bicep", "--stdout"],
     {
       cwd: rootDir,
       stdio: "ignore",

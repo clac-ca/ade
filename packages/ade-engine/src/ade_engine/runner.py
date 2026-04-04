@@ -159,7 +159,9 @@ def _map_fields(config: EngineConfig, columns: list[_Column]) -> dict[str, int]:
             score = sum(float(detector(column)) for detector in rules.detectors)
             if score <= 0:
                 continue
-            candidates.append((score, field_order[field_name], column_index, field_name))
+            candidates.append(
+                (score, field_order[field_name], column_index, field_name)
+            )
 
     assignments: dict[str, int] = {}
     claimed_columns: set[int] = set()

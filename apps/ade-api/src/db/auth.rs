@@ -6,13 +6,16 @@ use azure_core::{
     credentials::{AccessToken, TokenCredential, TokenRequestOptions},
     error::ErrorKind as AzureErrorKind,
 };
-use azure_identity::{
-    DeveloperToolsCredential, ManagedIdentityCredential, ManagedIdentityCredentialOptions,
-    UserAssignedId, WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
+use azure_identity::{WorkloadIdentityCredential, WorkloadIdentityCredentialOptions};
+
+use crate::azure_auth::{
+    AzureTokenCredential,
+    create_developer_tools_credential as create_shared_developer_tools_credential,
+    create_managed_identity_credential as create_shared_managed_identity_credential,
 };
 
 pub(super) const SQL_TOKEN_SCOPE: &str = "https://database.windows.net/.default";
-pub(super) type SqlTokenCredential = dyn TokenCredential + Send + Sync;
+pub(super) type SqlTokenCredential = AzureTokenCredential;
 
 pub(super) struct SqlDefaultCredential {
     cached_source: Mutex<Option<CachedCredentialSource>>,
@@ -189,18 +192,13 @@ impl SqlDefaultCredentialSource {
 }
 
 pub(super) fn create_developer_tools_credential() -> azure_core::Result<Arc<SqlTokenCredential>> {
-    Ok(DeveloperToolsCredential::new(None)?)
+    create_shared_developer_tools_credential()
 }
 
 pub(super) fn create_managed_identity_credential(
     client_id: Option<String>,
 ) -> azure_core::Result<Arc<SqlTokenCredential>> {
-    let options = client_id.map(|client_id| ManagedIdentityCredentialOptions {
-        user_assigned_id: Some(UserAssignedId::ClientId(client_id)),
-        ..ManagedIdentityCredentialOptions::default()
-    });
-
-    Ok(ManagedIdentityCredential::new(options)?)
+    create_shared_managed_identity_credential(client_id)
 }
 
 fn create_workload_identity_credential(
