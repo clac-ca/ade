@@ -47,6 +47,7 @@ pub(crate) struct BlobArtifactStore {
     client: Client,
     container: String,
     managed_identity_client_id: Option<String>,
+    public_account_url: Url,
     shared_key: Option<String>,
     local_cors_allowed_origins: Vec<String>,
     local_setup_complete: Mutex<bool>,
@@ -56,6 +57,7 @@ pub(crate) struct BlobArtifactStore {
 impl BlobArtifactStore {
     pub(super) fn new(
         account_url: String,
+        public_account_url: Option<String>,
         container: String,
         shared_key: Option<String>,
         local_cors_allowed_origins: Vec<String>,
@@ -67,6 +69,15 @@ impl BlobArtifactStore {
                 error,
             )
         })?;
+        let public_account_url = match public_account_url {
+            Some(public_account_url) => Url::parse(&public_account_url).map_err(|error| {
+                AppError::config_with_source(
+                    "ADE_BLOB_PUBLIC_ACCOUNT_URL is not a valid URL.".to_string(),
+                    error,
+                )
+            })?,
+            None => account_url.clone(),
+        };
         let account_name = storage_account_name(&account_url)?;
         let auth_mode = if shared_key.is_some() {
             BlobAuthMode::SharedKey
@@ -90,6 +101,7 @@ impl BlobArtifactStore {
                 })?,
             container,
             managed_identity_client_id,
+            public_account_url,
             shared_key,
             local_cors_allowed_origins,
             local_setup_complete: Mutex::new(false),
@@ -619,7 +631,7 @@ impl BlobArtifactStore {
         expires_at: OffsetDateTime,
     ) -> Result<ArtifactAccessGrant, AppError> {
         self.ensure_local_blob_ready().await?;
-        self.create_access_grant(&self.account_url, path, "r", "GET", None, expires_at)
+        self.create_access_grant(&self.public_account_url, path, "r", "GET", None, expires_at)
             .await
     }
 
@@ -631,7 +643,7 @@ impl BlobArtifactStore {
     ) -> Result<ArtifactAccessGrant, AppError> {
         self.ensure_local_blob_ready().await?;
         self.create_access_grant(
-            &self.account_url,
+            &self.public_account_url,
             path,
             "cw",
             "PUT",
@@ -1251,7 +1263,8 @@ mod tests {
     #[tokio::test]
     async fn browser_grants_use_the_runtime_blob_base_url() {
         let store = BlobArtifactStore::new(
-            "https://runtime.example.com".to_string(),
+            "https://internal.example.com".to_string(),
+            Some("https://runtime.example.com".to_string()),
             "documents".to_string(),
             Some("c2hhcmVkLWtleQ==".to_string()),
             Vec::new(),
@@ -1262,7 +1275,7 @@ mod tests {
 
         let upload = store
             .create_access_grant(
-                &store.account_url,
+                &store.public_account_url,
                 "workspaces/a/configs/b/uploads/u/input.csv",
                 "cw",
                 "PUT",
@@ -1280,7 +1293,7 @@ mod tests {
 
         let download = store
             .create_access_grant(
-                &store.account_url,
+                &store.public_account_url,
                 "workspaces/a/configs/b/runs/run_1/logs/events.ndjson",
                 "r",
                 "GET",
@@ -1301,6 +1314,7 @@ mod tests {
     fn blob_store_keeps_the_runtime_azure_client_id_when_configured() {
         let store = BlobArtifactStore::new(
             "https://runtime.example.com".to_string(),
+            None,
             "documents".to_string(),
             None,
             Vec::new(),
@@ -1312,5 +1326,20 @@ mod tests {
             store.managed_identity_client_id(),
             Some("runtime-client-id")
         );
+    }
+
+    #[test]
+    fn blob_store_defaults_public_blob_base_url_to_the_runtime_blob_base_url() {
+        let store = BlobArtifactStore::new(
+            "https://runtime.example.com".to_string(),
+            None,
+            "documents".to_string(),
+            Some("c2hhcmVkLWtleQ==".to_string()),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(store.public_account_url, store.account_url);
     }
 }

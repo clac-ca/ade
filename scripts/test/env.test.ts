@@ -78,7 +78,7 @@ test("readOptionalTrimmedString ignores missing and blank values", () => {
   assert.equal(readOptionalTrimmedString({ VALUE: " ok " }, "VALUE"), "ok");
 });
 
-test("managed local blob env keeps one blob endpoint", () => {
+test("managed local blob env keeps separate runtime and public blob endpoints", () => {
   assert.deepEqual(createHostBlobEnv(), {
     usesManagedLocalBlobStorage: true,
     values: {
@@ -86,6 +86,7 @@ test("managed local blob env keeps one blob endpoint", () => {
         "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
       ADE_BLOB_ACCOUNT_URL: "http://127.0.0.1:10000/devstoreaccount1",
       ADE_BLOB_CONTAINER: "documents",
+      ADE_BLOB_PUBLIC_ACCOUNT_URL: "http://127.0.0.1:10000/devstoreaccount1",
       ADE_BLOB_CORS_ALLOWED_ORIGINS:
         "http://127.0.0.1:5173,http://localhost:5173",
     },
@@ -99,10 +100,29 @@ test("managed local blob env keeps one blob endpoint", () => {
       ADE_BLOB_ACCOUNT_URL:
         "http://host.docker.internal:10000/devstoreaccount1",
       ADE_BLOB_CONTAINER: "documents",
+      ADE_BLOB_PUBLIC_ACCOUNT_URL: "http://127.0.0.1:10000/devstoreaccount1",
       ADE_BLOB_CORS_ALLOWED_ORIGINS:
         "http://127.0.0.1:4100,http://localhost:4100",
     },
   });
+});
+
+test("configured blob env preserves an explicit public blob endpoint when provided", () => {
+  assert.deepEqual(
+    createContainerBlobEnv(4100, {
+      ADE_BLOB_ACCOUNT_URL: "https://internal.blob.example.com/account",
+      ADE_BLOB_CONTAINER: "documents",
+      ADE_BLOB_PUBLIC_ACCOUNT_URL: "https://cdn.blob.example.com/account",
+    }),
+    {
+      usesManagedLocalBlobStorage: false,
+      values: {
+        ADE_BLOB_ACCOUNT_URL: "https://internal.blob.example.com/account",
+        ADE_BLOB_CONTAINER: "documents",
+        ADE_BLOB_PUBLIC_ACCOUNT_URL: "https://cdn.blob.example.com/account",
+      },
+    },
+  );
 });
 
 test("configured session pool env keeps the app url fallback boring and local", () => {

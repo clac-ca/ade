@@ -36,6 +36,7 @@ Supported SQL auth modes:
 | Name                            | Required | Used by | Notes                                                                    |
 | ------------------------------- | -------- | ------- | ------------------------------------------------------------------------ |
 | `ADE_BLOB_ACCOUNT_URL`          | Yes      | API     | Blob service endpoint used for durable artifact reads and writes.        |
+| `ADE_BLOB_PUBLIC_ACCOUNT_URL`   | Optional | API     | Public or host-reachable Blob base URL used when the API returns direct upload/download URLs. Defaults to `ADE_BLOB_ACCOUNT_URL`. |
 | `ADE_BLOB_CONTAINER`            | Yes      | API     | Private blob container that stores scoped uploads and run outputs.       |
 | `ADE_BLOB_CORS_ALLOWED_ORIGINS` | Local    | API     | Comma-separated origins for managed local Azurite setup.                 |
 | `ADE_BLOB_ACCOUNT_KEY`          | Local    | API     | Shared key used only for local Azurite management and local SAS minting. |

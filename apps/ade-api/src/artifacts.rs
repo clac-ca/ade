@@ -16,6 +16,7 @@ pub(super) const BLOB_ACCOUNT_KEY_ENV_NAME: &str = "ADE_BLOB_ACCOUNT_KEY";
 pub(super) const BLOB_ACCOUNT_URL_ENV_NAME: &str = "ADE_BLOB_ACCOUNT_URL";
 pub(super) const BLOB_CONTAINER_ENV_NAME: &str = "ADE_BLOB_CONTAINER";
 pub(super) const BLOB_CORS_ALLOWED_ORIGINS_ENV_NAME: &str = "ADE_BLOB_CORS_ALLOWED_ORIGINS";
+pub(super) const BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME: &str = "ADE_BLOB_PUBLIC_ACCOUNT_URL";
 
 static ISO_8601_SECONDS_FORMAT: &[FormatItem<'static>] =
     format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
@@ -48,6 +49,7 @@ pub(crate) fn blob_artifact_store_from_env(env: &EnvBag) -> Result<BlobArtifactS
                 "Missing required environment variable: {BLOB_CONTAINER_ENV_NAME}"
             ))
         })?;
+    let public_account_url = read_optional_trimmed_string(env, BLOB_PUBLIC_ACCOUNT_URL_ENV_NAME);
     let cors_allowed_origins =
         read_optional_trimmed_string(env, BLOB_CORS_ALLOWED_ORIGINS_ENV_NAME)
             .map(|value| {
@@ -62,6 +64,7 @@ pub(crate) fn blob_artifact_store_from_env(env: &EnvBag) -> Result<BlobArtifactS
 
     BlobArtifactStore::new(
         account_url,
+        public_account_url,
         container,
         account_key,
         cors_allowed_origins,
