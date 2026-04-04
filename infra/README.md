@@ -86,6 +86,10 @@ az deployment group create \
 ```
 
 This creates the deployment identity, the app identity, the GitHub OIDC credential, the Key Vault, and the required RBAC assignments.
+At the resource-group scope, the deployment identity receives:
+
+- `Contributor` to create and update ADE resources
+- `User Access Administrator` so `main.bicep` can create the app identity's RBAC assignments on the storage account and session pool
 
 ### Seed the sandbox secret in Key Vault
 
@@ -333,6 +337,7 @@ curl -fsS "https://${APP_URL}/api/readyz"
 ## Steady-State Rules
 
 - `bootstrap.bicep` never writes secrets.
+- `bootstrap.bicep` grants the deployment identity both `Contributor` and `User Access Administrator` on the resource group.
 - `main.bicep` never writes secrets.
 - SQL server Entra admin and database user creation are one-time operator bootstrap steps.
 - Migrations run separately through the Container Apps job.

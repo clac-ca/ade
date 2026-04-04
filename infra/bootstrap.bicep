@@ -11,6 +11,7 @@ var githubOidcSubject = 'repo:clac-ca/ade:environment:production'
 var keyVaultName = 'kv-ade-prod-cc-002'
 var managedIdentityOperatorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f1a07417-d97a-45cb-824c-7a7467783830')
 var contributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
+var userAccessAdministratorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9')
 var keyVaultSecretsUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 
 resource deploymentManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -44,6 +45,17 @@ resource contributorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022
     principalId: deploymentManagedIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: contributorRoleDefinitionId
+  }
+}
+
+// The deployment identity creates role assignments in main.bicep for the app identity.
+resource userAccessAdministratorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, deploymentManagedIdentity.id, userAccessAdministratorRoleDefinitionId)
+  scope: resourceGroup()
+  properties: {
+    principalId: deploymentManagedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: userAccessAdministratorRoleDefinitionId
   }
 }
 
