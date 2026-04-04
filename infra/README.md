@@ -14,6 +14,10 @@ ADE manages two user-assigned identities directly:
 | Deployment identity | GitHub Actions, migration job | Azure deploys, SQL migrations              |
 | App identity        | Container App                 | Key Vault, SQL, Blob Storage, session pool |
 
+GitHub Actions uses the deployment identity client ID through the GitHub `production` environment variable `AZURE_DEPLOY_CLIENT_ID`.
+The running app receives the app identity client ID inside the container through the standard Azure runtime environment variable `AZURE_CLIENT_ID`.
+These are different identities and different configuration surfaces.
+
 ```sh
 RESOURCE_GROUP=rg-ade-prod-canadacentral-002
 LOCATION=canadacentral
@@ -106,7 +110,7 @@ This writes the secret once. Later deploys only reference the existing Key Vault
 Set the deployment identity client ID for `azure/login`:
 
 ```sh
-gh variable set AZURE_CLIENT_ID \
+gh variable set AZURE_DEPLOY_CLIENT_ID \
   --env production \
   --repo clac-ca/ade \
   --body "$(

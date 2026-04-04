@@ -31,10 +31,12 @@ Operating model:
 
 Create a `production` environment and set:
 
-- `AZURE_CLIENT_ID`
+- `AZURE_DEPLOY_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
+
+`AZURE_DEPLOY_CLIENT_ID` must be the client ID of the deployment identity used by `azure/login`, not the app runtime identity injected into the container.
 
 For the one-time Azure bootstrap, Key Vault secret seed, and manual SQL bootstrap, follow [infra/README.md](../../infra/README.md).
 

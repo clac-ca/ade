@@ -21,9 +21,19 @@ Release rules:
 
 GitHub `production` environment variables required for release:
 
-- `AZURE_CLIENT_ID`
+- `AZURE_DEPLOY_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
+
+Set `AZURE_DEPLOY_CLIENT_ID` from the deployment identity, not the app runtime identity:
+
+```sh
+az identity show \
+  --resource-group rg-ade-prod-canadacentral-002 \
+  --name id-ade-deploy-prod-canadacentral-002 \
+  --query clientId \
+  --output tsv
+```
 
 The first-time Azure bootstrap, Key Vault secret seeding, one-time SQL Entra admin setup, and one-time SQL user setup are manual and documented in [infra/README.md](../infra/README.md).

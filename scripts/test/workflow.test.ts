@@ -56,6 +56,8 @@ test("release stage deploys without carrying the sandbox secret in GitHub", () =
     workflow,
     /PRODUCTION_MIGRATION_JOB_NAME: job-ade-migrate-prod-cc-002/,
   );
+  assert.match(workflow, /client-id: \$\{\{ vars\.AZURE_DEPLOY_CLIENT_ID \}\}/);
+  assert.doesNotMatch(workflow, /client-id: \$\{\{ vars\.AZURE_CLIENT_ID \}\}/);
 });
 
 test("local dependency launcher chooses session-pool-emulator compose mode from env", () => {
