@@ -11,7 +11,7 @@ The release pipeline has three stages:
 Release rules:
 
 - The release candidate image is built once and reused.
-- Acceptance runs against the local stack, not Azure.
+- Acceptance resolves one target, runs the full Playwright acceptance suite against that target once, and then stops. In CI that target is the local release-candidate artifact, not Azure.
 - The release stage validates `infra/main.bicep`, deploys it with the release candidate image, and then starts the fixed migration job.
 - Migrations run through the separate `ade-migrate` binary and Azure Container Apps Job.
 - The running app container never performs schema migrations on startup.

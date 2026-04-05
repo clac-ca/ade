@@ -35,7 +35,7 @@ pnpm test:acceptance
 `pnpm test` is the fast commit-stage suite. It runs TypeScript type checks, schema drift checks, lint, backend tests, frontend tests, script tests, Python tests, and Bicep lint without starting the app or local infrastructure.
 `pnpm build` is the single candidate builder. It compiles the Bicep template and production params and builds the local ADE Platform image `ade-platform:local` in one Docker build graph that also assembles the sandbox-environment tarball carried by the image.
 
-`pnpm test:acceptance` is the single black-box system proof. It checks the app shell, readiness endpoints, upload -> run -> SSE -> output behavior, and scoped output isolation for both sample workspace/config pairs.
+`pnpm test:acceptance` is the single black-box acceptance suite. It resolves one target, runs one Playwright suite against that target, and then stops. With `--image` or no arguments it boots one local artifact and tests it. With `--url` it attaches to an already running system and tests that instead. The suite checks observable behavior only: the app shell loads, the public API endpoints respond, a user can upload input and download results, and a user can connect the terminal workflow.
 
 Additional local commands:
 
@@ -73,6 +73,7 @@ pnpm build
 pnpm start
 pnpm start --no-open
 pnpm start --image ghcr.io/example/ade-platform:test --port 9000
+pnpm exec playwright install --with-deps chromium
 pnpm test:acceptance
 pnpm test:acceptance --url http://127.0.0.1:4100
 pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
@@ -82,7 +83,7 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 
 `pnpm start` and managed `pnpm test:acceptance` use `ade-platform:local` by default, so build first unless you pass `--image`.
 
-`pnpm test:acceptance --url <base-url>` attaches to an existing environment instead of starting a managed one.
+`pnpm test:acceptance` always follows the same flow: resolve one target, wait for readiness once, run the full Playwright suite once, then clean up once. `--image <image>` changes which artifact gets booted. `--url <base-url>` skips startup and attaches to an existing environment.
 
 ## Runtime Config Summary
 

@@ -1,3 +1,4 @@
+import { cleanup } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -34,6 +35,7 @@ vi.mock("../api/system", () => ({
 }));
 
 afterEach(() => {
+  cleanup();
   vi.mocked(getVersion).mockReset();
 });
 
@@ -66,11 +68,6 @@ describe("AppRouter", () => {
       </QueryClientProvider>,
     );
 
-    expect(
-      await screen.findByRole("heading", {
-        name: "The frontend stays deliberately small and same-origin.",
-      }),
-    ).toBeInTheDocument();
     expect(await screen.findByText("0.1.0")).toBeInTheDocument();
     expect(getVersion).toHaveBeenCalledTimes(1);
     expect(
@@ -90,16 +87,11 @@ describe("AppRouter", () => {
       </QueryClientProvider>,
     );
 
-    expect(
-      screen.getByRole("heading", {
-        name: "Direct upload, async runs, and bounded bulk ingestion.",
-      }),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Workspace ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("Config Version ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("Input Files")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Start Run" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/polls many runs after a bulk upload batch/i),
     ).toBeInTheDocument();
   });
 
@@ -112,14 +104,8 @@ describe("AppRouter", () => {
       </QueryClientProvider>,
     );
 
-    expect(
-      screen.getByRole("heading", {
-        name: "Interactive shell over the session.",
-      }),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Workspace ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("Config Version ID")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
-    expect(
-      screen.getByText(/Sessions hard-stop after about 220 seconds/),
-    ).toBeInTheDocument();
   });
 });

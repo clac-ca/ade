@@ -39,7 +39,7 @@ pnpm test:acceptance
 `pnpm test` is the fast commit-stage suite. It runs TypeScript type checks, schema drift checks, lint, backend tests, frontend tests, script tests, Python tests, and Bicep lint without starting local infrastructure or building release artifacts.
 `pnpm build` is the single candidate builder. It compiles the Bicep template and production params and builds the local ADE Platform image `ade-platform:local` in one Docker build graph that also assembles the sandbox-environment tarball carried by the image.
 
-`pnpm test:acceptance` is the single black-box system test. It proves the real upload -> run -> SSE -> output flow against either a managed local runtime or an attached environment.
+`pnpm test:acceptance` is the single black-box acceptance suite. It resolves one target, runs one Playwright suite against that target, and then stops. With `--image` or no arguments it boots one local artifact and tests it. With `--url` it attaches to an already running system and tests that instead. The suite checks observable behavior only: the app shell loads, the public API endpoints respond, a user can upload input and download results, and a user can connect the terminal workflow.
 
 Additional local development commands:
 
@@ -78,6 +78,7 @@ pnpm build
 pnpm start
 pnpm start --no-open
 pnpm start --image ghcr.io/example/ade-platform:test --port 9000
+pnpm exec playwright install --with-deps chromium
 pnpm test:acceptance
 pnpm test:acceptance --url http://127.0.0.1:4100
 pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
@@ -86,6 +87,8 @@ pnpm test:acceptance --image ghcr.io/example/ade-platform:test --port 4101
 `pnpm build` builds the local ADE Platform image `ade-platform:local`, compiles the Bicep deployment artifacts, and accepts no extra arguments.
 
 `pnpm start` and managed `pnpm test:acceptance` use `ade-platform:local` by default, so build first unless you pass `--image`.
+
+`pnpm test:acceptance` always follows the same flow: resolve one target, wait for readiness once, run the full Playwright suite once, then clean up once. `--image <image>` changes which artifact gets booted. `--url <base-url>` skips startup and attaches to an already running system.
 
 `pnpm dev` does not read `.env`. `pnpm start` and `pnpm test:acceptance` load `.env` when present; otherwise they manage local Azurite Blob Storage, local SQL, and the local session-pool emulator themselves. The app always uses `ADE_SESSION_POOL_MANAGEMENT_ENDPOINT`; local commands inject the emulator endpoint and bearer token when Azure is not configured. For connection string and hosted runtime details, see [docs/runtime-config.md](docs/runtime-config.md).
 Managed local container runs keep the app on `host.docker.internal` for Azurite and rewrite direct browser Azurite links to `127.0.0.1` inside the API, so developers do not need a second Blob URL setting.

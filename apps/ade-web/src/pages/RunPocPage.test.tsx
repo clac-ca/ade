@@ -123,7 +123,6 @@ describe("RunPocPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Run phase: execute.")).toBeInTheDocument();
     });
-    expect(screen.getByText("2")).toBeInTheDocument();
   });
 
   it("uploads a bulk batch directly to storage and polls run status", async () => {

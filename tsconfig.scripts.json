@@ -8,5 +8,10 @@
     "types": ["node"],
     "verbatimModuleSyntax": true
   },
-  "include": ["scripts/**/*.ts", "apps/ade-api/sandbox-environment/**/*.ts"]
+  "include": [
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "playwright.config.ts",
+    "apps/ade-api/sandbox-environment/**/*.ts"
+  ]
 }

@@ -974,7 +974,7 @@ async fn download_run_artifact(
     (payload, bytes)
 }
 
-async fn wait_for_terminal_status(client: &Client, url: &str, expected: &str) -> Value {
+async fn wait_for_run_status(client: &Client, url: &str, expected: &str) -> Value {
     let mut detail = Value::Null;
     for _ in 0..40 {
         detail = client
@@ -1256,7 +1256,7 @@ async fn create_run_returns_accepted_metadata_and_persists_output_via_artifact_s
     assert!(location.ends_with(&format!("/runs/{run_id}")));
 
     let detail_url = format!("{base_url}{location}");
-    let detail = wait_for_terminal_status(&client, &detail_url, "succeeded").await;
+    let detail = wait_for_run_status(&client, &detail_url, "succeeded").await;
     let output_path = detail["outputPath"].as_str().unwrap();
     let log_path = detail["logPath"].as_str().unwrap();
     assert_eq!(
@@ -1358,7 +1358,7 @@ async fn run_downloads_return_conflict_until_artifacts_are_ready() {
 
     let detail_url =
         format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}");
-    let detail = wait_for_terminal_status(&client, &detail_url, "succeeded").await;
+    let detail = wait_for_run_status(&client, &detail_url, "succeeded").await;
     assert!(detail["outputPath"].is_string());
     assert!(detail["logPath"].is_string());
     let events = client
@@ -1427,7 +1427,7 @@ async fn cancelling_a_run_marks_it_cancelled_and_emits_final_sse_event() {
 
     let detail_url =
         format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}");
-    let detail = wait_for_terminal_status(&client, &detail_url, "cancelled").await;
+    let detail = wait_for_run_status(&client, &detail_url, "cancelled").await;
     assert_eq!(detail["errorMessage"], "Run cancelled.");
     let log_path = detail["logPath"].as_str().unwrap();
     assert!(log_path.ends_with("/logs/events.ndjson"));
@@ -1486,7 +1486,7 @@ async fn cancelling_before_connector_ready_stops_the_session_attempt() {
         .unwrap();
     assert_eq!(cancel.status(), reqwest::StatusCode::NO_CONTENT);
 
-    let detail = wait_for_terminal_status(
+    let detail = wait_for_run_status(
         &client,
         &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}"),
         "cancelled",
@@ -1559,7 +1559,7 @@ async fn run_detail_keeps_output_hidden_until_success_and_cancellation_clears_st
         .unwrap();
     assert_eq!(cancel.status(), reqwest::StatusCode::NO_CONTENT);
 
-    let detail = wait_for_terminal_status(&client, &detail_url, "cancelled").await;
+    let detail = wait_for_run_status(&client, &detail_url, "cancelled").await;
     assert_eq!(detail["outputPath"], Value::Null);
     assert_eq!(detail["validationIssues"], json!([]));
     assert_eq!(detail["errorMessage"], "Run cancelled.");
@@ -1606,7 +1606,7 @@ async fn transient_run_connector_startup_failures_retry_once_and_then_succeed() 
         .unwrap();
     let run_id = created["runId"].as_str().unwrap();
 
-    let detail = wait_for_terminal_status(
+    let detail = wait_for_run_status(
         &client,
         &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{run_id}"),
         "succeeded",
@@ -1697,13 +1697,13 @@ async fn queued_runs_stay_pending_until_a_scheduler_slot_is_available() {
         .unwrap();
     assert_eq!(second_detail["status"], "pending");
 
-    let _ = wait_for_terminal_status(
+    let _ = wait_for_run_status(
         &client,
         &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{first_run_id}"),
         "succeeded",
     )
     .await;
-    let _ = wait_for_terminal_status(
+    let _ = wait_for_run_status(
         &client,
         &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{second_run_id}"),
         "succeeded",
@@ -1789,7 +1789,7 @@ async fn cancelling_a_queued_run_marks_it_cancelled_without_starting_execution()
         .unwrap();
     assert_eq!(cancel.status(), reqwest::StatusCode::NO_CONTENT);
 
-    let cancelled = wait_for_terminal_status(
+    let cancelled = wait_for_run_status(
         &client,
         &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{second_run_id}"),
         "cancelled",
@@ -1798,7 +1798,7 @@ async fn cancelling_a_queued_run_marks_it_cancelled_without_starting_execution()
     assert_eq!(cancelled["outputPath"], Value::Null);
     assert_eq!(cancelled["errorMessage"], "Run cancelled.");
 
-    let _ = wait_for_terminal_status(
+    let _ = wait_for_run_status(
         &client,
         &format!("{base_url}/api/workspaces/workspace-a/configs/config-v1/runs/{first_run_id}"),
         "succeeded",

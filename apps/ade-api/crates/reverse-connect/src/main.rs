@@ -1,5 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 use reverse_connect::{ConnectOptions, DEFAULT_IDLE_TIMEOUT_SECONDS, connect};
+use rustls::crypto::ring::default_provider;
 
 #[derive(Debug, Parser)]
 #[command(name = "reverse-connect")]
@@ -25,6 +26,12 @@ struct ConnectArgs {
 
 #[tokio::main]
 async fn main() {
+    // rustls 0.23 requires applications to install a process-level crypto
+    // provider before opening TLS connections such as the production WSS path.
+    default_provider()
+        .install_default()
+        .expect("failed to install the rustls crypto provider");
+
     let result = match Cli::parse().command {
         Commands::Connect(args) => {
             connect(ConnectOptions {

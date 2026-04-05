@@ -21,6 +21,8 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
   assert.match(workflow, /Download acceptance session-pool-emulator image/);
   assert.match(workflow, /Load acceptance session-pool-emulator image/);
   assert.match(workflow, /ADE_SESSION_POOL_EMULATOR_IMAGE/);
+  assert.match(workflow, /Install Playwright Chromium/);
+  assert.match(workflow, /pnpm exec playwright install --with-deps chromium/);
   assert.match(workflow, /uses: docker\/build-push-action@/);
   assert.match(workflow, /context: infra\/local\/session-pool-emulator/);
   assert.match(

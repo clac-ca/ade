@@ -12,8 +12,11 @@ use reverse_connect::{
         SESSION_ERROR_METHOD, SESSION_SHUTDOWN_METHOD,
     },
 };
-use tokio::process::{Child, Command};
 use tokio::sync::oneshot;
+use tokio::{
+    io::AsyncWriteExt,
+    process::{Child, Command},
+};
 use tokio_tungstenite::{
     WebSocketStream, accept_hdr_async,
     tungstenite::{
@@ -85,6 +88,21 @@ async fn start_server(
         socket_rx,
         AbortOnDrop(Some(handle)),
     )
+}
+
+async fn start_non_tls_server() -> (String, AbortOnDrop<Result<(), String>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
+        stream
+            .write_all(b"this-is-not-tls")
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    });
+
+    (format!("wss://{address}/"), AbortOnDrop(Some(handle)))
 }
 
 async fn spawn_connector(
@@ -493,4 +511,19 @@ async fn cli_reports_connection_errors_to_stderr() {
         .expect("connector process did not stop");
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("reverse-connect failed:"));
+}
+
+#[tokio::test]
+async fn cli_reports_tls_connection_errors_without_panicking() {
+    let (url, _server_task) = start_non_tls_server().await;
+    let connector = spawn_connector_cli(url, "secret-token".to_string());
+    let output = tokio::time::timeout(Duration::from_secs(5), connector.wait_with_output())
+        .await
+        .expect("connector process did not stop");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(stderr.contains("reverse-connect failed:"));
+    assert!(!stderr.contains("panicked at"), "stderr:\n{stderr}");
+    assert!(!stderr.contains("CryptoProvider"), "stderr:\n{stderr}");
 }

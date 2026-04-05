@@ -4,7 +4,9 @@
 node_modules/
 dist/
 coverage/
+playwright-report/
 .package/
+test-results/
 target/
 *.tsbuildinfo
 npm-debug.log*

@@ -37,6 +37,7 @@ test("root package keeps one fast test command and one acceptance command", () =
   assert.equal("test:unit" in scripts, false);
   assert.equal("test:scripts" in scripts, false);
   assert.equal("test:python" in scripts, false);
+  assert.equal("test:smoke" in scripts, false);
   assert.equal("test:session:local" in scripts, false);
   assert.equal("test:session:parity" in scripts, false);
   assert.equal("typecheck" in scripts, false);

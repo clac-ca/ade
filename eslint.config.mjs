@@ -27,6 +27,7 @@ export default tseslint.config(
   },
   {
     files: ["**/*.{ts,tsx}"],
+    ignores: ["playwright.config.ts", "tests/acceptance/*.ts"],
     extends: [
       js.configs.recommended,
       ...tseslint.configs.recommendedTypeChecked,
@@ -35,6 +36,30 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: true,
+        tsconfigRootDir: rootDir,
+      },
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-unsafe-argument": "error",
+      "@typescript-eslint/no-unsafe-assignment": "error",
+      "@typescript-eslint/no-unsafe-call": "error",
+      "@typescript-eslint/no-unsafe-member-access": "error",
+      "@typescript-eslint/no-unsafe-return": "error",
+    },
+  },
+  {
+    files: ["playwright.config.ts", "tests/acceptance/*.ts"],
+    extends: [
+      js.configs.recommended,
+      ...tseslint.configs.recommendedTypeChecked,
+      ...tseslint.configs.strictTypeChecked,
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: "./tsconfig.scripts.json",
         tsconfigRootDir: rootDir,
       },
       globals: {
@@ -63,6 +88,7 @@ export default tseslint.config(
       "apps/ade-api/test/**/*.ts",
       "apps/ade-web/src/**/*.test.{ts,tsx}",
       "scripts/test/**/*.ts",
+      "tests/acceptance/*.ts",
     ],
     rules: {
       "@typescript-eslint/no-floating-promises": "off",
