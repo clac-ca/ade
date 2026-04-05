@@ -11,18 +11,34 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
     join(repoRoot, ".github/workflows/platform-development-pipeline.yml"),
     "utf8",
   );
+  const acceptanceStageMatch = workflow.match(
+    /acceptance_stage:[\s\S]*?(?=\n  release_stage:)/,
+  );
+
+  assert.ok(acceptanceStageMatch, "acceptance stage should exist");
+  const acceptanceStage = acceptanceStageMatch[0];
 
   assert.match(workflow, /Build acceptance session-pool-emulator image/);
   assert.match(workflow, /Prepare acceptance fixtures/);
   assert.match(workflow, /Upload acceptance fixtures/);
-  assert.match(workflow, /Download acceptance fixtures/);
-  assert.match(workflow, /path: \.package\/configs/);
+  assert.match(acceptanceStage, /Download acceptance fixtures/);
+  assert.match(acceptanceStage, /path: \.package\/configs/);
   assert.match(workflow, /Upload acceptance session-pool-emulator image/);
-  assert.match(workflow, /Download acceptance session-pool-emulator image/);
-  assert.match(workflow, /Load acceptance session-pool-emulator image/);
-  assert.match(workflow, /ADE_SESSION_POOL_EMULATOR_IMAGE/);
-  assert.match(workflow, /Install Playwright Chromium/);
-  assert.match(workflow, /pnpm exec playwright install --with-deps chromium/);
+  assert.match(
+    acceptanceStage,
+    /Download acceptance session-pool-emulator image/,
+  );
+  assert.match(acceptanceStage, /Load acceptance session-pool-emulator image/);
+  assert.match(acceptanceStage, /ADE_SESSION_POOL_EMULATOR_IMAGE/);
+  assert.match(acceptanceStage, /Install Playwright Chromium/);
+  assert.match(
+    acceptanceStage,
+    /pnpm exec playwright install --with-deps chromium/,
+  );
+  assert.match(
+    acceptanceStage,
+    /RELEASE_CANDIDATE_IMAGE: \$\{\{ format\('\{0\}\/\{1\}:sha-\{2\}', env\.REGISTRY, env\.IMAGE_NAME, github\.sha\) \}\}/,
+  );
   assert.match(workflow, /uses: docker\/build-push-action@/);
   assert.match(workflow, /context: infra\/local\/session-pool-emulator/);
   assert.match(
@@ -30,7 +46,10 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
     /file: infra\/local\/session-pool-emulator\/Dockerfile/,
   );
   assert.doesNotMatch(workflow, /ghcr\.io\/.*ade-sessionpool/);
-  assert.doesNotMatch(workflow, /acceptance_stage:[\s\S]*pnpm build/);
+  assert.doesNotMatch(acceptanceStage, /pnpm build/);
+  assert.doesNotMatch(acceptanceStage, /Set up uv/);
+  assert.doesNotMatch(acceptanceStage, /Download release candidate metadata/);
+  assert.doesNotMatch(acceptanceStage, /Load release candidate metadata/);
 });
 
 test("release stage deploys without carrying the sandbox secret in GitHub", () => {

@@ -264,6 +264,8 @@ jobs:
     permissions:
       contents: read
       packages: read
+    env:
+      RELEASE_CANDIDATE_IMAGE: ${{ format('{0}/{1}:sha-{2}', env.REGISTRY, env.IMAGE_NAME, github.sha) }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -278,9 +280,6 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           node-version-file: .node-version
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
         with:
@@ -294,12 +293,6 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Download release candidate metadata
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-candidate-metadata
-          path: ${{ runner.temp }}/release-candidate
-
       - name: Download acceptance fixtures
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -311,9 +304,6 @@ jobs:
         with:
           name: acceptance-session-pool-emulator-image
           path: ${{ runner.temp }}/session-pool-emulator-image
-
-      - name: Load release candidate metadata
-        run: cat "${{ runner.temp }}/release-candidate/release-candidate.env" >> "${GITHUB_ENV}"
 
       - name: Pull release candidate
         run: docker pull "${RELEASE_CANDIDATE_IMAGE}"
