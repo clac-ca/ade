@@ -265,7 +265,7 @@ jobs:
       contents: read
       packages: read
     env:
-      RELEASE_CANDIDATE_IMAGE: ${{ format('{0}/{1}:sha-{2}', env.REGISTRY, env.IMAGE_NAME, github.sha) }}
+      RELEASE_CANDIDATE_IMAGE: ${{ format('ghcr.io/{0}/ade-platform:sha-{1}', github.repository_owner, github.sha) }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

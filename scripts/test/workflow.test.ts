@@ -37,7 +37,7 @@ test("acceptance stage reuses prebuilt candidate and fixtures", () => {
   );
   assert.match(
     acceptanceStage,
-    /RELEASE_CANDIDATE_IMAGE: \$\{\{ format\('\{0\}\/\{1\}:sha-\{2\}', env\.REGISTRY, env\.IMAGE_NAME, github\.sha\) \}\}/,
+    /RELEASE_CANDIDATE_IMAGE: \$\{\{ format\('ghcr\.io\/\{0\}\/ade-platform:sha-\{1\}', github\.repository_owner, github\.sha\) \}\}/,
   );
   assert.match(workflow, /uses: docker\/build-push-action@/);
   assert.match(workflow, /context: infra\/local\/session-pool-emulator/);
