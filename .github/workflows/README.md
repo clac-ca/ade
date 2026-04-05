@@ -20,10 +20,10 @@ Operating model:
 - Pushes to `main` run the pipeline when deployable platform paths change.
 - Release versions use the qualifying commit timestamp converted to `America/Vancouver` for the `YYYY.M.D` calendar date and `github.run_number` for the suffix. Reruns keep the same release version.
 - Workflow concurrency keeps one active platform release running on `main` and only the newest pending qualifying push behind it. Intermediate pending platform releases are intentionally dropped.
-- The commit stage runs `pnpm test` and `pnpm build`.
-- `pnpm build` is the only platform build path. It builds the platform image and validates the Bicep templates used by production.
-- Acceptance reuses that exact immutable image digest, installs Playwright Chromium, runs `pnpm test:acceptance --image <release-candidate-image>`, and verifies the local stack end to end through the same Playwright acceptance suite used locally.
-- Release reuses that exact immutable digest, validates and deploys `infra/main.bicep` with `image=<release-candidate-image>`, then starts the fixed migration job.
+- The commit stage is two parallel jobs: one runs `pnpm test`, and one runs `pnpm build`.
+- `pnpm build` is the only platform build path. It builds the platform image, validates the Bicep templates used by production, and publishes the SHA-tagged release candidate image `ghcr.io/<owner>/ade-platform:sha-<git-sha>`.
+- Acceptance recomputes that same SHA-tagged candidate image, installs `uv` and Playwright Chromium, runs `pnpm test:acceptance --image <release-candidate-image>`, and verifies the local stack end to end through the same Playwright acceptance suite used locally.
+- Release recomputes that same SHA-tagged candidate image and release metadata inline, validates and deploys `infra/main.bicep` with `image=<release-candidate-image>`, then starts the fixed migration job.
 - The running app never performs schema migrations on startup.
 - The one-time Azure bootstrap, Key Vault secret seed, and first manual SQL bootstrap are documented in [infra/README.md](../../infra/README.md).
 

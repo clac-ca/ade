@@ -37,23 +37,12 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  commit_stage:
-    name: Commit Stage / ${{ matrix.task_name }}
+  commit_test:
+    name: Commit Stage / Test
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.timeout_minutes }}
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - task: test
-            task_name: Test
-            timeout_minutes: 25
-          - task: build
-            task_name: Build
-            timeout_minutes: 35
+    timeout-minutes: 25
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -71,40 +60,12 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
 
-      - name: Set up Docker Buildx
-        if: matrix.task == 'build'
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
-
-      - name: Compute platform release version
-        if: matrix.task == 'build'
-        id: version
-        run: |
-          commit_timestamp="$(git show -s --format=%cI "${GITHUB_SHA}")"
-          release_version="$(
-            COMMIT_TIMESTAMP="${commit_timestamp}" python3 - <<'PY'
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
-          import os
-
-          now = datetime.fromisoformat(os.environ["COMMIT_TIMESTAMP"]).astimezone(
-              ZoneInfo("America/Vancouver")
-          )
-          print(f"{now.year}.{now.month}.{now.day}.{os.environ['GITHUB_RUN_NUMBER']}")
-          PY
-          )"
-
-          echo "release_version=${release_version}" >> "${GITHUB_OUTPUT}"
-          echo "release_tag=ade-platform-v${release_version}" >> "${GITHUB_OUTPUT}"
-          echo "release_title=ADE Platform ${release_version}" >> "${GITHUB_OUTPUT}"
-
       - name: Set up Rust
-        if: matrix.task == 'test'
         run: |
           rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt
           rustup default 1.94.0
 
       - name: Restore Rust cache
-        if: matrix.task == 'test'
         id: rust_cache
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -120,8 +81,48 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Run commit-stage tests
+        run: pnpm test
+
+      - name: Save Rust cache
+        if: steps.rust_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.rust_cache.outputs.cache-primary-key }}
+
+  commit_build_candidate:
+    name: Commit Stage / Build Candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          node-version-file: .node-version
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Log in to GitHub Container Registry
-        if: matrix.task == 'build'
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
         with:
           registry: ghcr.io
@@ -129,7 +130,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Restore BuildKit Cargo cache
-        if: matrix.task == 'build'
         id: buildkit_cargo_cache
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -142,7 +142,6 @@ jobs:
             buildkit-cargo-main-${{ runner.os }}-${{ hashFiles('Dockerfile', 'rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'apps/ade-api/Cargo.toml', 'apps/ade-api/crates/reverse-connect/Cargo.toml') }}-
 
       - name: Restore BuildKit Cargo cache mounts
-        if: matrix.task == 'build'
         uses: reproducible-containers/buildkit-cache-dance@5de31fc1534ed8789e63d41ea933c5df9944a261 # v3.1.0
         with:
           cache-map: |
@@ -162,43 +161,33 @@ jobs:
             }
           skip-extraction: ${{ steps.buildkit_cargo_cache.outputs.cache-hit == 'true' }}
 
-      - name: Run commit-stage tests
-        if: matrix.task == 'test'
-        run: pnpm test
-
       - name: Build release candidate
-        if: matrix.task == 'build'
         env:
           ADE_BUILD_CACHE_FROM: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           ADE_BUILD_CACHE_TO: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
           ADE_BUILD_IMAGE: ${{ format('{0}/{1}:sha-{2}', env.REGISTRY, env.IMAGE_NAME, github.sha) }}
           ADE_BUILD_PLATFORM: linux/amd64
           ADE_BUILD_PUSH: "true"
-          ADE_SERVICE_VERSION: ${{ steps.version.outputs.release_version }}
-        run: pnpm build
+        run: |
+          commit_timestamp="$(git show -s --format=%cI "${GITHUB_SHA}")"
+          release_version="$(
+            COMMIT_TIMESTAMP="${commit_timestamp}" python3 - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          import os
 
-      - name: Build acceptance session-pool-emulator image
-        if: matrix.task == 'build'
-        run: mkdir -p "${RUNNER_TEMP}/session-pool-emulator-image"
+          now = datetime.fromisoformat(os.environ["COMMIT_TIMESTAMP"]).astimezone(
+              ZoneInfo("America/Vancouver")
+          )
+          print(f"{now.year}.{now.month}.{now.day}.{os.environ['GITHUB_RUN_NUMBER']}")
+          PY
+          )"
 
-      - name: Package acceptance session-pool-emulator image
-        if: matrix.task == 'build'
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
-        with:
-          context: infra/local/session-pool-emulator
-          file: infra/local/session-pool-emulator/Dockerfile
-          platforms: linux/amd64
-          tags: ade-session-pool-emulator:acceptance-${{ github.sha }}
-          outputs: type=docker,dest=${{ runner.temp }}/session-pool-emulator-image/session-pool-emulator-image.tar
-          cache-from: type=gha,scope=session-pool-emulator
-          cache-to: type=gha,scope=session-pool-emulator,mode=max
-
-      - name: Prepare acceptance fixtures
-        if: matrix.task == 'build'
-        run: pnpm exec tsx scripts/prepare-acceptance-fixtures.ts
+          export ADE_SERVICE_VERSION="${release_version}"
+          pnpm build
 
       - name: Save BuildKit Cargo cache
-        if: matrix.task == 'build' && steps.buildkit_cargo_cache.outputs.cache-hit != 'true'
+        if: steps.buildkit_cargo_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
@@ -207,65 +196,18 @@ jobs:
             ${{ runner.temp }}/buildkit-cargo-cache/ade-rust-cargo-registry
           key: ${{ steps.buildkit_cargo_cache.outputs.cache-primary-key }}
 
-      - name: Save Rust cache
-        if: matrix.task == 'test' && steps.rust_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-            ~/.cargo/git/db
-            target
-          key: ${{ steps.rust_cache.outputs.cache-primary-key }}
-
-      - name: Export release candidate metadata
-        if: matrix.task == 'build'
-        env:
-          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-        run: |
-          digest="$(docker buildx imagetools inspect "${IMAGE_REF}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          {
-            echo "RELEASE_CANDIDATE_IMAGE=${IMAGE_REF}@${digest}"
-            echo "RELEASE_TAG=${{ steps.version.outputs.release_tag }}"
-            echo "RELEASE_TITLE=${{ steps.version.outputs.release_title }}"
-            echo "RELEASE_VERSION=${{ steps.version.outputs.release_version }}"
-          } > "${RUNNER_TEMP}/release-candidate.env"
-
-      - name: Upload release candidate metadata
-        if: matrix.task == 'build'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: release-candidate-metadata
-          path: ${{ runner.temp }}/release-candidate.env
-          if-no-files-found: error
-
-      - name: Upload acceptance fixtures
-        if: matrix.task == 'build'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: acceptance-fixtures
-          path: .package/configs
-          if-no-files-found: error
-
-      - name: Upload acceptance session-pool-emulator image
-        if: matrix.task == 'build'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: acceptance-session-pool-emulator-image
-          path: ${{ runner.temp }}/session-pool-emulator-image/session-pool-emulator-image.tar
-          if-no-files-found: error
-
   acceptance_stage:
     name: Acceptance Stage
     needs:
-      - commit_stage
+      - commit_test
+      - commit_build_candidate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       packages: read
     env:
-      RELEASE_CANDIDATE_IMAGE: ${{ format('ghcr.io/{0}/ade-platform:sha-{1}', github.repository_owner, github.sha) }}
+      CANDIDATE_IMAGE: ${{ format('ghcr.io/{0}/ade-platform:sha-{1}', github.repository_owner, github.sha) }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -280,6 +222,9 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           node-version-file: .node-version
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
         with:
@@ -293,33 +238,15 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Download acceptance fixtures
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: acceptance-fixtures
-          path: .package/configs
-
-      - name: Download acceptance session-pool-emulator image
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: acceptance-session-pool-emulator-image
-          path: ${{ runner.temp }}/session-pool-emulator-image
-
       - name: Pull release candidate
-        run: docker pull "${RELEASE_CANDIDATE_IMAGE}"
-
-      - name: Load acceptance session-pool-emulator image
-        run: docker load --input "${{ runner.temp }}/session-pool-emulator-image/session-pool-emulator-image.tar"
+        run: docker pull "${CANDIDATE_IMAGE}"
 
       - name: Run acceptance tests
-        env:
-          ADE_SESSION_POOL_EMULATOR_IMAGE: ade-session-pool-emulator:acceptance-${{ github.sha }}
-        run: pnpm test:acceptance --image "${RELEASE_CANDIDATE_IMAGE}"
+        run: pnpm test:acceptance --image "${CANDIDATE_IMAGE}"
 
   release_stage:
     name: Release Stage
     needs:
-      - commit_stage
       - acceptance_stage
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -330,6 +257,8 @@ jobs:
     permissions:
       contents: write
       id-token: write
+    env:
+      CANDIDATE_IMAGE: ${{ format('ghcr.io/{0}/ade-platform:sha-{1}', github.repository_owner, github.sha) }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -344,14 +273,27 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
 
-      - name: Download release candidate metadata
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-candidate-metadata
-          path: ${{ runner.temp }}/release-candidate
+      - name: Compute platform release metadata
+        run: |
+          commit_timestamp="$(git show -s --format=%cI "${GITHUB_SHA}")"
+          release_version="$(
+            COMMIT_TIMESTAMP="${commit_timestamp}" python3 - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          import os
 
-      - name: Load release candidate metadata
-        run: cat "${{ runner.temp }}/release-candidate/release-candidate.env" >> "${GITHUB_ENV}"
+          now = datetime.fromisoformat(os.environ["COMMIT_TIMESTAMP"]).astimezone(
+              ZoneInfo("America/Vancouver")
+          )
+          print(f"{now.year}.{now.month}.{now.day}.{os.environ['GITHUB_RUN_NUMBER']}")
+          PY
+          )"
+
+          {
+            echo "RELEASE_VERSION=${release_version}"
+            echo "RELEASE_TAG=ade-platform-v${release_version}"
+            echo "RELEASE_TITLE=ADE Platform ${release_version}"
+          } >> "${GITHUB_ENV}"
 
       - name: Validate release candidate deployment
         run: |
@@ -359,7 +301,7 @@ jobs:
             --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-validate" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --template-file infra/main.bicep \
-            --parameters image="${RELEASE_CANDIDATE_IMAGE}" \
+            --parameters image="${CANDIDATE_IMAGE}" \
             --validation-level Provider \
             --output none
 
@@ -369,7 +311,7 @@ jobs:
             --name "ade-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --template-file infra/main.bicep \
-            --parameters image="${RELEASE_CANDIDATE_IMAGE}" \
+            --parameters image="${CANDIDATE_IMAGE}" \
             --output none
 
       - name: Run database migrations
@@ -386,8 +328,6 @@ jobs:
 
       - name: Detect existing platform release tag
         id: tag
-        env:
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "exists=true" >> "${GITHUB_OUTPUT}"
@@ -397,9 +337,6 @@ jobs:
 
       - name: Create and push platform release tag
         if: steps.tag.outputs.exists == 'false'
-        env:
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
-          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -409,8 +346,6 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
-          RELEASE_TITLE: ${{ env.RELEASE_TITLE }}
         run: |
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "GitHub release ${RELEASE_TAG} already exists."

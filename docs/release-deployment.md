@@ -10,9 +10,10 @@ The release pipeline has three stages:
 
 Release rules:
 
-- The release candidate image is built once and reused.
-- Acceptance resolves one target, runs the full Playwright acceptance suite against that target once, and then stops. In CI that target is the local release-candidate artifact, not Azure.
-- The release stage validates `infra/main.bicep`, deploys it with the release candidate image, and then starts the fixed migration job.
+- The commit stage is two parallel jobs: one runs `pnpm test`, and one runs `pnpm build`.
+- The release candidate image is built once as `ghcr.io/<owner>/ade-platform:sha-<git-sha>` and reused.
+- Acceptance resolves one target, runs the full Playwright acceptance suite against that target once, and then stops. In CI that target is the SHA-tagged release-candidate image, not Azure.
+- The release stage recomputes the same SHA-tagged candidate image and release metadata inline, validates `infra/main.bicep`, deploys it with the release candidate image, and then starts the fixed migration job.
 - Migrations run through the separate `ade-migrate` binary and Azure Container Apps Job.
 - The running app container never performs schema migrations on startup.
 - The platform release creates a Git tag and GitHub Release only after deployment and migrations succeed.
